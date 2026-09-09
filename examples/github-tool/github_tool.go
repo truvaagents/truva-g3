@@ -15,10 +15,10 @@ type GitHubTool struct {
 	Config      Config
 	Client      *GitHubClient
 	Artifacts   ArtifactStore
-	RedisClient *redis.Client
+	RedisClient redis.UniversalClient
 }
 
-func NewGitHubTool(cfg Config, redisClient *redis.Client) (*GitHubTool, error) {
+func NewGitHubTool(cfg Config, redisClient redis.UniversalClient) (*GitHubTool, error) {
 	httpClient := telemetry.NewTracedHTTPClientWithTransport(&http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 20,

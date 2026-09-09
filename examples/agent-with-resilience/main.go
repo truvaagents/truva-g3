@@ -4,7 +4,7 @@
 // This example showcases:
 //   - Circuit breakers for protecting against failing services
 //   - Automatic retries with exponential backoff using resilience.RetryWithCircuitBreaker
-//   - Timeout management using cb.ExecuteWithTimeout
+//   - Timeout management using bounded HTTP requests
 //   - Graceful degradation with partial results
 //   - Health monitoring with circuit breaker states via cb.GetMetrics()
 //
@@ -12,7 +12,6 @@
 //   - resilience.CreateCircuitBreaker(name, deps) - Factory with DI
 //   - resilience.DefaultRetryConfig() - Sensible defaults
 //   - resilience.RetryWithCircuitBreaker(ctx, config, cb, fn) - Combined pattern
-//   - cb.ExecuteWithTimeout(ctx, timeout, fn) - Timeout + CB
 //   - cb.GetState() / cb.GetMetrics() - Health monitoring
 //
 // Environment Variables:
@@ -38,12 +37,11 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
 
 	// Import AI providers for auto-detection
 	_ "github.com/truvaagents/truva-g3/ai/providers/anthropic"
@@ -56,6 +54,23 @@ func main() {
 	if err := validateConfig(); err != nil {
 		log.Fatalf("Configuration error: %v", err)
 	}
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
+	// Initialize observability at the application boundary, before constructing
+	// clients that capture the provider. Core deliberately does not auto-wire it.
+	core.SetCurrentComponentType(core.ComponentTypeAgent)
+	if err := telemetry.Initialize(resilienceTelemetryConfig()); err != nil {
+		log.Println("Telemetry initialization failed; observability is unavailable")
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := telemetry.Shutdown(shutdownCtx); err != nil {
+			log.Println("Telemetry shutdown did not complete")
+		}
+	}()
 
 	// Create research agent with resilience capabilities
 	agent, err := NewResearchAgent()
@@ -63,29 +78,14 @@ func main() {
 		log.Fatalf("Failed to create research agent: %v", err)
 	}
 
-	// Initialize schema cache with Redis (for Phase 3 validation caching)
-	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
-		redisOpt, err := redis.ParseURL(redisURL)
-		if err != nil {
-			log.Printf("Warning: Failed to parse REDIS_URL for schema cache: %v", err)
-			log.Println("   Schema caching will be disabled")
-		} else {
-			redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
-
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-
-			if err := redisClient.Ping(ctx).Err(); err != nil {
-				log.Printf("Warning: Redis connection failed for schema cache: %v", err)
-				log.Println("   Schema caching will be disabled")
-				redisClient.Close()
-			} else {
-				agent.SchemaCache = core.NewSchemaCache(redisClient)
-				log.Println("Schema cache initialized with Redis backend")
-			}
-		}
+	// Initialize the optional schema cache from the same topology as discovery.
+	if redisClient, cacheErr := core.NewRedisUniversalClient(redisResolution); cacheErr != nil {
+		log.Printf("Warning: Redis unavailable for schema cache: %v", cacheErr)
+		log.Println("   Schema caching will be disabled")
 	} else {
-		log.Println("Schema caching disabled (no REDIS_URL)")
+		defer func() { _ = redisClient.Close() }()
+		agent.SchemaCache = core.NewSchemaCache(redisClient)
+		log.Println("Schema cache initialized with Redis backend")
 	}
 
 	// Get port configuration (default: 8093 for resilience example)
@@ -101,10 +101,14 @@ func main() {
 		core.WithName("research-assistant-resilience"),
 		core.WithPort(port),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(os.Getenv("REDIS_URL")),
+		core.WithRedisConnection(redisResolution),
 		core.WithDiscovery(true, "redis"),
-		core.WithCORS([]string{"*"}, true),
+		core.WithCORSDefaults(),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
+		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("research-assistant-resilience",
+			&telemetry.TracingMiddlewareConfig{
+				ExcludedPaths: []string{"/health", "/metrics", "/ready", "/api/capabilities"},
+			})),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create framework: %v", err)
@@ -149,18 +153,9 @@ func main() {
 			}
 		}
 
-		cancel()
-
-		select {
-		case <-shutdownCtx.Done():
-			log.Println("Shutdown timeout exceeded")
-			os.Exit(1)
-		case <-time.After(1 * time.Second):
-			// Give framework time to clean up
-		}
-
 		log.Println("Shutdown completed")
-		os.Exit(0)
+		// Let main return normally so its telemetry flush and client cleanup run.
+		cancel()
 	}()
 
 	// Run the framework (blocking)
@@ -169,17 +164,26 @@ func main() {
 	}
 }
 
+func resilienceTelemetryConfig() telemetry.Config {
+	profile := telemetry.ProfileDevelopment
+	switch os.Getenv("APP_ENV") {
+	case "production", "prod":
+		profile = telemetry.ProfileProduction
+	case "staging", "stage", "qa":
+		profile = telemetry.ProfileStaging
+	}
+	config := telemetry.UseProfile(profile)
+	config.ServiceName = "research-assistant-resilience"
+	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
+		config.Endpoint = endpoint
+	}
+	return config
+}
+
 // validateConfig validates all required configuration at startup
 func validateConfig() error {
-	// REDIS_URL is required for discovery
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-
-	// Validate Redis URL format
-	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format (must start with redis:// or rediss://)")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 
 	// Validate port if set

@@ -13,6 +13,7 @@ import (
 type workflowScopedStateStoreTestDouble struct{}
 
 var _ WorkflowStateStore = workflowScopedStateStoreTestDouble{}
+var _ StateStore = workflowScopedStateStoreTestDouble{}
 
 func (workflowScopedStateStoreTestDouble) SaveExecution(context.Context, *WorkflowExecution) error {
 	return nil
@@ -28,37 +29,6 @@ func (workflowScopedStateStoreTestDouble) GetExecution(context.Context, string, 
 }
 func (workflowScopedStateStoreTestDouble) ListExecutions(context.Context, string) ([]*WorkflowExecution, error) {
 	return nil, nil
-}
-
-func TestWorkflowStateStoreContractIsAvailableAdditively(t *testing.T) {
-	server := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-	legacy, err := NewLegacyRedisStateStoreWithClientAndPrefix(
-		client, time.Hour, "workflow",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	execution := &WorkflowExecution{
-		ID: "legacy-execution", WorkflowID: "legacy-workflow", Status: ExecutionPending,
-		Steps: make(map[string]*StepExecution),
-	}
-	if err := legacy.SaveExecution(t.Context(), execution); err != nil {
-		t.Fatal(err)
-	}
-	step := &StepExecution{StepID: "legacy-step", Status: StepCompleted}
-	if err := legacy.UpdateStepExecution(t.Context(), execution.ID, step); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := legacy.GetExecution(t.Context(), execution.ID)
-	if err != nil || loaded.Steps[step.StepID] == nil {
-		t.Fatalf("legacy behavioral round trip = %#v, %v", loaded, err)
-	}
-	listed, err := legacy.ListExecutions(t.Context(), execution.WorkflowID)
-	if err != nil || len(listed) != 1 || listed[0].ID != execution.ID {
-		t.Fatalf("legacy behavioral list = %#v, %v", listed, err)
-	}
 }
 
 func TestRedisStateStoreClientConstructors(t *testing.T) {
@@ -92,9 +62,6 @@ func TestRedisStateStoreClientConstructors(t *testing.T) {
 
 	if _, err := NewRedisStateStoreWithClient(nil, keyspace, time.Hour); err == nil {
 		t.Fatal("nil workflow-state Redis client was accepted")
-	}
-	if _, err := NewLegacyRedisStateStoreWithClientAndPrefix(client, time.Hour, " : "); err == nil {
-		t.Fatal("empty workflow-state key prefix was accepted")
 	}
 }
 

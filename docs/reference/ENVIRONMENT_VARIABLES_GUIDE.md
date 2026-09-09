@@ -152,8 +152,8 @@ env:
 2. **Mismatched Service Name/Port**: The `TRUVAG3_K8S_SERVICE_NAME` must exactly match your Kubernetes Service's `metadata.name`, and `TRUVAG3_K8S_SERVICE_PORT` must match the Service's `port` (not `targetPort`).
 
 3. **Combining Redis connection sources**: Set exactly one of `REDIS_URL`, the
-   structured `TRUVAG3_REDIS_*` topology form, or the deprecated
-   `TRUVAG3_REDIS_URL` alias. Contradictory forms fail startup rather than using
+   structured `TRUVAG3_REDIS_*` topology form. The removed
+   `TRUVAG3_REDIS_URL` alias is rejected. Contradictory forms fail startup rather than using
    precedence. Prefer `REDIS_URL` for standalone deployments and structured
    configuration for Sentinel or cluster.
 
@@ -242,7 +242,6 @@ Configure service discovery for agent/tool registration and lookup.
 | `TRUVAG3_DISCOVERY_PROVIDER` | `redis` | **Implemented** | Discovery backend provider | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_REDIS_NAMESPACE` | `default` | **Implemented** | Validated deployment segment shared by every versioned DB-0 key (`1`–`128` ASCII letters, digits, `.`, `_`, or `-`) | [core/redis_keyspace.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_keyspace.go) |
 | `REDIS_URL` | `redis://localhost:6379` | **Implemented** | Standard DB-0 standalone Redis/Valkey URL shorthand | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
-| `TRUVAG3_REDIS_URL` | — | **Deprecated** | Precursor-minor standalone compatibility alias; emits a bounded notice. Do not combine with another connection source | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
 | `TRUVAG3_REDIS_MODE` | `standalone` | **Implemented** | Structured topology: `standalone`, `sentinel`, or `cluster` | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
 | `TRUVAG3_REDIS_ADDRS` | `localhost:6379` | **Implemented** | Comma-separated standalone address, Sentinel addresses, or cluster seed addresses. Required with structured mode | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
 | `TRUVAG3_REDIS_MASTER_NAME` | — | **Implemented** | Sentinel master name; required only in Sentinel mode | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
@@ -250,7 +249,7 @@ Configure service discovery for agent/tool registration and lookup.
 | `TRUVAG3_REDIS_PASSWORD` | — | **Implemented** | Data-node password; supply via a Secret | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
 | `TRUVAG3_REDIS_SENTINEL_USERNAME` | — | **Implemented** | Sentinel ACL username | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
 | `TRUVAG3_REDIS_SENTINEL_PASSWORD` | — | **Implemented** | Sentinel password; supply via a Secret | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
-| `TRUVAG3_REDIS_DB` | `0` | **Implemented** | Shared logical DB for structured standalone/Sentinel compatibility; cluster requires DB 0 | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
+| `TRUVAG3_REDIS_DB` | `0` | **Implemented** | Shared logical DB; only 0 is accepted in standalone, Sentinel, and cluster mode | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
 | `TRUVAG3_REDIS_TLS_ENABLED` | `false` | **Implemented** | Enables TLS with a minimum of TLS 1.2 | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
 | `TRUVAG3_REDIS_TLS_SERVER_NAME` | — | **Implemented** | TLS server name; requires TLS enabled | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
 | `TRUVAG3_REDIS_CA_FILE` | — | **Implemented** | Mounted PEM CA file, read once at startup; requires TLS enabled | [core/redis_connection.go](https://github.com/truvaagents/truva-g3/blob/main/core/redis_connection.go) |
@@ -269,19 +268,26 @@ Configure service discovery for agent/tool registration and lookup.
 
 ### Variable Precedence
 
+The development-stage cleanup removed `TRUVAG3_REDIS_URL`, role-specific
+`TRUVAG3_*_REDIS_DB` routing variables, and raw Redis HITL/LLM-debug prefixes.
+A non-empty removed setting fails construction for its selected backend role;
+an unselected role's settings are ignored. Empty values count as absent.
+Use `TRUVAG3_REDIS_NAMESPACE` and typed keyspace options for isolation.
+`TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX` applies only to the generic storage
+adapter, not Redis.
+
 Redis connection selection is:
 
 1. Complete explicit Go configuration (`WithRedisConnection` or a direct
    constructor), without merging environment connection fields.
 2. Exactly one environment form: `REDIS_URL`, structured
-   `TRUVAG3_REDIS_MODE` + related connection fields, or the deprecated
-   `TRUVAG3_REDIS_URL` alias.
+   `TRUVAG3_REDIS_MODE` + related connection fields.
 3. Local DB-0 standalone default.
 
 Operational pool, timeout, and retry variables may accompany either standard
 environment form. `REDIS_URL` and structured topology fields are different,
 mutually exclusive representations; combining them fails validation. Cluster
-mode always requires DB 0. A single seed address is valid when cluster mode is
+mode, standalone, and Sentinel all require DB 0. A single seed address is valid when cluster mode is
 explicit—the framework never infers topology from address count.
 
 ### Example
@@ -1447,7 +1453,6 @@ Configure LLM debug payload storage for debugging orchestration issues. This fea
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | **Implemented** | Enable LLM debug payload storage | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | **Implemented** | Base retention for successful debug records; a longer execution-lineage floor is preserved | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Base retention for error debug records; lineage, HITL, or investigation retention may extend it | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | unset (DB 0) | **Deprecated** | Standalone-only role-database compatibility input for the precursor release; canonical provider composition uses the shared DB-0 keyspace | [orchestration/redisprovider/client_config.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/client_config.go) |
 
 ### How It Works
 
@@ -1509,8 +1514,7 @@ Configure execution debug storage for DAG visualization and debugging. This feat
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | `false` | **Implemented** | Enable/disable execution debug storage | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_DEBUG_TTL` | `24h` | **Implemented** | Base retention for successful execution records; related-lineage promotion may extend it | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Base retention for failed execution records; HITL approval windows and investigation extensions may retain them longer | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
-| `TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX` | unset | **Deprecated** | Precursor custom-prefix compatibility input; canonical provider composition derives versioned keys from `TRUVAG3_REDIS_NAMESPACE` | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
-| `TRUVAG3_EXECUTION_DEBUG_REDIS_DB` | unset (DB 0) | **Deprecated** | Standalone-only role-database compatibility input; canonical execution records use the versioned shared DB-0 keyspace | [orchestration/redisprovider/client_config.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/client_config.go) |
+| `TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX` | `truvag3:v1:default:execution-debug:` | **Generic provider only** | Logical prefix for generic StorageProvider execution keys; rejected by selected Redis backends. Use `TRUVAG3_REDIS_NAMESPACE` or typed Redis keyspace options for Redis isolation. | [orchestration/execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | **Implemented** | Maximum executions returned by one framework conversation lookup | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | **Implemented** | Maximum conversation-index members scanned by one framework lookup, including stale members | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | **Implemented** | Per-write timeout for asynchronous execution-debug persistence. Code configuration through `WithExecutionStoreWriteTimeout` has higher precedence. | [orchestration/config_resolution.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/config_resolution.go) |
@@ -1602,11 +1606,11 @@ export TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT=5000
 ### Example: Multi-Tenant Deployment
 
 ```bash
-# Enable execution debug storage with custom prefix for isolation
+# Keep cooperating producers and viewers in the same versioned deployment scope.
 export TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true
-export TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX=myapp:prod:execution:debug:
+export TRUVAG3_REDIS_NAMESPACE=myapp-prod
 
-# Keys will be: myapp:prod:execution:debug:req-001, etc.
+# Request-local records use the canonical execution-debug hash-tagged layout.
 ```
 
 ### Example: Kubernetes Deployment
@@ -1623,9 +1627,9 @@ env:
   - name: TRUVAG3_EXECUTION_DEBUG_ERROR_TTL
     value: "168h"
 
-  # Custom key prefix for namespace isolation (optional)
-  - name: TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX
-    value: "myteam:execution:debug:"
+  # Versioned deployment namespace isolation (optional)
+  - name: TRUVAG3_REDIS_NAMESPACE
+    value: "myteam"
   - name: TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT
     value: "1000"
   - name: TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT
@@ -1684,8 +1688,6 @@ Configure Human-in-the-Loop (HITL) checkpoints for human oversight of AI-generat
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_HITL_REDIS_DB` | unset (DB 0) | **Deprecated** | Standalone-only role-database compatibility input; canonical checkpoint/command data uses the versioned shared DB-0 keyspace | [orchestration/redisprovider/client_config.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/client_config.go) |
-| `TRUVAG3_HITL_KEY_PREFIX` | unset | **Deprecated** | Precursor custom-prefix compatibility input. Canonical composition passes the same `RedisKeyspace.Tagged("hitl", agentScope)` prefix to checkpoint and command stores | [checkpoint store](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_checkpoint_store.go), [command store](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_command_store.go) |
 
 ### HITL Handler Variables
 
@@ -2040,7 +2042,6 @@ answers.
 
 | Variable | Default | Status | Description |
 |---|---:|---|---|
-| `TRUVAG3_SKILLS_REDIS_DB` | unset (DB 0) | **Deprecated** | Standalone-only role-database compatibility input; Registry Viewer and runtime readers use the shared versioned DB-0 skill keyspace. |
 | `TRUVAG3_SKILL_AUTHORING_MAX_NAME_CHARS` | `64` | **Example Only** | Registry Viewer skill-management host override. |
 | `TRUVAG3_SKILL_AUTHORING_MAX_DESCRIPTION_CHARS` | `1024` | **Example Only** | Registry Viewer host override. |
 | `TRUVAG3_SKILL_AUTHORING_MAX_MANIFEST_TOKENS` | `5000` | **Example Only** | Registry Viewer host override. |
@@ -2226,7 +2227,7 @@ For environment variables with multiple valid names, standard names take
 precedence over framework-specific aliases. This rule does not make
 contradictory forms mergeable: Redis connection sources are selected exactly
 once, and `REDIS_URL` combined with either structured topology fields or the
-deprecated `TRUVAG3_REDIS_URL` alias fails validation.
+removed `TRUVAG3_REDIS_URL` alias fails validation.
 
 ---
 

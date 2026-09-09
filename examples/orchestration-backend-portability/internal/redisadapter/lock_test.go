@@ -16,12 +16,16 @@ func TestDistributedLockConformance(t *testing.T) {
 		server := miniredis.RunT(t)
 		client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 		t.Cleanup(func() { _ = client.Close() })
-
-		first, err := redisadapter.NewDistributedLock(client, "conformance")
+		keyspace, err := core.NewRedisKeyspace("conformance")
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := redisadapter.NewDistributedLock(client, "conformance")
+
+		first, err := redisadapter.NewDistributedLock(client, keyspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := redisadapter.NewDistributedLock(client, keyspace)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -36,11 +40,12 @@ func TestNewDistributedLockRejectsInvalidConfiguration(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
 	t.Cleanup(func() { _ = client.Close() })
 
-	if _, err := redisadapter.NewDistributedLock(nil, "namespace"); err == nil {
-		t.Fatal("nil Redis client was accepted")
+	keyspace, err := core.NewRedisKeyspace("namespace")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := redisadapter.NewDistributedLock(client, "  "); err == nil {
-		t.Fatal("empty namespace was accepted")
+	if _, err := redisadapter.NewDistributedLock(nil, keyspace); err == nil {
+		t.Fatal("nil Redis client was accepted")
 	}
 }
 
@@ -49,11 +54,19 @@ func TestDistributedLockNamespacesAreIsolated(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 
-	first, err := redisadapter.NewDistributedLock(client, "tenant-a")
+	firstKeyspace, err := core.NewRedisKeyspace("tenant-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := redisadapter.NewDistributedLock(client, "tenant-b")
+	secondKeyspace, err := core.NewRedisKeyspace("tenant-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := redisadapter.NewDistributedLock(client, firstKeyspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := redisadapter.NewDistributedLock(client, secondKeyspace)
 	if err != nil {
 		t.Fatal(err)
 	}

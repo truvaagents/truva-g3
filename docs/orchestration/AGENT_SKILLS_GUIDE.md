@@ -1733,7 +1733,8 @@ These are Registry Viewer process settings, not framework-global environment
 variables. A different host passes `SkillAuthoringLimits` and
 `SkillAdministrationLimits` directly. Every value must be positive.
 
-The bundled Registry Viewer `setup.sh` forwards the skills Redis database role,
+The bundled Registry Viewer `setup.sh` forwards the shared DB-0 Redis topology
+and deployment namespace,
 but it does not automatically copy authoring/admin overrides from the invoking
 shell into the Kubernetes Deployment. Add persistent overrides to the
 Deployment/ConfigMap and pod environment when you need them.
@@ -2397,7 +2398,7 @@ the same provider-neutral contracts, but separate Kubernetes workloads own
 their own backend configuration. They must address the same logical skills
 datastore.
 
-With the included Redis implementation, keep the topology and
+With the included Redis implementation, all roles use DB 0. Keep the topology and
 `TRUVAG3_REDIS_NAMESPACE` consistent between Registry Viewer and every
 skill-enabled agent. The shipped examples use the `default` deployment
 namespace. An agent `rollout` updates only that agent's ConfigMap; it does not
@@ -3002,7 +3003,8 @@ Check:
 
 - the binding uses `published`, not a numeric revision;
 - the request really started after publication;
-- every replica uses the same skill backend role, database, and key namespace;
+- every replica uses the same backend endpoint and deployment keyspace (DB 0
+  for the included Redis/Valkey adapter);
 - the publication response succeeded rather than returning a no-op/conflict;
 - the execution is not a HITL resume, which intentionally keeps checkpointed
   versions; and
@@ -3112,8 +3114,35 @@ where and how it is exposed.
 ### Where are skill packages stored?
 
 Behind provider-neutral skill interfaces. The included deployment uses
-`orchestration/redisprovider.SkillStore` and Redis/Valkey database role `9` by
-default. A custom host can use a different backend.
+`orchestration/redisprovider.SkillStore` in shared Redis/Valkey DB 0. Keys use
+`truvag3:v1:<deployment>:skills:{<deployment>:skills}:…` in every topology.
+`TRUVAG3_REDIS_NAMESPACE` / `redisprovider.WithNamespace` selects the deployment
+for the preset. A custom host can use a different backend.
+
+Direct Redis composition uses a typed keyspace and an application-owned client:
+
+```go
+keyspace, err := core.NewRedisKeyspace("team-a")
+if err != nil {
+    return err
+}
+store, err := redisprovider.NewSkillStore(client,
+    redisprovider.WithSkillStoreKeyspace(keyspace),
+)
+if err != nil {
+    return err
+}
+// Inject store through the narrow skill interfaces needed by this host.
+// The application, not store, owns client.Close().
+```
+
+`WithSkillStoreKeyPrefix` and the old `:{store}` layout are removed; the default
+deployment is `default`. A skill's `namespace/name` identity (for example,
+`travel/weather-assessment`) is separate from the deployment namespace. All
+skills in one deployment share a transaction slot; different deployments have
+distinct keys. Namespacing does not replace Redis ACLs or application access
+control. Removing the obsolete option does not change existing canonical keys
+or require republishing packages.
 
 ### Why retain versions instead of only the latest?
 

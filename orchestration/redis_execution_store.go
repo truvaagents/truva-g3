@@ -46,7 +46,6 @@ type RedisExecutionDebugStoreOption func(*redisExecutionDebugStoreConfig)
 
 type redisExecutionDebugStoreConfig struct {
 	redisURL         string
-	redisDB          int
 	logger           core.Logger
 	circuitBreaker   core.CircuitBreaker // Interface - injected by application (optional)
 	keyPrefix        string
@@ -56,20 +55,13 @@ type redisExecutionDebugStoreConfig struct {
 	queryLimit       int
 	indexScanLimit   int
 	keyspaceExplicit bool
+	validationErr    error
 }
 
 // WithExecutionDebugRedisURL sets the Redis connection URL
 func WithExecutionDebugRedisURL(url string) RedisExecutionDebugStoreOption {
 	return func(c *redisExecutionDebugStoreConfig) {
 		c.redisURL = url
-	}
-}
-
-// WithExecutionDebugRedisDB selects a numbered standalone database.
-// Deprecated: use DB 0 and WithExecutionDebugKeyspace.
-func WithExecutionDebugRedisDB(db int) RedisExecutionDebugStoreOption {
-	return func(c *redisExecutionDebugStoreConfig) {
-		c.redisDB = db
 	}
 }
 
@@ -90,22 +82,13 @@ func WithExecutionDebugCircuitBreaker(cb core.CircuitBreaker) RedisExecutionDebu
 	}
 }
 
-// WithExecutionDebugKeyPrefix sets the precursor standalone key prefix.
-// Deprecated: use WithExecutionDebugKeyspace for cluster-capable composition.
-func WithExecutionDebugKeyPrefix(prefix string) RedisExecutionDebugStoreOption {
-	return func(c *redisExecutionDebugStoreConfig) {
-		c.keyPrefix = prefix
-		c.keys = legacyRedisExecutionDebugKeys(prefix)
-		c.keyspaceExplicit = true
-	}
-}
-
 // WithExecutionDebugKeyspace sets the canonical DB-0 execution-debug schema.
 func WithExecutionDebugKeyspace(keyspace core.RedisKeyspace) RedisExecutionDebugStoreOption {
 	return func(c *redisExecutionDebugStoreConfig) {
 		c.keys = NewRedisExecutionDebugKeys(keyspace)
 		c.keyPrefix = keyspace.Plain("execution-debug")
 		c.keyspaceExplicit = true
+		c.validationErr = nil
 	}
 }
 
@@ -155,13 +138,11 @@ type RedisExecutionDebugStore struct {
 // This provides the same zero-configuration experience as NewRedisLLMDebugStore.
 //
 // Connection topology is resolved by core.ResolveRedisConnectionConfig. The
-// canonical schema uses DB 0; URL/DB options remain compatibility wrappers for
-// the precursor release.
+// schema uses DB 0 in every topology; typed keyspace options select deployment isolation.
 //
 // Store-specific environment:
 //   - TRUVAG3_EXECUTION_DEBUG_TTL: TTL for successful records (default: 24h)
 //   - TRUVAG3_EXECUTION_DEBUG_ERROR_TTL: TTL for error records (default: 168h)
-//   - TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX: deprecated standalone compatibility prefix
 //   - TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT: per-query result ceiling (default: 1000)
 //   - TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT: per-query index scan ceiling (default: 5000)
 //
@@ -206,19 +187,14 @@ func NewRedisExecutionDebugStoreWithConfig(
 		cfg.keys = NewRedisExecutionDebugKeys(keyspace)
 		cfg.keyPrefix = keyspace.Plain("execution-debug")
 	}
+	if cfg.validationErr != nil {
+		return nil, cfg.validationErr
+	}
 	normalizeRedisExecutionDebugStoreConfig(cfg)
 
-	client, connection, err := newOwnedRedisUniversalClient(cfg.redisURL, cfg.redisDB, cfg.logger)
+	client, connection, err := newOwnedRedisUniversalClient(cfg.redisURL, "TRUVAG3_EXECUTION_DEBUG_REDIS_DB", "TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX")
 	if err != nil {
 		return nil, fmt.Errorf("initialize Redis execution debug store: %w", err)
-	}
-	if err := rejectLegacyRedisPrefixForMode(
-		connection.Mode,
-		cfg.keys.legacyPrefix != "",
-		"execution debug store",
-	); err != nil {
-		_ = client.Close()
-		return nil, err
 	}
 
 	// Note: Circuit breaker is optional and injected by application (per ARCHITECTURE.md)
@@ -259,15 +235,18 @@ func NewRedisExecutionDebugStoreWithClient(
 			opt(cfg)
 		}
 	}
-	normalizeRedisExecutionDebugStoreConfig(cfg)
-	if err := rejectLegacyRedisPrefixForClient(
-		client,
-		cfg.keys.legacyPrefix != "",
-		"execution debug store",
-	); err != nil {
-		return nil, err
+	if cfg.validationErr != nil {
+		return nil, cfg.validationErr
 	}
+	normalizeRedisExecutionDebugStoreConfig(cfg)
 	return newRedisExecutionDebugStore(client, false, cfg), nil
+}
+
+func validateRedisExecutionPrefix(prefix string) error {
+	if prefix != DefaultExecutionKeyPrefix {
+		return fmt.Errorf("redis execution key prefixes are unsupported; use WithExecutionDebugKeyspace: %w", core.ErrInvalidConfiguration)
+	}
+	return nil
 }
 
 func normalizeRedisExecutionDebugStoreConfig(cfg *redisExecutionDebugStoreConfig) {
@@ -280,7 +259,7 @@ func normalizeRedisExecutionDebugStoreConfig(cfg *redisExecutionDebugStoreConfig
 		cfg.errorTTL = defaults.ErrorTTL
 	}
 	if cfg.keys == (RedisExecutionDebugKeys{}) {
-		cfg.keys = legacyRedisExecutionDebugKeys(cfg.keyPrefix)
+		cfg.keys = NewRedisExecutionDebugKeys(defaultRedisKeyspace())
 	}
 	cfg.keyPrefix = cfg.keys.PrefixForDiagnostics()
 }
@@ -288,34 +267,27 @@ func normalizeRedisExecutionDebugStoreConfig(cfg *redisExecutionDebugStoreConfig
 func redisExecutionDebugStoreConfigForClient(config ExecutionStoreConfig) *redisExecutionDebugStoreConfig {
 	config = normalizeExecutionStoreConfig(config)
 	keys := NewRedisExecutionDebugKeys(defaultRedisKeyspace())
-	if config.KeyPrefix != DefaultExecutionKeyPrefix {
-		keys = legacyRedisExecutionDebugKeys(config.KeyPrefix)
-	}
 	return &redisExecutionDebugStoreConfig{
 		logger: &core.NoOpLogger{}, keyPrefix: config.KeyPrefix, keys: keys,
 		ttl: config.TTL, errorTTL: config.ErrorTTL,
 		queryLimit: config.ConversationQueryLimit, indexScanLimit: config.ConversationIndexScanLimit,
-		keyspaceExplicit: config.KeyPrefix != DefaultExecutionKeyPrefix,
+		validationErr: validateRedisExecutionPrefix(config.KeyPrefix),
 	}
 }
 
 func defaultRedisExecutionDebugStoreConfig(config ExecutionStoreConfig) *redisExecutionDebugStoreConfig {
 	config = normalizeExecutionStoreConfig(config)
 	keys := NewRedisExecutionDebugKeys(defaultRedisKeyspace())
-	if config.KeyPrefix != DefaultExecutionKeyPrefix {
-		keys = legacyRedisExecutionDebugKeys(config.KeyPrefix)
-	}
 	return &redisExecutionDebugStoreConfig{
-		redisURL:         "",
-		redisDB:          0,
-		logger:           &core.NoOpLogger{},
-		keyPrefix:        config.KeyPrefix,
-		keys:             keys,
-		ttl:              config.TTL,
-		errorTTL:         config.ErrorTTL,
-		queryLimit:       config.ConversationQueryLimit,
-		indexScanLimit:   config.ConversationIndexScanLimit,
-		keyspaceExplicit: config.KeyPrefix != DefaultExecutionKeyPrefix,
+		redisURL:       "",
+		logger:         &core.NoOpLogger{},
+		keyPrefix:      config.KeyPrefix,
+		keys:           keys,
+		ttl:            config.TTL,
+		errorTTL:       config.ErrorTTL,
+		queryLimit:     config.ConversationQueryLimit,
+		indexScanLimit: config.ConversationIndexScanLimit,
+		validationErr:  validateRedisExecutionPrefix(config.KeyPrefix),
 	}
 }
 
@@ -1065,42 +1037,3 @@ var (
 	_ ExecutionStore              = (*RedisExecutionDebugStore)(nil)
 	_ ConversationExecutionLister = (*RedisExecutionDebugStore)(nil)
 )
-
-// Deprecated option aliases retained for the precursor compatibility window.
-// They are removed at the next major release.
-
-// Deprecated: use WithExecutionDebugRedisURL.
-func WithExecutionRedisURL(url string) RedisExecutionDebugStoreOption {
-	return WithExecutionDebugRedisURL(url)
-}
-
-// Deprecated: use DB 0, an injected client, and WithExecutionDebugKeyspace.
-func WithExecutionRedisDB(db int) RedisExecutionDebugStoreOption {
-	return WithExecutionDebugRedisDB(db)
-}
-
-// Deprecated: use WithExecutionDebugLogger.
-func WithExecutionLogger(logger core.Logger) RedisExecutionDebugStoreOption {
-	return WithExecutionDebugLogger(logger)
-}
-
-// Deprecated: use WithExecutionDebugKeyspace.
-func WithExecutionKeyPrefix(prefix string) RedisExecutionDebugStoreOption {
-	return WithExecutionDebugKeyPrefix(prefix)
-}
-
-// Deprecated: use WithExecutionDebugTTL.
-func WithExecutionTTL(ttl time.Duration) RedisExecutionDebugStoreOption {
-	return WithExecutionDebugTTL(ttl)
-}
-
-// Deprecated: use WithExecutionDebugErrorTTL.
-func WithExecutionErrorTTL(ttl time.Duration) RedisExecutionDebugStoreOption {
-	return WithExecutionDebugErrorTTL(ttl)
-}
-
-// Deprecated: use NewRedisExecutionDebugStore. This alias is removed at the
-// next major release.
-func NewRedisExecutionStore(opts ...RedisExecutionDebugStoreOption) (*RedisExecutionDebugStore, error) {
-	return NewRedisExecutionDebugStore(opts...)
-}

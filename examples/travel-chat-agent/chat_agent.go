@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +31,7 @@ type TravelChatAgent struct {
 }
 
 // NewTravelChatAgent creates a new travel chat agent with AI and telemetry configured.
-func NewTravelChatAgent() (*TravelChatAgent, error) {
+func NewTravelChatAgent(connection core.RedisConnectionConfig, keyspace core.RedisKeyspace) (*TravelChatAgent, error) {
 	agent := core.NewBaseAgent("travel-chat-agent")
 
 	// Create AI client with provider chain for failover.
@@ -124,13 +123,8 @@ func NewTravelChatAgent() (*TravelChatAgent, error) {
 	})
 	tracedClient.Timeout = 300 * time.Second // Increased for complex orchestration
 
-	// Create Redis-backed session store
-	// Uses Redis DB 2 (RedisDBSessions) to isolate from service registry (DB 0)
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return nil, fmt.Errorf("REDIS_URL is required for session storage")
-	}
-	sessionStore, err := NewSessionStore(redisURL, 48*time.Hour, 50, agent.Logger)
+	// Session data shares DB 0 and is isolated by the versioned deployment keyspace.
+	sessionStore, err := NewSessionStore(connection, keyspace, 48*time.Hour, 50, agent.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session store: %w", err)
 	}

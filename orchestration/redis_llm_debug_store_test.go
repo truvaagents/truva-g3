@@ -68,7 +68,7 @@ func TestRedisLLMDebugStoreOptionsNormalizeNonPositiveTTLs(t *testing.T) {
 	mr := miniredis.RunT(t)
 
 	ownedStore, err := NewRedisLLMDebugStore(
-		WithDebugRedisURL(mr.Addr()),
+		WithDebugRedisURL("redis://"+mr.Addr()),
 		WithDebugTTL(0),
 		WithDebugErrorTTL(-time.Second),
 	)
@@ -133,7 +133,6 @@ func TestRedisLLMDebugStoreOptionsNormalizeNonPositiveTTLs(t *testing.T) {
 // code path). The MemoryLLMDebugStore variant of this test lives in
 // llm_debug_store_test.go; both stores must produce identical summary
 // totals on duplicated records.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
 func TestRedisLLMDebugStore_ListRecent_DedupeShadowsInSummary(t *testing.T) {
 	_, store := setupRedisLLMDebugTestStore(t)
 	ctx := context.Background()

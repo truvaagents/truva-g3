@@ -76,7 +76,7 @@ func (r *ResearchAgent) callToolWithResilience(ctx context.Context, tool *core.S
 	cb := r.getOrCreateCircuitBreaker(tool.Name)
 	if cb == nil {
 		// Fallback to direct call if CB creation fails
-		r.Logger.Warn("Circuit breaker unavailable, using direct call", map[string]interface{}{
+		r.Logger.WarnWithContext(ctx, "Circuit breaker unavailable, using direct call", map[string]interface{}{
 			"tool": tool.Name,
 		})
 		result, _ := r.callToolDirect(ctx, tool, capability, topic)
@@ -85,7 +85,7 @@ func (r *ResearchAgent) callToolWithResilience(ctx context.Context, tool *core.S
 
 	// Check circuit breaker state first (fail-fast)
 	if !cb.CanExecute() {
-		r.Logger.Warn("Circuit breaker is open, failing fast", map[string]interface{}{
+		r.Logger.WarnWithContext(ctx, "Circuit breaker is open, failing fast", map[string]interface{}{
 			"tool":          tool.Name,
 			"circuit_state": cb.GetState(),
 		})
@@ -115,17 +115,23 @@ func (r *ResearchAgent) callToolWithResilience(ctx context.Context, tool *core.S
 	//   - Category-based error routing (auth vs rate limit vs server error)
 	//   - AI-powered payload correction for retryable 4xx errors
 	//   - Proper backoff for rate limits (429) and server errors (5xx)
-	result, err := r.callToolWithIntelligentRetry(ctx, tool, capability, initialPayload, IntelligentRetryConfig{
-		MaxRetries:      r.retryConfig.MaxAttempts,
-		UseAI:           r.aiClient != nil,
-		BackoffDuration: r.retryConfig.InitialDelay,
+	// Execute through the token-aware API so half-open probes reserve capacity
+	// and their outcomes drive the circuit back to closed (or open). The legacy
+	// CanExecute/Record* helpers do not carry an execution token and therefore
+	// cannot account for half-open probes correctly.
+	var result *ToolResult
+	err = cb.Execute(ctx, func() error {
+		var callErr error
+		result, callErr = r.callToolWithIntelligentRetry(ctx, tool, capability, initialPayload, IntelligentRetryConfig{
+			MaxRetries:      r.retryConfig.MaxAttempts,
+			UseAI:           r.aiClient != nil,
+			BackoffDuration: r.retryConfig.InitialDelay,
+		})
+		return callErr
 	})
 
-	// Record result with circuit breaker
 	if err != nil {
-		cb.RecordFailure()
-
-		r.Logger.Error("Tool call failed after intelligent retry", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "Tool call failed after intelligent retry", map[string]interface{}{
 			"tool":          tool.Name,
 			"capability":    capability.Name,
 			"error":         err.Error(),
@@ -145,46 +151,12 @@ func (r *ResearchAgent) callToolWithResilience(ctx context.Context, tool *core.S
 		return result
 	}
 
-	cb.RecordSuccess()
-
-	r.Logger.Info("Resilient tool call succeeded", map[string]interface{}{
+	r.Logger.InfoWithContext(ctx, "Resilient tool call succeeded", map[string]interface{}{
 		"tool":          tool.Name,
 		"capability":    capability.Name,
 		"circuit_state": cb.GetState(),
 		"duration":      time.Since(startTime).String(),
 	})
-
-	return result
-}
-
-// callToolWithTimeout wraps a tool call with explicit timeout using cb.ExecuteWithTimeout
-func (r *ResearchAgent) callToolWithTimeout(ctx context.Context, tool *core.ServiceInfo, capability *core.Capability, topic string, timeout time.Duration) *ToolResult {
-	startTime := time.Now()
-
-	cb := r.getOrCreateCircuitBreaker(tool.Name)
-	if cb == nil {
-		result, _ := r.callToolDirect(ctx, tool, capability, topic)
-		return result
-	}
-
-	var result *ToolResult
-
-	// Use framework's ExecuteWithTimeout for explicit timeout control
-	err := cb.ExecuteWithTimeout(ctx, timeout, func() error {
-		var callErr error
-		result, callErr = r.callToolDirect(ctx, tool, capability, topic)
-		return callErr
-	})
-
-	if err != nil {
-		return &ToolResult{
-			ToolName:   tool.Name,
-			Capability: capability.Name,
-			Success:    false,
-			Error:      fmt.Sprintf("Tool call failed (timeout=%v): %v", timeout, err),
-			Duration:   time.Since(startTime).String(),
-		}
-	}
 
 	return result
 }
@@ -227,7 +199,7 @@ func (r *ResearchAgent) callToolDirect(ctx context.Context, tool *core.ServiceIn
 	if err != nil {
 		return nil, fmt.Errorf("HTTP call failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -285,7 +257,7 @@ func (r *ResearchAgent) callToolForEntities(ctx context.Context, tool *core.Serv
 		return nil
 	}
 
-	r.Logger.Info("Starting resilient parallel tool calls", map[string]interface{}{
+	r.Logger.InfoWithContext(ctx, "Starting resilient parallel tool calls", map[string]interface{}{
 		"tool":         tool.Name,
 		"entity_count": len(entities),
 		"entities":     entities,
@@ -315,13 +287,13 @@ func (r *ResearchAgent) callToolForEntities(ctx context.Context, tool *core.Serv
 		case <-done:
 			completed++
 		case <-timeout:
-			r.Logger.Warn("Timeout waiting for entity results", map[string]interface{}{
+			r.Logger.WarnWithContext(ctx, "Timeout waiting for entity results", map[string]interface{}{
 				"completed": completed,
 				"total":     len(entities),
 			})
 			goto collectResults
 		case <-ctx.Done():
-			r.Logger.Warn("Context cancelled during entity calls", nil)
+			r.Logger.WarnWithContext(ctx, "Context cancelled during entity calls", nil)
 			goto collectResults
 		}
 	}
@@ -352,14 +324,14 @@ func (r *ResearchAgent) selectToolsAndCapabilities(ctx context.Context, topic st
 	catalog.WriteString("Available Tools:\n\n")
 
 	for i, tool := range tools {
-		catalog.WriteString(fmt.Sprintf("%d. Tool: %s\n", i+1, tool.Name))
+		fmt.Fprintf(&catalog, "%d. Tool: %s\n", i+1, tool.Name)
 		catalog.WriteString("   Capabilities:\n")
 		for _, cap := range tool.Capabilities {
 			desc := cap.Description
 			if desc == "" {
 				desc = cap.Name
 			}
-			catalog.WriteString(fmt.Sprintf("   - %s: %s\n", cap.Name, desc))
+			fmt.Fprintf(&catalog, "   - %s: %s\n", cap.Name, desc)
 		}
 		catalog.WriteString("\n")
 	}
@@ -384,7 +356,7 @@ Select the single best match.`, topic, catalog.String())
 		MaxTokens:   200,
 	})
 	if err != nil {
-		r.Logger.Error("AI tool selection failed", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "AI tool selection failed", map[string]interface{}{
 			"error": err.Error(),
 		})
 		return nil
@@ -400,7 +372,7 @@ Select the single best match.`, topic, catalog.String())
 	content := extractJSON(response.Content)
 
 	if err := json.Unmarshal([]byte(content), &selection); err != nil {
-		r.Logger.Error("Failed to parse AI selection", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "Failed to parse AI selection", map[string]interface{}{
 			"error": err.Error(),
 		})
 		return nil
@@ -428,18 +400,18 @@ func (r *ResearchAgent) generateToolPayloadWithAI(ctx context.Context, topic str
 
 	// Build prompt based on capability schema hints
 	var promptBuilder strings.Builder
-	promptBuilder.WriteString(fmt.Sprintf("Generate a JSON payload for the '%s' capability of tool '%s'.\n\n", capability.Name, tool.Name))
-	promptBuilder.WriteString(fmt.Sprintf("User Request: %s\n\n", topic))
+	fmt.Fprintf(&promptBuilder, "Generate a JSON payload for the '%s' capability of tool '%s'.\n\n", capability.Name, tool.Name)
+	fmt.Fprintf(&promptBuilder, "User Request: %s\n\n", topic)
 
 	if capability.InputSummary != nil {
 		promptBuilder.WriteString("Required fields:\n")
 		for _, field := range capability.InputSummary.RequiredFields {
-			promptBuilder.WriteString(fmt.Sprintf("- %s (%s): %s (example: %s)\n", field.Name, field.Type, field.Description, field.Example))
+			fmt.Fprintf(&promptBuilder, "- %s (%s): %s (example: %s)\n", field.Name, field.Type, field.Description, field.Example)
 		}
 		if len(capability.InputSummary.OptionalFields) > 0 {
 			promptBuilder.WriteString("\nOptional fields:\n")
 			for _, field := range capability.InputSummary.OptionalFields {
-				promptBuilder.WriteString(fmt.Sprintf("- %s (%s): %s\n", field.Name, field.Type, field.Description))
+				fmt.Fprintf(&promptBuilder, "- %s (%s): %s\n", field.Name, field.Type, field.Description)
 			}
 		}
 	}
@@ -603,7 +575,7 @@ Return ONLY valid JSON:
 		string(originalJSON),
 	)
 
-	r.Logger.Debug("Requesting AI error correction", map[string]interface{}{
+	r.Logger.DebugWithContext(ctx, "Requesting AI error correction", map[string]interface{}{
 		"tool":       errCtx.ToolName,
 		"capability": errCtx.Capability,
 		"attempt":    errCtx.AttemptNumber,
@@ -637,7 +609,7 @@ Return ONLY valid JSON:
 		return nil, fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
-	r.Logger.Info("AI error analysis completed", map[string]interface{}{
+	r.Logger.InfoWithContext(ctx, "AI error analysis completed", map[string]interface{}{
 		"tool":     errCtx.ToolName,
 		"can_fix":  result.CanFix,
 		"analysis": result.Analysis,
@@ -665,7 +637,7 @@ func (r *ResearchAgent) callToolWithIntelligentRetry(
 	var lastError *core.ToolError
 
 	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
-		r.Logger.Debug("Intelligent retry attempt", map[string]interface{}{
+		r.Logger.DebugWithContext(ctx, "Intelligent retry attempt", map[string]interface{}{
 			"tool":       tool.Name,
 			"capability": capability.Name,
 			"attempt":    attempt + 1,
@@ -678,7 +650,7 @@ func (r *ResearchAgent) callToolWithIntelligentRetry(
 		// Handle network errors (couldn't reach the tool at all)
 		if err != nil && httpStatus == 0 {
 			if attempt < config.MaxRetries {
-				r.Logger.Warn("Network error, retrying with same payload", map[string]interface{}{
+				r.Logger.WarnWithContext(ctx, "Network error, retrying with same payload", map[string]interface{}{
 					"tool":    tool.Name,
 					"attempt": attempt + 1,
 					"error":   err.Error(),
@@ -693,7 +665,7 @@ func (r *ResearchAgent) callToolWithIntelligentRetry(
 		if httpStatus >= 200 && httpStatus < 300 {
 			result.Duration = time.Since(startTime).String()
 			if attempt > 0 {
-				r.Logger.Info("Tool call succeeded after retry", map[string]interface{}{
+				r.Logger.InfoWithContext(ctx, "Tool call succeeded after retry", map[string]interface{}{
 					"tool":          tool.Name,
 					"final_attempt": attempt + 1,
 					"duration":      result.Duration,
@@ -715,7 +687,7 @@ func (r *ResearchAgent) callToolWithIntelligentRetry(
 			if lastError != nil {
 				errMsg = lastError.Message
 			}
-			r.Logger.Error("Auth error - not retryable", map[string]interface{}{
+			r.Logger.ErrorWithContext(ctx, "Auth error - not retryable", map[string]interface{}{
 				"tool":        tool.Name,
 				"http_status": httpStatus,
 			})
@@ -732,7 +704,7 @@ func (r *ResearchAgent) callToolWithIntelligentRetry(
 		// Rate limited (429) - Wait and retry with SAME payload
 		if httpStatus == 429 {
 			retryAfter := r.parseRetryAfter(lastError)
-			r.Logger.Warn("Rate limited, waiting before retry", map[string]interface{}{
+			r.Logger.WarnWithContext(ctx, "Rate limited, waiting before retry", map[string]interface{}{
 				"tool":        tool.Name,
 				"retry_after": retryAfter.String(),
 			})
@@ -743,7 +715,7 @@ func (r *ResearchAgent) callToolWithIntelligentRetry(
 		// Server error (5xx) - Retry with SAME payload (transient error)
 		if httpStatus >= 500 {
 			if attempt < config.MaxRetries {
-				r.Logger.Warn("Server error, retrying with same payload", map[string]interface{}{
+				r.Logger.WarnWithContext(ctx, "Server error, retrying with same payload", map[string]interface{}{
 					"tool":        tool.Name,
 					"http_status": httpStatus,
 					"attempt":     attempt + 1,
@@ -761,7 +733,7 @@ func (r *ResearchAgent) callToolWithIntelligentRetry(
 				if lastError != nil {
 					errMsg = lastError.Message
 				}
-				r.Logger.Warn("Client error not marked as retryable", map[string]interface{}{
+				r.Logger.WarnWithContext(ctx, "Client error not marked as retryable", map[string]interface{}{
 					"tool":        tool.Name,
 					"http_status": httpStatus,
 					"retryable":   false,
@@ -788,7 +760,7 @@ func (r *ResearchAgent) callToolWithIntelligentRetry(
 				})
 
 				if err == nil && corrected != nil {
-					r.Logger.Info("AI corrected payload, retrying", map[string]interface{}{
+					r.Logger.InfoWithContext(ctx, "AI corrected payload, retrying", map[string]interface{}{
 						"tool":       tool.Name,
 						"attempt":    attempt + 1,
 						"error_code": lastError.Code,
@@ -798,7 +770,7 @@ func (r *ResearchAgent) callToolWithIntelligentRetry(
 				}
 
 				if err != nil {
-					r.Logger.Warn("AI correction failed", map[string]interface{}{
+					r.Logger.WarnWithContext(ctx, "AI correction failed", map[string]interface{}{
 						"tool":  tool.Name,
 						"error": err.Error(),
 					})
@@ -855,7 +827,7 @@ func (r *ResearchAgent) callToolHTTPWithParsing(
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("HTTP call failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -948,7 +920,7 @@ Keep the response under 200 words.`, topic, string(resultsJSON))
 		MaxTokens:   400,
 	})
 	if err != nil {
-		r.Logger.Error("AI analysis generation failed", map[string]interface{}{
+		r.Logger.ErrorWithContext(ctx, "AI analysis generation failed", map[string]interface{}{
 			"error": err.Error(),
 		})
 		return ""
@@ -984,7 +956,11 @@ func (r *ResearchAgent) cacheResult(ctx context.Context, topic string, response 
 		return
 	}
 
-	r.Memory.Set(ctx, fmt.Sprintf("research:%s", topic), string(data), 15*time.Minute)
+	if err := r.Memory.Set(ctx, fmt.Sprintf("research:%s", topic), string(data), 15*time.Minute); err != nil {
+		r.Logger.WarnWithContext(ctx, "Research cache write failed", map[string]interface{}{
+			"operation": "research_cache_write", "error_type": "memory_write_failure",
+		})
+	}
 }
 
 // ============================================================================

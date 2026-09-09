@@ -1,24 +1,9 @@
 // Package orchestration — RedisTaskDispatcher implements core.TaskDispatcher.
 //
-// Writes tasks to "truvag3:tasks:queue:{queueName}" using LPUSH. This matches
-// the key convention used by the existing orchestration.RedisTaskQueue so
-// the existing TaskWorkerPool's BRPOP picks up scheduled tasks without any
-// worker-side changes.
-//
-// DRIFT RISK — DUPLICATED CONVENTION (not a shared constant):
-// The "truvag3:tasks:queue:" prefix is also hardcoded in
-// orchestration/redis_task_queue.go (as a string literal inside
-// DefaultRedisTaskQueueConfig). Both modules must use the same prefix or
-// dispatched tasks will land in a key that worker pools aren't reading.
-//
-// Why it's duplicated rather than shared via core: exporting a constant
-// from core would require updating orchestration/redis_task_queue.go to
-// reference it, which touches pre-existing tech-debt code outside the
-// scope of this phase. A future tech-debt cleanup should consolidate the
-// convention into a single exported constant.
-//
-// If you change the prefix below, grep for "truvag3:tasks:queue" across the
-// repo to find the other hardcoded location and update it too.
+// Writes tasks using LPUSH to the versioned deployment-scoped queue keys shared
+// by RedisTaskQueue and RedisTaskConsumer. Composition derives the task prefix
+// from core.RedisKeyspace.Plain("tasks"); producer and consumer must use the
+// same deployment and logical queue name.
 
 package orchestration
 
@@ -37,7 +22,7 @@ import (
 var _ core.TaskDispatcher = (*RedisTaskDispatcher)(nil)
 
 // taskQueueKeyPrefix is the per-agent task queue key namespace. This
-// matches orchestration.RedisTaskQueue's default key format ("truvag3:tasks:queue:{name}")
+// matches RedisTaskQueue's default "truvag3:v1:default:tasks:queue:<name>" format
 // so scheduled tasks are picked up by existing worker pools without any
 // special routing.
 var taskQueueKeyPrefix = defaultRedisKeyspace().Plain("tasks", "queue") + ":"
@@ -63,6 +48,8 @@ func NewRedisTaskDispatcher(client redis.Cmdable) (*RedisTaskDispatcher, error) 
 	return NewRedisTaskDispatcherWithPrefix(client, defaultRedisKeyspace().Plain("tasks"))
 }
 
+// NewRedisTaskDispatcherWithPrefix accepts an explicit task-routing prefix.
+// Canonical composition supplies keyspace.Plain("tasks"). The caller owns client.
 func NewRedisTaskDispatcherWithPrefix(client redis.Cmdable, prefix string) (*RedisTaskDispatcher, error) {
 	if client == nil {
 		return nil, errNilRedisClient
@@ -77,7 +64,7 @@ func NewRedisTaskDispatcherWithPrefix(client redis.Cmdable, prefix string) (*Red
 // Dispatch delivers the task to the named queue via LPUSH.
 //
 // The task is JSON-marshalled and pushed onto the left of the list at
-// "truvag3:tasks:queue:{queueName}". A TaskWorkerPool BRPOPing on the same
+// "<task-prefix>:queue:<queueName>". A TaskWorkerPool BRPOPing on the same
 // key picks it up and runs the registered handler.
 func (d *RedisTaskDispatcher) Dispatch(ctx context.Context, queueName string, task *core.Task) error {
 	if task == nil {

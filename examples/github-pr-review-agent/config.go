@@ -6,15 +6,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/truvaagents/truva-g3/core"
 )
 
 type ReviewConfig struct {
-	Mode        string
-	Port        int
-	RedisURL    string
-	Namespace   string
-	WorkerCount int
-	TaskTimeout time.Duration
+	Mode          string
+	Port          int
+	Redis         core.RedisConnectionConfig
+	RedisKeyspace core.RedisKeyspace
+	Namespace     string
+	WorkerCount   int
+	TaskTimeout   time.Duration
 
 	WebhookSecret string
 	ReviewDrafts  bool
@@ -47,13 +50,22 @@ func (s AllowedRepoSet) Contains(fullName string) bool {
 }
 
 func LoadReviewConfig() (*ReviewConfig, error) {
+	resolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		return nil, fmt.Errorf("Redis configuration: %w", err)
+	}
+	keyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		return nil, fmt.Errorf("Redis namespace: %w", err)
+	}
 	cfg := &ReviewConfig{
-		Mode:        os.Getenv("TRUVAG3_MODE"),
-		Port:        envInt("PORT", 8382),
-		RedisURL:    os.Getenv("REDIS_URL"),
-		Namespace:   os.Getenv("NAMESPACE"),
-		WorkerCount: envInt("WORKER_COUNT", 3),
-		TaskTimeout: envDuration("TRUVAG3_PR_REVIEW_TASK_TIMEOUT", 30*time.Minute),
+		Mode:          os.Getenv("TRUVAG3_MODE"),
+		Port:          envInt("PORT", 8382),
+		Redis:         resolution,
+		RedisKeyspace: keyspace,
+		Namespace:     os.Getenv("NAMESPACE"),
+		WorkerCount:   envInt("WORKER_COUNT", 3),
+		TaskTimeout:   envDuration("TRUVAG3_PR_REVIEW_TASK_TIMEOUT", 30*time.Minute),
 
 		WebhookSecret: os.Getenv("GITHUB_WEBHOOK_SECRET"),
 		ReviewDrafts:  envBool("TRUVAG3_PR_REVIEW_REVIEW_DRAFTS", false),
@@ -85,12 +97,6 @@ func LoadReviewConfig() (*ReviewConfig, error) {
 }
 
 func (c *ReviewConfig) Validate() error {
-	if c.RedisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-	if !strings.HasPrefix(c.RedisURL, "redis://") && !strings.HasPrefix(c.RedisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format; expected redis:// or rediss://")
-	}
 	if c.Mode != "" && c.Mode != "api" && c.Mode != "worker" {
 		return fmt.Errorf("invalid TRUVAG3_MODE %q; expected 'api', 'worker', or unset", c.Mode)
 	}

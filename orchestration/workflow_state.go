@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -24,17 +23,8 @@ type WorkflowStateStore interface {
 	ListExecutions(context.Context, string) ([]*WorkflowExecution, error)
 }
 
-// StateStore is the legacy execution-ID-only workflow state contract.
-// Deprecated: implement WorkflowStateStore. This compatibility contract is
-// isolated from canonical runtime composition and is removed at the next major
-// release.
-type StateStore interface {
-	SaveExecution(context.Context, *WorkflowExecution) error
-	UpdateExecution(context.Context, *WorkflowExecution) error
-	UpdateStepExecution(context.Context, string, *StepExecution) error
-	GetExecution(context.Context, string) (*WorkflowExecution, error)
-	ListExecutions(context.Context, string) ([]*WorkflowExecution, error)
-}
+// StateStore is the workflow-scoped persistence contract.
+type StateStore = WorkflowStateStore
 
 // RedisStateStore implements WorkflowStateStore using one Redis cluster slot
 // per workflow.
@@ -193,135 +183,6 @@ func (s *RedisStateStore) ListExecutions(ctx context.Context, workflowID string)
 		}
 	}
 	return executions, nil
-}
-
-// LegacyRedisStateStore preserves the released execution-ID-only standalone
-// schema during the precursor compatibility window.
-type LegacyRedisStateStore struct {
-	client    redis.UniversalClient
-	ttl       time.Duration
-	keyPrefix string
-}
-
-// NewRedisStateStore creates the legacy localhost-backed workflow store.
-// Deprecated: compose WorkflowStateStore explicitly.
-func NewRedisStateStore(discovery core.Discovery) StateStore {
-	resolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
-	if err != nil {
-		return &failedLegacyStateStore{cause: err}
-	}
-	if resolution.Config.Mode == core.RedisModeCluster {
-		return &failedLegacyStateStore{cause: fmt.Errorf("legacy workflow state schema is standalone-only: %w", core.ErrInvalidConfiguration)}
-	}
-	client, err := core.NewRedisUniversalClientForCompatibility(resolution.Config)
-	if err != nil {
-		return &failedLegacyStateStore{cause: err}
-	}
-	store, _ := NewLegacyRedisStateStoreWithClientAndPrefix(client, 24*time.Hour, "workflow")
-	return store
-}
-
-type failedLegacyStateStore struct{ cause error }
-
-func (store *failedLegacyStateStore) SaveExecution(context.Context, *WorkflowExecution) error {
-	return store.cause
-}
-func (store *failedLegacyStateStore) UpdateExecution(context.Context, *WorkflowExecution) error {
-	return store.cause
-}
-func (store *failedLegacyStateStore) UpdateStepExecution(context.Context, string, *StepExecution) error {
-	return store.cause
-}
-func (store *failedLegacyStateStore) GetExecution(context.Context, string) (*WorkflowExecution, error) {
-	return nil, store.cause
-}
-func (store *failedLegacyStateStore) ListExecutions(context.Context, string) ([]*WorkflowExecution, error) {
-	return nil, store.cause
-}
-
-// NewLegacyRedisStateStoreWithClientAndPrefix constructs the isolated legacy
-// standalone workflow schema.
-// Deprecated: use NewRedisStateStoreWithClient.
-func NewLegacyRedisStateStoreWithClientAndPrefix(
-	client redis.UniversalClient,
-	ttl time.Duration,
-	keyPrefix string,
-) (*LegacyRedisStateStore, error) {
-	if client == nil {
-		return nil, fmt.Errorf("redis workflow state client is required")
-	}
-	if ttl <= 0 {
-		ttl = 24 * time.Hour
-	}
-	keyPrefix = strings.TrimSuffix(strings.TrimSpace(keyPrefix), ":")
-	if keyPrefix == "" {
-		return nil, fmt.Errorf("redis workflow state key prefix is required")
-	}
-	return &LegacyRedisStateStore{client: client, ttl: ttl, keyPrefix: keyPrefix}, nil
-}
-
-func (s *LegacyRedisStateStore) executionKey(executionID string) string {
-	return fmt.Sprintf("%s:exec:%s", s.keyPrefix, executionID)
-}
-
-func (s *LegacyRedisStateStore) SaveExecution(ctx context.Context, execution *WorkflowExecution) error {
-	data, err := json.Marshal(execution)
-	if err != nil {
-		return fmt.Errorf("marshaling execution: %w", err)
-	}
-	if err := s.client.Set(ctx, s.executionKey(execution.ID), data, s.ttl).Err(); err != nil {
-		return fmt.Errorf("saving to Redis: %w", err)
-	}
-	if err := s.client.LPush(ctx, fmt.Sprintf("%s:executions:%s", s.keyPrefix, execution.WorkflowID), execution.ID).Err(); err != nil {
-		return fmt.Errorf("adding to execution list: %w", err)
-	}
-	return nil
-}
-
-func (s *LegacyRedisStateStore) UpdateExecution(ctx context.Context, execution *WorkflowExecution) error {
-	data, err := json.Marshal(execution)
-	if err != nil {
-		return fmt.Errorf("marshaling execution: %w", err)
-	}
-	return s.client.Set(ctx, s.executionKey(execution.ID), data, s.ttl).Err()
-}
-
-func (s *LegacyRedisStateStore) UpdateStepExecution(ctx context.Context, executionID string, step *StepExecution) error {
-	execution, err := s.GetExecution(ctx, executionID)
-	if err != nil {
-		return err
-	}
-	if execution.Steps == nil {
-		execution.Steps = make(map[string]*StepExecution)
-	}
-	execution.Steps[step.StepID] = step
-	return s.UpdateExecution(ctx, execution)
-}
-
-func (s *LegacyRedisStateStore) GetExecution(ctx context.Context, executionID string) (*WorkflowExecution, error) {
-	data, err := s.client.Get(ctx, s.executionKey(executionID)).Bytes()
-	if err != nil {
-		return nil, fmt.Errorf("getting execution: %w", err)
-	}
-	var execution WorkflowExecution
-	if err := json.Unmarshal(data, &execution); err != nil {
-		return nil, fmt.Errorf("unmarshaling execution: %w", err)
-	}
-	return &execution, nil
-}
-
-func (s *LegacyRedisStateStore) ListExecutions(ctx context.Context, workflowID string) ([]*WorkflowExecution, error) {
-	ids, err := s.client.LRange(ctx, fmt.Sprintf("%s:executions:%s", s.keyPrefix, workflowID), 0, 99).Result()
-	if err != nil {
-		return nil, err
-	}
-	result := make([]*WorkflowExecution, 0, len(ids))
-	for _, id := range ids {
-		if execution, err := s.GetExecution(ctx, id); err == nil {
-			result = append(result, execution)
-		}
-	}
-	return result, nil
 }
 
 // InMemoryStateStore is the canonical in-memory WorkflowStateStore.

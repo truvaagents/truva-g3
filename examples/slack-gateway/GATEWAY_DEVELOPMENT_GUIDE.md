@@ -95,7 +95,7 @@ Do **not** build a gateway when:
 │                      │                                       │
 │                      ▼                                       │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │  Session Mapper (Redis DB 2 or stateless)          │    │
+│  │  Session Mapper (DB 0 namespaced keys or stateless)│    │
 │  │  • Derive stable session_id from platform identity │    │
 │  └───────────────────┬────────────────────────────────┘    │
 │                      │                                       │
@@ -189,7 +189,7 @@ type PlatformEvent struct {
 
 ## 7. Step 2: Session Mapping
 
-The agent stores conversation history by `session_id` (see framework session store, typically Redis DB 2). The gateway must derive a stable `session_id` for every inbound event so follow-up messages continue the same conversation.
+The agent stores conversation history by `session_id` in the versioned sessions subspace of the shared Redis/Valkey DB 0 keyspace. The gateway must derive a stable `session_id` for every inbound event so follow-up messages continue the same conversation.
 
 **Recommended derivation (stateless):**
 ```
@@ -202,7 +202,7 @@ Properties:
 - **Scoped** — DM vs channel vs thread are distinct sessions. DMs stay private; threads stay isolated.
 - **Multi-tenant safe** — include `team_id` / `workspace_id` / `tenant_id` so the same user across tenants is distinct.
 
-**When to use Redis (DB 2) for mapping:**
+**When to use Redis/Valkey DB 0 namespaced keys for mapping:**
 - You need **session aliases** (e.g., a human-friendly command `/switch-session X` that rebinds).
 - You want to **migrate** a session when a user changes phone numbers / Slack handles.
 - You need **cross-platform linking** (same human, different platform identities).
@@ -306,7 +306,7 @@ If the target agent uses HITL approval checkpoints, the gateway must surface the
    - SMS: same as WhatsApp.
    - Email: reply-with-keyword or a signed action link.
 3. Platform delivers the user's response as a new event (interactivity webhook for Slack buttons, plain message for keyword replies).
-4. Gateway recognizes it as a HITL reply (based on checkpoint_id stored in Redis DB 6 or in the Block Kit payload) and `POST`s to `<AGENT>/hitl/command` with the decision.
+4. Gateway recognizes it as a HITL reply (based on the checkpoint ID stored in the DB 0 HITL subspace or in the Block Kit payload) and `POST`s to `<AGENT>/hitl/command` with the decision.
 5. Agent resumes, SSE continues, gateway continues normal message flow.
 
 **Key detail:** HITL checkpoints can sit pending for hours. If using Pattern A (goroutine), the checkpoint waits block a goroutine indefinitely — not a crisis for low volume, but this is the strongest argument for Pattern B.

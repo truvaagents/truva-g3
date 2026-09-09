@@ -24,9 +24,6 @@ var (
 )
 
 const (
-	llmDebugMetaSuffix  = ":meta"
-	llmDebugInterSuffix = ":interactions"
-	llmDebugFloorSuffix = ":retention-floor"
 
 	// Default TTLs
 	defaultDebugTTL = 24 * time.Hour
@@ -98,14 +95,12 @@ type RedisLLMDebugStoreOption func(*redisDebugStoreConfig)
 
 type redisDebugStoreConfig struct {
 	redisURL         string
-	redisDB          int
 	logger           core.Logger
 	circuitBreaker   core.CircuitBreaker // Interface - injected by application (optional)
 	ttl              time.Duration
 	errorTTL         time.Duration
 	keyPrefix        string
 	keys             telemetry.RedisLLMDebugKeys
-	legacyPrefix     string
 	keyspaceExplicit bool
 }
 
@@ -113,14 +108,6 @@ type redisDebugStoreConfig struct {
 func WithDebugRedisURL(url string) RedisLLMDebugStoreOption {
 	return func(c *redisDebugStoreConfig) {
 		c.redisURL = url
-	}
-}
-
-// WithDebugRedisDB selects a numbered standalone database.
-// Deprecated: use DB 0 and WithDebugKeyspace.
-func WithDebugRedisDB(db int) RedisLLMDebugStoreOption {
-	return func(c *redisDebugStoreConfig) {
-		c.redisDB = db
 	}
 }
 
@@ -155,22 +142,10 @@ func WithDebugErrorTTL(ttl time.Duration) RedisLLMDebugStoreOption {
 	}
 }
 
-// WithDebugKeyPrefix sets the precursor standalone key prefix. A trailing colon
-// is normalized.
-// Deprecated: use WithDebugKeyspace for cluster-capable composition.
-func WithDebugKeyPrefix(prefix string) RedisLLMDebugStoreOption {
-	return func(c *redisDebugStoreConfig) {
-		c.legacyPrefix = strings.TrimSuffix(strings.TrimSpace(prefix), ":") + ":"
-		c.keyPrefix = c.legacyPrefix
-		c.keyspaceExplicit = true
-	}
-}
-
 // WithDebugKeyspace selects the canonical versioned DB-0 key schema.
 func WithDebugKeyspace(keyspace core.RedisKeyspace) RedisLLMDebugStoreOption {
 	return func(c *redisDebugStoreConfig) {
 		c.keys = telemetry.NewRedisLLMDebugKeys(keyspace)
-		c.legacyPrefix = ""
 		c.keyPrefix = keyspace.Plain("llm-debug")
 		c.keyspaceExplicit = true
 	}
@@ -193,7 +168,6 @@ type RedisLLMDebugStore struct {
 	errorTTL       time.Duration
 	keyPrefix      string
 	keys           telemetry.RedisLLMDebugKeys
-	legacyPrefix   string
 
 	// Layer 1 resilience state (simple failure tracking)
 	failureCount int
@@ -225,13 +199,9 @@ func NewRedisLLMDebugStore(opts ...RedisLLMDebugStoreOption) (*RedisLLMDebugStor
 	}
 	normalizeRedisLLMDebugStoreConfig(cfg)
 
-	client, connection, err := newOwnedRedisUniversalClient(cfg.redisURL, cfg.redisDB, cfg.logger)
+	client, connection, err := newOwnedRedisUniversalClient(cfg.redisURL, "TRUVAG3_LLM_DEBUG_REDIS_DB", "TRUVAG3_LLM_DEBUG_KEY_PREFIX")
 	if err != nil {
 		return nil, fmt.Errorf("initialize Redis LLM debug store: %w", err)
-	}
-	if err := rejectLegacyRedisPrefixForMode(connection.Mode, cfg.legacyPrefix != "", "LLM debug store"); err != nil {
-		_ = client.Close()
-		return nil, err
 	}
 
 	// Note: Circuit breaker is optional and injected by application (per ARCHITECTURE.md)
@@ -270,9 +240,6 @@ func NewRedisLLMDebugStoreWithClient(client redis.UniversalClient, opts ...Redis
 		}
 	}
 	normalizeRedisLLMDebugStoreConfig(cfg)
-	if err := rejectLegacyRedisPrefixForClient(client, cfg.legacyPrefix != "", "LLM debug store"); err != nil {
-		return nil, err
-	}
 	return newRedisLLMDebugStore(client, false, cfg), nil
 }
 
@@ -289,7 +256,6 @@ func normalizeRedisLLMDebugStoreConfig(cfg *redisDebugStoreConfig) {
 func defaultRedisLLMDebugStoreConfig() *redisDebugStoreConfig {
 	return &redisDebugStoreConfig{
 		redisURL:  "",
-		redisDB:   0,
 		logger:    &core.NoOpLogger{},
 		ttl:       getEnvDuration("TRUVAG3_LLM_DEBUG_TTL", defaultDebugTTL),
 		errorTTL:  getEnvDuration("TRUVAG3_LLM_DEBUG_ERROR_TTL", errorDebugTTL),
@@ -308,7 +274,6 @@ func newRedisLLMDebugStore(client redis.UniversalClient, ownsClient bool, cfg *r
 		errorTTL:       cfg.errorTTL,
 		keyPrefix:      cfg.keyPrefix,
 		keys:           cfg.keys,
-		legacyPrefix:   cfg.legacyPrefix,
 	}
 }
 
@@ -621,15 +586,13 @@ func (s *RedisLLMDebugStore) ListRecent(ctx context.Context, limit int) ([]LLMDe
 			return nil, fmt.Errorf("load recent LLM debug record %q: %w", id, err)
 		}
 
-		// Build lightweight summary from the deduped view so historical
-		// records (written before Layer 2 landed) and any still-unmigrated
-		// call sites produce correct totals in the list view.
+		// Build the lightweight summary from the deduplicated view so paired
+		// instrumented and typed rows contribute only once to list-view totals.
 		// SourceComponents is derived from the ORIGINAL slice — typed rows
 		// always carry an empty SourceComponent by invariant, so the only
 		// rows that contribute here are agent_llm_call partners and orphans;
 		// deduping would discard the wrapping-agent attribution that makes
 		// the list useful. Totals use the deduped slice.
-		// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md.
 		deduped := DedupeLLMInteractions(record.Interactions)
 		totalTokens := 0
 		hasErrors := false
@@ -708,30 +671,18 @@ func (s *RedisLLMDebugStore) Close() error {
 }
 
 func (s *RedisLLMDebugStore) indexKey() string {
-	if s.legacyPrefix != "" {
-		return strings.TrimSuffix(s.legacyPrefix, ":") + ":index"
-	}
 	return s.keys.RecentIndex()
 }
 
 func (s *RedisLLMDebugStore) metaKey(requestID string) string {
-	if s.legacyPrefix != "" {
-		return s.legacyPrefix + requestID + llmDebugMetaSuffix
-	}
 	return s.keys.Meta(requestID)
 }
 
 func (s *RedisLLMDebugStore) interactionsKey(requestID string) string {
-	if s.legacyPrefix != "" {
-		return s.legacyPrefix + requestID + llmDebugInterSuffix
-	}
 	return s.keys.Interactions(requestID)
 }
 
 func (s *RedisLLMDebugStore) retentionFloorKey(requestID string) string {
-	if s.legacyPrefix != "" {
-		return s.legacyPrefix + requestID + llmDebugFloorSuffix
-	}
 	return s.keys.RetentionFloor(requestID)
 }
 

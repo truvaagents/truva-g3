@@ -9,10 +9,22 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+// Removed Redis routing and prefix settings are rejected only for selected roles.
+// Empty values are absent, consistent with the topology configuration resolver.
+var removedRedisEnvironmentVariables = map[string]ClientRole{
+	"TRUVAG3_EXECUTION_DEBUG_REDIS_DB":   ClientRoleExecution,
+	"TRUVAG3_LLM_DEBUG_REDIS_DB":         ClientRoleLLMDebug,
+	"TRUVAG3_HITL_REDIS_DB":              ClientRoleHITL,
+	"TRUVAG3_WORKFLOW_REDIS_DB":          ClientRoleWorkflow,
+	"TRUVAG3_SCHEDULING_REDIS_DB":        ClientRoleScheduling,
+	"TRUVAG3_SKILLS_REDIS_DB":            ClientRoleSkills,
+	"TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX": ClientRoleExecution,
+	"TRUVAG3_LLM_DEBUG_KEY_PREFIX":       ClientRoleLLMDebug,
+	"TRUVAG3_HITL_KEY_PREFIX":            ClientRoleHITL,
+}
+
 type ClientConfig struct {
-	connection   core.RedisConnectionConfig
-	legacyRoleDB map[ClientRole]int
-	diagnostics  []string
+	connection core.RedisConnectionConfig
 }
 
 type ClientConfigOption interface{ applyClientConfig(*ClientConfig) error }
@@ -50,10 +62,7 @@ func ConfigureClientConfig(base ClientConfig, options ...ClientConfigOption) (Cl
 	if err != nil {
 		return ClientConfig{}, fmt.Errorf("redisprovider: Redis connection: %w", err)
 	}
-	if resolution.Config.DB != 0 {
-		return ClientConfig{}, fmt.Errorf("redisprovider: canonical Redis connections require DB 0: %w", core.ErrInvalidConfiguration)
-	}
-	configured.connection = resolution.Config
+	configured.connection = resolution
 	return configured, nil
 }
 
@@ -150,14 +159,14 @@ func loadClientConfigFromEnvironment(
 		if err != nil {
 			return ClientConfig{}, fmt.Errorf("redisprovider: resolve Redis connection: %w", err)
 		}
-		configured.connection = resolution.Config
-		configured.diagnostics = append(configured.diagnostics, resolution.Diagnostics...)
+		configured.connection = resolution
 	}
-	options, err := loadLegacyRoleDatabaseOptions(lookup)
-	if err != nil {
-		return ClientConfig{}, err
+	for name := range removedRedisEnvironmentVariables {
+		if value, present := lookup(name); present && strings.TrimSpace(value) != "" {
+			return ClientConfig{}, fmt.Errorf("redisprovider: %s is unsupported; use DB 0 with RedisKeyspace: %w", name, core.ErrInvalidConfiguration)
+		}
 	}
-	return ConfigureClientConfig(configured, options...)
+	return ConfigureClientConfig(configured)
 }
 
 func hasCompleteRedisConnectionOption(options []ClientConfigOption) bool {
@@ -170,33 +179,12 @@ func hasCompleteRedisConnectionOption(options []ClientConfigOption) bool {
 }
 
 func cloneClientConfig(config ClientConfig) ClientConfig {
-	clone := ClientConfig{
-		connection:   config.connection,
-		legacyRoleDB: make(map[ClientRole]int, len(config.legacyRoleDB)),
-		diagnostics:  append([]string(nil), config.diagnostics...),
-	}
+	clone := ClientConfig{connection: config.connection}
 	clone.connection.Addrs = append([]string(nil), config.connection.Addrs...)
 	if config.connection.TLSConfig != nil {
 		clone.connection.TLSConfig = config.connection.TLSConfig.Clone()
 	}
-	for role, database := range config.legacyRoleDB {
-		clone.legacyRoleDB[role] = database
-	}
 	return clone
-}
-
-// Diagnostics returns bounded configuration notices for application bootstrap.
-func (config ClientConfig) Diagnostics() []string {
-	return append([]string(nil), config.diagnostics...)
-}
-
-func appendRedisDiagnostic(diagnostics []string, diagnostic string) []string {
-	for _, existing := range diagnostics {
-		if existing == diagnostic {
-			return diagnostics
-		}
-	}
-	return append(diagnostics, diagnostic)
 }
 
 type OwnedClients struct {
@@ -210,7 +198,7 @@ type ownedClientsConfig struct {
 }
 
 // OwnedClientsOption controls which configured Redis roles receive owned
-// clients. It does not alter database assignments in ClientConfig.
+// clients. Every selected role shares the same DB-0 connection.
 type OwnedClientsOption interface {
 	applyOwnedClients(*ownedClientsConfig) error
 }
@@ -259,9 +247,6 @@ func NewOwnedClients(config ClientConfig, options ...OwnedClientsOption) (*Owned
 		if err := option.applyOwnedClients(&ownedConfig); err != nil {
 			return nil, err
 		}
-	}
-	if len(configured.legacyRoleDB) > 0 {
-		return newLegacyRoleDatabaseClients(configured, ownedConfig)
 	}
 
 	client, err := core.NewRedisUniversalClient(configured.connection)

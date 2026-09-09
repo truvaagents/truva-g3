@@ -865,7 +865,7 @@ Playwright Tool (Passive)
     +-- Receives requests from agents
     +-- Spawns Node.js subprocesses for Chromium automation
     +-- Uploads artifacts to S3 (optional)
-    +-- Indexes results in Redis (DB 9 by default)
+    +-- Indexes results in the shared Redis/Valkey DB 0 keyspace
     +-- Returns standardized responses
     |
     +-- Capabilities:
@@ -928,7 +928,7 @@ curl -X POST http://localhost:8091/api/capabilities/research_topic \
 | `S3_ACCESS_KEY` | S3 credential | - | No* |
 | `S3_SECRET_KEY` | S3 credential | - | No* |
 | `PLAYWRIGHT_SCRIPT_DIR` | Directory for built-in scripts | `/app/scripts` | No |
-| `REDIS_QA_DB` | Redis DB number for test result indexing | `9` | No |
+| `TRUVAG3_REDIS_NAMESPACE` | Deployment namespace used to isolate test-result keys | `default` | No |
 | `DEV_MODE` | Development mode flag | `false` | No |
 | `APP_ENV` | Environment profile (`development`/`staging`/`production`) | `development` | No |
 | `TRUVAG3_LOG_LEVEL` | Logging level (`error`\|`warn`\|`info`\|`debug`) | `info` | No |
@@ -959,7 +959,7 @@ s3://<bucket>/
 
 **Script reuse:** When `run_tests` is called with `script_name`, the inline script is also uploaded under `<hostname>/scripts/<script-name>.spec.ts`. The S3 key is overwritten on each save; the version counter is stored in Redis (see `lookup_scripts` response). Subsequent runs can pass `reuse_script_name` instead of `script` to re-execute the latest stored version.
 
-**Result indexing:** Each run's metadata (target URL, status, duration, artifact URLs) is indexed in Redis (DB 9 by default) keyed by hostname and date for fast querying via `get_results`. Script reuse metadata (name, version, test names, last run status) also lives in Redis — `lookup_scripts` reads from this store.
+**Result indexing:** Each run's metadata (target URL, status, duration, artifact URLs) is indexed in the shared Redis/Valkey DB 0 under the versioned deployment keyspace, keyed by hostname and date for fast querying via `get_results`. Script reuse metadata (name, version, test names, last run status) lives in the same isolated subspace — `lookup_scripts` reads from this store.
 
 ---
 
@@ -993,7 +993,7 @@ playwright-tool/
 
 ```bash
 # Check Redis registration
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*" | grep playwright
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100 | grep playwright
 
 # Check tool logs
 ./setup.sh logs

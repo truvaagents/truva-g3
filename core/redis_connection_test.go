@@ -75,19 +75,37 @@ func TestRedisUniversalClientVerifiesStartup(t *testing.T) {
 	require.NoError(t, client.Ping(t.Context()).Err())
 }
 
-func TestCanonicalRedisUniversalClientRequiresDBZero(t *testing.T) {
-	server := miniredis.RunT(t)
-	config := RedisConnectionConfig{
-		Mode: RedisModeStandalone, Addrs: []string{server.Addr()}, DB: 2,
+func TestRedisConnectionRequiresDBZeroInEveryTopology(t *testing.T) {
+	for _, mode := range []RedisMode{RedisModeStandalone, RedisModeSentinel, RedisModeCluster} {
+		t.Run(string(mode), func(t *testing.T) {
+			for _, database := range []int{-1, 1, 2, 7, 8, 16} {
+				config := DefaultRedisConnectionConfig()
+				config.Mode, config.DB = mode, database
+				if mode == RedisModeSentinel {
+					config.MasterName = "primary"
+				}
+				_, err := ResolveRedisConnectionConfig(&config, nil)
+				require.ErrorIs(t, err, ErrInvalidConfiguration)
+				_, err = newRedisUniversalClient(config, false)
+				require.ErrorIs(t, err, ErrInvalidConfiguration)
+			}
+		})
 	}
-	_, err := NewRedisUniversalClient(config)
-	require.ErrorIs(t, err, ErrInvalidConfiguration)
+}
 
-	client, err := NewRedisUniversalClientForCompatibility(config)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
-	require.NoError(t, client.Set(t.Context(), "compatibility-key", "value", 0).Err())
-	require.True(t, server.DB(2).Exists("compatibility-key"))
+func TestRedisConnectionRejectsRemovedAlias(t *testing.T) {
+	for _, canonical := range []map[string]string{
+		{},
+		{"REDIS_URL": "redis://localhost:6379/0"},
+		{"TRUVAG3_REDIS_MODE": "cluster", "TRUVAG3_REDIS_ADDRS": "localhost:6379"},
+	} {
+		canonical["TRUVAG3_REDIS_URL"] = "redis://user:unit-test-secret@private-host/8"
+		_, err := ResolveRedisConnectionConfig(nil, mapRedisLookup(canonical))
+		require.ErrorIs(t, err, ErrInvalidConfiguration)
+		require.Contains(t, err.Error(), "TRUVAG3_REDIS_URL is unsupported")
+		require.NotContains(t, err.Error(), "unit-test-secret")
+		require.NotContains(t, err.Error(), "private-host")
+	}
 }
 
 func TestRedisUniversalClientBoundsStartupCheckIndependently(t *testing.T) {
@@ -214,22 +232,12 @@ func TestResolveRedisConnectionConfigSources(t *testing.T) {
 			"TRUVAG3_REDIS_MAX_RETRIES":    "5",
 		}))
 		require.NoError(t, err)
-		require.Equal(t, RedisModeStandalone, resolution.Config.Mode)
-		require.Equal(t, []string{"redis.example:6379"}, resolution.Config.Addrs)
-		require.Equal(t, 24, resolution.Config.PoolSize)
-		require.Equal(t, 6, resolution.Config.MinIdle)
-		require.Equal(t, 4*time.Second, resolution.Config.DialTimeout)
-		require.Equal(t, 5, resolution.Config.MaxRetries)
-		require.Empty(t, resolution.Diagnostics)
-	})
-
-	t.Run("deprecated URL alias", func(t *testing.T) {
-		resolution, err := ResolveRedisConnectionConfig(nil, mapRedisLookup(map[string]string{
-			"TRUVAG3_REDIS_URL": "redis://legacy.example:6379/8",
-		}))
-		require.NoError(t, err)
-		require.Equal(t, 8, resolution.Config.DB)
-		require.Equal(t, []string{"TRUVAG3_REDIS_URL is deprecated; use REDIS_URL"}, resolution.Diagnostics)
+		require.Equal(t, RedisModeStandalone, resolution.Mode)
+		require.Equal(t, []string{"redis.example:6379"}, resolution.Addrs)
+		require.Equal(t, 24, resolution.PoolSize)
+		require.Equal(t, 6, resolution.MinIdle)
+		require.Equal(t, 4*time.Second, resolution.DialTimeout)
+		require.Equal(t, 5, resolution.MaxRetries)
 	})
 
 	t.Run("structured cluster", func(t *testing.T) {
@@ -239,14 +247,14 @@ func TestResolveRedisConnectionConfigSources(t *testing.T) {
 			"TRUVAG3_REDIS_DB":    "0",
 		}))
 		require.NoError(t, err)
-		require.Equal(t, RedisModeCluster, resolution.Config.Mode)
-		require.Equal(t, []string{"one:6379", "two:6379"}, resolution.Config.Addrs)
+		require.Equal(t, RedisModeCluster, resolution.Mode)
+		require.Equal(t, []string{"one:6379", "two:6379"}, resolution.Addrs)
 	})
 
 	t.Run("default", func(t *testing.T) {
 		resolution, err := ResolveRedisConnectionConfig(nil, mapRedisLookup(nil))
 		require.NoError(t, err)
-		require.Equal(t, DefaultRedisConnectionConfig(), resolution.Config)
+		require.Equal(t, DefaultRedisConnectionConfig(), resolution)
 	})
 }
 
@@ -261,10 +269,10 @@ func TestResolveRedisConnectionConfigPreservesStructuredCredentials(t *testing.T
 		"TRUVAG3_REDIS_SENTINEL_PASSWORD": "  sentinel secret  ",
 	}))
 	require.NoError(t, err)
-	require.Equal(t, "  data user  ", resolution.Config.Username)
-	require.Equal(t, "  data secret  ", resolution.Config.Password)
-	require.Equal(t, "  sentinel user  ", resolution.Config.SentinelUsername)
-	require.Equal(t, "  sentinel secret  ", resolution.Config.SentinelPassword)
+	require.Equal(t, "  data user  ", resolution.Username)
+	require.Equal(t, "  data secret  ", resolution.Password)
+	require.Equal(t, "  sentinel user  ", resolution.SentinelUsername)
+	require.Equal(t, "  sentinel secret  ", resolution.SentinelPassword)
 }
 
 func TestResolveRedisConnectionConfigRejectsInvalidSettings(t *testing.T) {
@@ -315,13 +323,13 @@ func TestResolveRedisConnectionConfigTLS(t *testing.T) {
 	}
 	resolution, err := ResolveRedisConnectionConfig(nil, mapRedisLookup(environment))
 	require.NoError(t, err)
-	require.Equal(t, RedisModeCluster, resolution.Config.Mode)
-	require.Equal(t, []string{"cluster.example:6379"}, resolution.Config.Addrs)
-	require.NotNil(t, resolution.Config.TLSConfig)
-	require.Equal(t, uint16(tls.VersionTLS12), resolution.Config.TLSConfig.MinVersion)
-	require.Equal(t, "redis.example", resolution.Config.TLSConfig.ServerName)
-	require.False(t, resolution.Config.TLSConfig.InsecureSkipVerify)
-	require.Nil(t, resolution.Config.TLSConfig.RootCAs, "no custom CA keeps system trust")
+	require.Equal(t, RedisModeCluster, resolution.Mode)
+	require.Equal(t, []string{"cluster.example:6379"}, resolution.Addrs)
+	require.NotNil(t, resolution.TLSConfig)
+	require.Equal(t, uint16(tls.VersionTLS12), resolution.TLSConfig.MinVersion)
+	require.Equal(t, "redis.example", resolution.TLSConfig.ServerName)
+	require.False(t, resolution.TLSConfig.InsecureSkipVerify)
+	require.Nil(t, resolution.TLSConfig.RootCAs, "no custom CA keeps system trust")
 
 	environment["TRUVAG3_REDIS_TLS_ENABLED"] = "false"
 	_, err = ResolveRedisConnectionConfig(nil, mapRedisLookup(environment))
@@ -329,7 +337,7 @@ func TestResolveRedisConnectionConfigTLS(t *testing.T) {
 	delete(environment, "TRUVAG3_REDIS_TLS_SERVER_NAME")
 	resolution, err = ResolveRedisConnectionConfig(nil, mapRedisLookup(environment))
 	require.NoError(t, err)
-	require.Nil(t, resolution.Config.TLSConfig)
+	require.Nil(t, resolution.TLSConfig)
 }
 
 func TestResolveRedisConnectionConfigRejectsUnreadableOrInvalidCA(t *testing.T) {
@@ -359,7 +367,7 @@ func TestResolveRedisConnectionConfigPreservesExplicitZeroMinIdle(t *testing.T) 
 		"TRUVAG3_REDIS_MIN_IDLE_CONNS": "0",
 	}))
 	require.NoError(t, err)
-	require.Zero(t, resolution.Config.MinIdle)
+	require.Zero(t, resolution.MinIdle)
 
 	standardURL, err := ParseStandaloneRedisURL("redis://redis.example:6379")
 	require.NoError(t, err)
@@ -400,7 +408,7 @@ func TestResolveRedisConnectionConfigUsesExplicitConfigWithoutEnvironment(t *tes
 		panic("environment must not be read for explicit connection configuration")
 	})
 	require.NoError(t, err)
-	require.Equal(t, "code.example:6379", resolution.Config.Addrs[0])
+	require.Equal(t, "code.example:6379", resolution.Addrs[0])
 }
 
 func TestRedisConnectionErrorsRetainExpectedIdentity(t *testing.T) {
@@ -456,19 +464,6 @@ func TestRedisConnectionConfigFormattingDoesNotExposeCredentials(t *testing.T) {
 		require.NotContains(t, formatted, "sentinel-secret")
 		require.NotContains(t, formatted, "operator")
 	}
-}
-
-func TestLogRedisConnectionDiagnosticsEmitsEachDiagnosticOnce(t *testing.T) {
-	logger := &MockLogger{}
-	logRedisConnectionDiagnostics(logger, []string{"deprecated alias", "deprecated alias", ""})
-	require.Equal(t, []LogEntry{{
-		Level:   "warn",
-		Message: "Redis configuration notice",
-		Fields: map[string]interface{}{
-			"operation":  "redis_configuration_notice",
-			"diagnostic": "deprecated alias",
-		},
-	}}, logger.entries)
 }
 
 type redisClientComponentLogger struct {

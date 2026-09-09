@@ -181,14 +181,6 @@ func newDefaultBackends(
 	if err != nil {
 		return nil, err
 	}
-	if logger != nil {
-		for _, diagnostic := range clientConfig.Diagnostics() {
-			logger.Warn("Redis configuration notice", map[string]interface{}{
-				"operation":  "redis_configuration_notice",
-				"diagnostic": diagnostic,
-			})
-		}
-	}
 	ownedClientOptions := []OwnedClientsOption(nil)
 	if len(configured.roles) > 0 {
 		ownedClientOptions = append(ownedClientOptions, WithOwnedClientRoles(configured.roles...))
@@ -262,8 +254,8 @@ func lookupForDefaultBackendRoles(
 	for _, role := range roles {
 		selected[role] = struct{}{}
 	}
-	variableRoles := make(map[string]ClientRole, len(clientRoleDatabaseVariables)+len(providerOptionVariableRoles))
-	for role, name := range clientRoleDatabaseVariables {
+	variableRoles := make(map[string]ClientRole, len(removedRedisEnvironmentVariables)+len(providerOptionVariableRoles))
+	for name, role := range removedRedisEnvironmentVariables {
 		variableRoles[name] = role
 	}
 	for name, role := range providerOptionVariableRoles {

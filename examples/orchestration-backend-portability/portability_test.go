@@ -201,11 +201,15 @@ func TestRedisDistributedLockConformance(t *testing.T) {
 	backendconformance.RunDistributedLockConformance(t, func(t *testing.T) backendconformance.LockFixture {
 		client := newRedisClient(t)
 		namespace := fixtureNamespace(t, "redis-lock")
-		first, err := redisadapter.NewDistributedLock(client, namespace)
+		keyspace, err := core.NewRedisKeyspace(namespace)
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := redisadapter.NewDistributedLock(client, namespace)
+		first, err := redisadapter.NewDistributedLock(client, keyspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := redisadapter.NewDistributedLock(client, keyspace)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -320,7 +324,7 @@ func TestMixedProviderComposition(t *testing.T) {
 	if err := backends.Workflow().SaveExecution(ctx, execution); err != nil {
 		t.Fatalf("PostgreSQL workflow override: %v", err)
 	}
-	if loaded, err := backends.Workflow().GetExecution(ctx, execution.ID); err != nil || loaded.ID != execution.ID {
+	if loaded, err := backends.Workflow().GetExecution(ctx, execution.WorkflowID, execution.ID); err != nil || loaded.ID != execution.ID {
 		t.Fatalf("PostgreSQL workflow round trip: execution=%#v err=%v", loaded, err)
 	}
 

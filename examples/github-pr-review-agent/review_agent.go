@@ -17,7 +17,7 @@ type PRReviewAgent struct {
 	Config      *ReviewConfig
 	ToolClient  *GitHubToolClient
 	HTTPClient  *http.Client
-	RedisClient *redis.Client
+	RedisClient redis.UniversalClient
 	TaskQueue   core.TaskQueue
 	TaskStore   core.TaskStore
 
@@ -56,7 +56,7 @@ func declareMetrics() {
 }
 
 func NewPRReviewAgent(
-	redisClient *redis.Client,
+	redisClient redis.UniversalClient,
 	taskQueue core.TaskQueue,
 	taskStore core.TaskStore,
 	cfg *ReviewConfig,

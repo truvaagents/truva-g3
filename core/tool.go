@@ -126,7 +126,6 @@ func (t *BaseTool) Initialize(ctx context.Context) error {
 					"reason":   "development_mode",
 				})
 			} else if t.Config.Discovery.Provider == "redis" && (t.Config.Discovery.RedisConnection != nil || t.Config.Discovery.RedisURL != "") {
-				logRedisConnectionDiagnostics(t.Logger, t.Config.Discovery.RedisDiagnostics)
 				connection, connectionErr := redisConnectionForDiscovery(t.Config.Discovery)
 				var registry *RedisRegistry
 				if connectionErr == nil {

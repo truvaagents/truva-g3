@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 )
 
@@ -31,9 +32,70 @@ func TestRoleConfigValidationRequiresOnlyConsumedSettings(t *testing.T) {
 	}
 
 	scheduler := base
-	scheduler.RedisURL = "redis://lock"
+	scheduler.Redis = core.RedisConnectionConfig{
+		Mode: core.RedisModeStandalone, Addrs: []string{"redis:6379"},
+	}
 	if err := validateRoleConfig("scheduler", scheduler, roleNeeds{Redis: true}); err != nil {
 		t.Fatalf("scheduler rejected intentionally absent API settings: %v", err)
+	}
+}
+
+func TestRoleConfigAcceptsEveryRedisTopology(t *testing.T) {
+	base := Config{
+		PostgresURL: "postgres://database", NATSURL: "nats://messaging",
+		Namespace: "test", AckWait: time.Second,
+	}
+	for name, connection := range map[string]core.RedisConnectionConfig{
+		"standalone": {Mode: core.RedisModeStandalone, Addrs: []string{"redis:6379"}},
+		"sentinel": {
+			Mode: core.RedisModeSentinel, Addrs: []string{"sentinel:26379"}, MasterName: "primary",
+		},
+		"cluster": {Mode: core.RedisModeCluster, Addrs: []string{"node-0:6379", "node-1:6379"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := base
+			config.Redis = connection
+			if err := validateRoleConfig("scheduler", config, roleNeeds{Redis: true}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestRedisKeyspaceIsIndependentFromProviderBackendNamespace(t *testing.T) {
+	keyspace, err := resolvePortabilityRedisKeyspace(func(string) (string, bool) {
+		return "", false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyspace.Deployment() != "default" {
+		t.Fatalf("default Redis deployment = %q, want default", keyspace.Deployment())
+	}
+	if keyspace.Deployment() == defaultBackendNamespace {
+		t.Fatalf("Redis deployment reused provider backend namespace %q", defaultBackendNamespace)
+	}
+
+	keyspace, err = resolvePortabilityRedisKeyspace(func(name string) (string, bool) {
+		if name == "TRUVAG3_REDIS_NAMESPACE" {
+			return "redis-deployment", true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyspace.Deployment() != "redis-deployment" {
+		t.Fatalf("resolved Redis deployment = %q", keyspace.Deployment())
+	}
+}
+
+func TestRedisKeyspaceRejectsInvalidEnvironmentValue(t *testing.T) {
+	_, err := resolvePortabilityRedisKeyspace(func(string) (string, bool) {
+		return "invalid{namespace", true
+	})
+	if !errors.Is(err, core.ErrInvalidConfiguration) {
+		t.Fatalf("keyspace error = %v, want ErrInvalidConfiguration", err)
 	}
 }
 

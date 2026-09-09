@@ -685,7 +685,7 @@ openfda-tool/
 **1. Tool not appearing in discovery**
 
 ```bash
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*"
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 # Should show: truvag3:service:openfda-service
 ```
 

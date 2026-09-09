@@ -170,7 +170,7 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 | Deployment key namespace | `default`; 1–128 ASCII letters, digits, `.`, `_`, or `-` | `TRUVAG3_REDIS_NAMESPACE` | `core.NewRedisKeyspace` / `redisprovider.WithDeployment` |
 | Connection topology | `standalone`; closed set: `standalone`, `sentinel`, `cluster` | `TRUVAG3_REDIS_MODE` in the structured form | `core.RedisConnectionConfig.Mode` / `redisprovider.WithConnectionMode` |
 | Addresses | One standalone address; Sentinel/cluster require at least one | `TRUVAG3_REDIS_ADDRS` (comma-separated) | `RedisConnectionConfig.Addrs` / `redisprovider.WithAddresses` |
-| Logical database | `0`; range `0`–`15` for temporary standalone/Sentinel compatibility; cluster fixed at `0` | `TRUVAG3_REDIS_DB` | `RedisConnectionConfig.DB` / `redisprovider.WithDatabase` |
+| Logical database | `0` in standalone, Sentinel, and cluster mode | `TRUVAG3_REDIS_DB` | `RedisConnectionConfig.DB` / `redisprovider.WithDatabase` |
 | Pool size | `10`; `1`–`10000` | `TRUVAG3_REDIS_POOL_SIZE` | `RedisConnectionConfig.PoolSize` |
 | Minimum idle connections | `5`; when non-zero, at most pool size | `TRUVAG3_REDIS_MIN_IDLE_CONNS` | `RedisConnectionConfig.MinIdle` |
 | Dial timeout | `5s`; positive and at most `10m` | `TRUVAG3_REDIS_DIAL_TIMEOUT` | `RedisConnectionConfig.DialTimeout` |
@@ -510,8 +510,8 @@ characters, 2,500 manifest tokens, 4,000 tokens per resource, 12 resources,
 256 KiB per package, or 3,000 combined instruction tokens. Warnings do not
 silently rewrite or reject a package; errors enforce the hard limits above.
 
-The included Redis role uses the shared versioned DB-0 keyspace. The deprecated
-`TRUVAG3_SKILLS_REDIS_DB` is a standalone-only precursor compatibility input;
+The included Redis role uses the shared versioned DB-0 keyspace.
+`TRUVAG3_SKILLS_REDIS_DB` is removed and rejected for the selected skills role;
 canonical orchestration runtime depends only on the provider-neutral skill
 interfaces.
 

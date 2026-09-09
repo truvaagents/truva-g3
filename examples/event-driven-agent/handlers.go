@@ -191,7 +191,11 @@ func (a *EventDrivenAgent) handleManualTrigger(w http.ResponseWriter, r *http.Re
 	case "critical":
 		enqueued = a.enqueueCriticalAlert(ctx, alert)
 	case "warning":
-		a.sendWarningSlackNotification(ctx, alert)
+		if err := a.sendWarningSlackNotification(ctx, alert); err != nil {
+			a.Logger.WarnWithContext(ctx, "Warning notification failed", map[string]interface{}{
+				"operation": "manual_trigger", "error_type": "notification_failure",
+			})
+		}
 	default:
 		a.Logger.InfoWithContext(ctx, "Manual info alert logged", map[string]interface{}{
 			"alertname": req.Alertname,
@@ -215,7 +219,7 @@ func (a *EventDrivenAgent) handleManualTrigger(w http.ResponseWriter, r *http.Re
 	} else {
 		w.WriteHeader(http.StatusOK)
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":      "ok",
 		"alertname":   req.Alertname,
 		"severity":    req.Severity,
@@ -248,7 +252,7 @@ func (a *EventDrivenAgent) handleEventHistory(w http.ResponseWriter, r *http.Req
 	}
 
 	// Get queue depth for status
-	queueKey := "truvag3:event:alert_queue"
+	queueKey := a.alertQueueKey()
 	queueLen, err := a.redisClient.LLen(ctx, queueKey).Result()
 	if err != nil {
 		a.Logger.WarnWithContext(ctx, "Failed to get queue length", map[string]interface{}{
@@ -266,7 +270,7 @@ func (a *EventDrivenAgent) handleEventHistory(w http.ResponseWriter, r *http.Req
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"queue_depth": queueLen,
 		"timestamp":   time.Now().Unix(),
 	})
@@ -295,7 +299,7 @@ func (a *EventDrivenAgent) handleHealth(w http.ResponseWriter, r *http.Request) 
 		health["redis"] = "healthy"
 
 		// Queue depth
-		queueLen, _ := a.redisClient.LLen(ctx, "truvag3:event:alert_queue").Result()
+		queueLen, _ := a.redisClient.LLen(ctx, a.alertQueueKey()).Result()
 		health["queue_depth"] = queueLen
 	}
 
@@ -337,5 +341,5 @@ func (a *EventDrivenAgent) handleHealth(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(health)
+	_ = json.NewEncoder(w).Encode(health)
 }

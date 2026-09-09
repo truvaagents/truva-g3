@@ -387,8 +387,10 @@ For the included Redis implementation, create `backends` once in application
 bootstrap with `redisprovider.NewOrchestrationBackends`. A custom provider can
 populate the same neutral bundle with typed options such as
 `WithWorkflowBackend`. Workflow execution itself remains provider-neutral.
-`NewRedisStateStore` is retained as a compatibility constructor, not the
-preferred path for new applications.
+Direct Redis composition uses `NewRedisStateStoreWithClient(client, keyspace, ttl)`;
+the application owns the client. `NewRedisStateStore` is removed. The canonical
+`WorkflowStateStore` contract requires both workflow and execution IDs for
+lookups and step mutations.
 
 > **Note**: The above is from the framework API. For a working example with YAML workflows, check back after the TODO in agent-with-orchestration is completed.
 

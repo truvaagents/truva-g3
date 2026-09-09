@@ -833,7 +833,7 @@ fiscal-data-tool/
 Ensure the tool is registered with Redis:
 ```bash
 # List all registered services
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:services:*"
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # Confirm this tool is registered by name (resolves to the service ID)
 kubectl exec -n truvag3-examples deploy/redis -- redis-cli GET "truvag3:names:fiscal-data-tool"

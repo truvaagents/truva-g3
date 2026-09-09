@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,8 +27,6 @@ const (
 	maxSkillStoreTxRetries = 32
 )
 
-var redisKeyPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
-
 type skillStoreFailureType string
 
 const (
@@ -43,18 +40,16 @@ const (
 // skill runtime and administration contracts. Its key schema and transaction
 // mechanics are deliberately private to this package.
 type SkillStore struct {
-	client    redis.UniversalClient
-	keyspace  core.RedisKeyspace
-	keyPrefix string
-	logger    core.Logger
-	now       func() time.Time
+	client   redis.UniversalClient
+	keyspace core.RedisKeyspace
+	logger   core.Logger
+	now      func() time.Time
 }
 
 // WithSkillStoreKeyspace sets the canonical deployment-scoped keyspace.
 func WithSkillStoreKeyspace(keyspace core.RedisKeyspace) SkillStoreOption {
 	return skillStoreOption(func(store *SkillStore) error {
 		store.keyspace = keyspace
-		store.keyPrefix = ""
 		return nil
 	})
 }
@@ -63,17 +58,6 @@ type SkillStoreOption interface{ applySkillStore(*SkillStore) error }
 type skillStoreOption func(*SkillStore) error
 
 func (option skillStoreOption) applySkillStore(store *SkillStore) error { return option(store) }
-
-func WithSkillStoreKeyPrefix(prefix string) SkillStoreOption {
-	return skillStoreOption(func(store *SkillStore) error {
-		prefix = strings.TrimSpace(prefix)
-		if !redisKeyPrefixPattern.MatchString(prefix) {
-			return fmt.Errorf("redisprovider: skill key prefix must match %s", redisKeyPrefixPattern.String())
-		}
-		store.keyPrefix = prefix
-		return nil
-	})
-}
 
 func WithSkillStoreLogger(logger core.Logger) SkillStoreOption {
 	return skillStoreOption(func(store *SkillStore) error {
@@ -1063,9 +1047,6 @@ func nilSkillStoreLogger(logger core.Logger) bool {
 }
 
 func (store *SkillStore) storagePrefix() string {
-	if store.keyPrefix != "" {
-		return store.keyPrefix + ":{store}"
-	}
 	return store.keyspace.Tagged("skills", "")
 }
 func (store *SkillStore) catalogKey() string { return store.storagePrefix() + ":catalog" }

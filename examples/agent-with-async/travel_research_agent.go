@@ -50,7 +50,7 @@ import (
 //	└─────────────────────────────────────────────────────────────────┘
 type AsyncTravelAgent struct {
 	*core.BaseAgent
-	redisClient  *redis.Client
+	redisClient  redis.UniversalClient
 	httpClient   *http.Client
 	orchestrator orchestration.Orchestrator // AI orchestrator for dynamic tool selection
 	mu           sync.RWMutex
@@ -83,7 +83,7 @@ type StepResultSummary struct {
 }
 
 // NewAsyncTravelAgent creates a new async AI-driven agent.
-func NewAsyncTravelAgent(redisClient *redis.Client) (*AsyncTravelAgent, error) {
+func NewAsyncTravelAgent(redisClient redis.UniversalClient) (*AsyncTravelAgent, error) {
 	baseAgent := core.NewBaseAgent("async-travel-agent")
 
 	// Create AI client for orchestration and synthesis.

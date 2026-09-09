@@ -132,7 +132,7 @@ func IsPendingStatus(status CheckpointStatus) bool {
 //	        return
 //	    }
 //
-//	    // Framework prepares the context and creates a linked trace span (RC7).
+//	    // Framework prepares the context and creates a linked trace span.
 //	    resumeCtx, endSpan, err := orchestration.BuildResumeContext(ctx, cp)
 //	    if err != nil {
 //	        log.Error("Failed to build resume context", "error", err)
@@ -160,9 +160,8 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 		return nil, noop, fmt.Errorf("%w: checkpoint has skill cache context without skill state", ErrSkillIntegrity)
 	}
 
-	// Restore trace context across the async boundary (RC7-B3).
-	// Read typed fields first (set by createCheckpoint after RC7-B2 is deployed),
-	// fall back to UserContext for checkpoints created before RC7-B2 was rolled out.
+	// Restore trace context across the async boundary. Prefer typed checkpoint
+	// fields and use UserContext when those fields are absent.
 	traceID := checkpoint.OriginalTraceID
 	spanID := checkpoint.OriginalSpanID
 	if traceID == "" && checkpoint.UserContext != nil {
@@ -199,7 +198,7 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 
 	// StartLinkedSpan creates a new span linked (not child) to the original trace.
 	// Degrades gracefully when traceID/spanID are empty — creates an unlinked root span.
-	// SpanKindInternal is correct here; queue workers use SpanKindConsumer upstream (RC6).
+	// SpanKindInternal is correct here; queue workers use SpanKindConsumer upstream.
 	resumeCtx, endSpan := telemetry.StartLinkedSpan(
 		spanBaseCtx,
 		"hitl.resume",

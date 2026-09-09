@@ -261,7 +261,7 @@ cd examples/weather-tool-v2
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────────────┐  │
 │  │   Session    │  │     SSE      │  │        AI Orchestrator        │  │
 │  │    Store     │  │   Handler    │  │   (Plan → Execute → Synth)    │  │
-│  │  (Redis DB2) │  │              │  │                               │  │
+│  │  (Redis DB0) │  │              │  │                               │  │
 │  └──────────────┘  └──────────────┘  └───────────────┬───────────────┘  │
 │  ┌──────────────────────────────────┐                │                  │
 │  │        User Memory               │                │                  │
@@ -282,7 +282,7 @@ cd examples/weather-tool-v2
 ### How It Works
 
 1. **User sends a message** via the Chat UI or API
-2. **Session store** retrieves conversation history from Redis (DB 2)
+2. **Session store** retrieves conversation history from the versioned sessions subspace in Redis/Valkey DB 0
 3. **AI Orchestrator** analyzes the query and plans which tools to call
 4. **Tools are executed** (potentially in parallel) to gather data
 5. **AI synthesizes** a natural language response from tool results
@@ -293,9 +293,9 @@ cd examples/weather-tool-v2
 
 | Data Type | Backend | Location |
 |-----------|---------|----------|
-| Service Registry | Redis | DB 0, keys `truvag3:services:*` |
-| Chat Sessions | Redis | DB 2, keys `truvag3:sessions:*` |
-| LLM Debug Records | Redis | DB 7, keys `llm_debug:*` |
+| Service Registry | Redis/Valkey | DB 0, versioned deployment registry subspace |
+| Chat Sessions | Redis/Valkey | DB 0, keys `truvag3:v1:<deployment>:sessions:*` |
+| LLM Debug Records | Redis/Valkey | DB 0, versioned deployment LLM-debug subspace |
 | User Memory (per-user facts) | Qdrant | Collection `truvag3_user_memory` (overridable via `TRUVAG3_USER_MEMORY_COLLECTION`); falls back to in-memory when Qdrant isn't configured |
 
 ---
@@ -418,7 +418,7 @@ List available tools discovered by the orchestrator.
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | TTL for error debug records | `168h` | No |
 | `TRUVAG3_SKILLS_ENABLED` | Enable the framework skill runtime | `true` in this example | No |
 | `TRUVAG3_SKILL_BINDINGS_JSON` | Complete replacement for the code binding list | (code bindings) | No |
-| `TRUVAG3_SKILLS_REDIS_DB` | Included skill-registry Redis database | `9` | No |
+| `TRUVAG3_REDIS_NAMESPACE` | Deployment namespace shared by all versioned Redis/Valkey subspaces | `default` | No |
 
 *At least one AI provider key is required.
 
@@ -549,13 +549,13 @@ The active `.env.example` already enables user memory's prerequisites: `TRUVAG3_
 
 ## Session Management
 
-Sessions are stored in Redis (DB 2) with the following characteristics:
+Sessions are stored in the versioned sessions subspace of Redis/Valkey DB 0 with the following characteristics:
 
 | Property | Value |
 |----------|-------|
 | **TTL** | 48 hours of inactivity |
 | **Max Messages** | 50 per session (sliding window) |
-| **Storage** | Redis DB 2 (`truvag3:sessions:*`) |
+| **Storage** | Redis/Valkey DB 0 (`truvag3:v1:<deployment>:sessions:*`) |
 | **Multi-pod Support** | Yes (shared Redis) |
 
 ### Session Flow
@@ -587,7 +587,7 @@ For debugging orchestration issues, enable the LLM Debug Store to capture comple
 export TRUVAG3_LLM_DEBUG_ENABLED=true
 ```
 
-This captures all LLM interactions at 6 recording sites (`plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`) with full payload visibility. Records are stored in Redis DB 7 with configurable TTL.
+This captures all LLM interactions at 6 recording sites (`plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`) with full payload visibility. Records are stored in the versioned LLM-debug subspace of Redis/Valkey DB 0 with configurable TTL.
 
 ### Metrics (Prometheus/Grafana)
 
@@ -692,7 +692,8 @@ The orchestrator needs time to discover tools. Wait a few seconds and retry. Str
 
 Ensure tools are registered with Redis:
 ```bash
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:services:*'
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 \
+  SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 ```
 
 **4. Ingress route not reachable**
@@ -745,8 +746,9 @@ For low-level introspection that `setup.sh` doesn't wrap:
 # Check ingress routes
 kubectl get ingress -n truvag3-examples
 
-# Check Redis session data
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 2 KEYS 'truvag3:sessions:*'
+# Check one known session record in the shared DB 0 keyspace
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 \
+  GET 'truvag3:v1:default:sessions:<session-id>'
 ```
 
 ---

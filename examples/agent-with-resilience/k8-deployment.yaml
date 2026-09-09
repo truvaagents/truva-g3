@@ -87,8 +87,6 @@ spec:
           value: "research-assistant-resilience"
         - name: REDIS_URL
           value: "redis://redis.truvag3-examples:6379"
-        - name: TRUVAG3_REDIS_URL  # For backward compatibility
-          value: "redis://redis.truvag3-examples:6379"
         # Redis Registration Resilience (handles Redis startup race conditions)
         - name: TRUVAG3_DISCOVERY_RETRY
           value: "true"

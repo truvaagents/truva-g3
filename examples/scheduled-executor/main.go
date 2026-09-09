@@ -15,12 +15,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 	"github.com/truvaagents/truva-g3/telemetry"
@@ -50,13 +48,26 @@ func main() {
 	// Create the BaseAgent (needs Discovery for target-agent resolution).
 	agent := core.NewBaseAgent(serviceName)
 
-	// Connect to Redis.
-	redisURL := os.Getenv("REDIS_URL")
-	redisClient := connectRedis(redisURL)
+	// Resolve the shared Redis/Valkey topology and deployment namespace.
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
+	redisKeyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		log.Fatalf("Redis namespace error: %v", err)
+	}
+	redisClient, err := core.NewRedisUniversalClient(redisResolution)
+	if err != nil {
+		log.Fatalf("Redis connection failed: %v", err)
+	}
 	defer redisClient.Close()
 
 	// Build scheduler backends (producer + consumer from same Redis).
-	backends, err := orchestration.NewRedisSchedulerBackends(redisClient)
+	backends, err := orchestration.NewRedisSchedulerBackends(
+		redisClient,
+		orchestration.WithRedisSchedulerKeyspace(redisKeyspace),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create scheduler backends: %v", err)
 	}
@@ -67,7 +78,7 @@ func main() {
 		core.WithName(serviceName),
 		core.WithPort(port),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(redisURL),
+		core.WithRedisConnection(redisResolution),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
@@ -239,39 +250,10 @@ func (r *catalogRefresher) Start(ctx context.Context) error {
 }
 
 func validateConfig() error {
-	if os.Getenv("REDIS_URL") == "" {
-		return fmt.Errorf("REDIS_URL is required")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 	return nil
-}
-
-func connectRedis(addr string) *redis.Client {
-	var (
-		client *redis.Client
-		err    error
-	)
-
-	// Support both redis:// URLs and bare host:port addresses so the executor
-	// matches the rest of the framework's REDIS_URL conventions.
-	if strings.Contains(addr, "://") {
-		var opts *redis.Options
-		opts, err = redis.ParseURL(addr)
-		if err != nil {
-			log.Fatalf("Invalid Redis URL %q: %v", addr, err)
-		}
-		client = redis.NewClient(core.ApplyRedisClientDefaults(opts))
-	} else {
-		client = redis.NewClient(core.ApplyRedisClientDefaults(&redis.Options{
-			Addr: addr,
-		}))
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		log.Fatalf("Redis connection failed: %v", err)
-	}
-	return client
 }
 
 func resolvePort() int {

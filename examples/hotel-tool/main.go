@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -45,7 +44,6 @@ func main() {
 		core.WithName("hotel-tool"),
 		core.WithPort(port),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(os.Getenv("REDIS_URL")),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
@@ -105,13 +103,8 @@ func main() {
 }
 
 func validateConfig() error {
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-
-	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format (must start with redis:// or rediss://)")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 
 	if os.Getenv("LITEAPI_KEY") == "" {

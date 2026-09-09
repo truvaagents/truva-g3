@@ -106,10 +106,10 @@ commands ignore this switch and remain strict.
 
 The management API writer and every agent runtime reader must use the same
 logical skills datastore. With the included Redis implementation, that includes
-the same Redis deployment and `TRUVAG3_SKILLS_REDIS_DB`. If this setting changes
-after shared infrastructure is running, redeploy the infrastructure management
-host before synchronizing or rolling out agents; an agent rollout cannot update
-another workload's ConfigMap.
+the same connection topology and `TRUVAG3_REDIS_NAMESPACE`; canonical examples
+use DB 0. If the topology or namespace changes after shared infrastructure is
+running, redeploy the infrastructure management host before synchronizing or
+rolling out agents; an agent rollout cannot update another workload's ConfigMap.
 
 If an example has no `skills/packages/` directory, the shared directory helper
 returns successfully without contacting the Skills API. This keeps the helper

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -341,41 +340,65 @@ func TestCircuitBreakerConcurrentHalfOpen(t *testing.T) {
 		t.Fatal("Circuit should be open")
 	}
 
-	// Wait for half-open with CI-friendly buffer
-	time.Sleep(config.SleepWindow + 50*time.Millisecond)
+	// Expire the open window without depending on wall-clock scheduling.
+	cb.stateChangedAt.Store(time.Now().Add(-config.SleepWindow - time.Second))
 
-	// Concurrent requests in half-open state
-	var allowed int32
-	var rejected int32
+	// Keep every admitted probe in flight until all contenders have been
+	// classified. Completing probes early can close the breaker and correctly
+	// admit late contenders, which is not a half-open capacity violation.
+	const contenders = 20
+	admissions := make(chan error, contenders)
+	release := make(chan struct{})
 	var wg sync.WaitGroup
+	defer func() {
+		close(release)
+		wg.Wait()
+		if cb.GetState() != "closed" {
+			t.Errorf("Successful probes should close the circuit, got %s", cb.GetState())
+		}
+	}()
 
-	for i := 0; i < 20; i++ {
+	for i := 0; i < contenders; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			err := cb.Execute(context.Background(), func() error {
-				atomic.AddInt32(&allowed, 1)
-				time.Sleep(10 * time.Millisecond)
+				admissions <- nil
+				<-release
 				return nil
 			})
 
-			if errors.Is(err, core.ErrCircuitBreakerOpen) {
-				atomic.AddInt32(&rejected, 1)
+			if err != nil {
+				admissions <- err
 			}
 		}()
 	}
 
-	wg.Wait()
-
-	// Should allow exactly HalfOpenRequests
-	if allowed > int32(config.HalfOpenRequests) {
-		t.Errorf("Allowed %d requests in half-open, expected max %d",
-			allowed, config.HalfOpenRequests)
+	var allowed, rejected int
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for i := 0; i < contenders; i++ {
+		select {
+		case err := <-admissions:
+			switch {
+			case err == nil:
+				allowed++
+			case errors.Is(err, core.ErrCircuitBreakerOpen):
+				rejected++
+			default:
+				t.Errorf("Unexpected execution error: %v", err)
+			}
+		case <-timeout.C:
+			t.Fatal("Timed out waiting for half-open admission decisions")
+		}
 	}
 
-	// Some should be rejected
-	if rejected == 0 {
-		t.Error("Expected some requests to be rejected in half-open state")
+	if allowed != config.HalfOpenRequests || rejected != contenders-config.HalfOpenRequests {
+		t.Errorf("Half-open admissions: allowed=%d, rejected=%d; want %d and %d",
+			allowed, rejected, config.HalfOpenRequests, contenders-config.HalfOpenRequests)
+	}
+	if cb.GetState() != "half-open" {
+		t.Errorf("Circuit should remain half-open while probes are blocked, got %s", cb.GetState())
 	}
 
 	t.Logf("Half-open state: allowed=%d, rejected=%d", allowed, rejected)

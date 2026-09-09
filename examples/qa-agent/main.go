@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/memory"
 	"github.com/truvaagents/truva-g3/orchestration"
@@ -26,6 +25,14 @@ func main() {
 	// 1. Validate configuration (fail fast)
 	if err := validateConfig(); err != nil {
 		log.Fatalf("Configuration error: %v", err)
+	}
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
+	redisKeyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		log.Fatalf("Redis namespace error: %v", err)
 	}
 
 	// 2. Set component type for service_type labeling in telemetry
@@ -56,19 +63,27 @@ func main() {
 
 	// 5. Setup shared agent memory (episodic events, investigation coordination)
 	var memBackends *memory.SharedBackends
-	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
-		redisOpt, err := redis.ParseURL(redisURL)
-		if err == nil {
-			redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
-			memBackends, err = memory.NewSharedBackends(redisClient, agent.Logger,
-				memory.WithAgentName("qa-agent"),
-				memory.WithDomain("infrastructure"),
-			)
-			if err != nil {
-				agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
-					"error": err.Error(),
-				})
-			}
+	if redisClient, clientErr := core.NewRedisUniversalClient(redisResolution); clientErr != nil {
+		agent.Logger.Warn("Shared memory Redis unavailable, running without cross-agent memory", map[string]interface{}{
+			"operation":  "shared_memory_setup",
+			"status":     "degraded",
+			"error":      "redis shared memory startup failed",
+			"error_type": "backend_startup",
+		})
+	} else {
+		defer redisClient.Close()
+		memBackends, err = memory.NewSharedBackends(redisClient, agent.Logger,
+			memory.WithAgentName("qa-agent"),
+			memory.WithDomain("infrastructure"),
+			memory.WithRedisDeployment(redisKeyspace.Deployment()),
+		)
+		if err != nil {
+			agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
+				"operation":  "shared_memory_setup",
+				"status":     "degraded",
+				"error":      "shared memory backend setup failed",
+				"error_type": "backend_startup",
+			})
 		}
 	}
 	if memBackends != nil {
@@ -84,7 +99,7 @@ func main() {
 		core.WithName("qa-agent"),
 		core.WithPort(getPort()),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(os.Getenv("REDIS_URL")),
+		core.WithRedisConnection(redisResolution),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("qa-agent", middlewareConfig)),
@@ -105,7 +120,7 @@ func main() {
 			if elapsed > 30*time.Second && time.Since(lastWarning) > 60*time.Second {
 				if lastWarning.IsZero() {
 					agent.Logger.Warn("Discovery not available after 30s", map[string]interface{}{
-						"hint": "check Redis connectivity (REDIS_URL)",
+						"hint": "check Redis topology configuration and connectivity",
 					})
 				} else {
 					agent.Logger.Warn("Still waiting for Discovery", map[string]interface{}{
@@ -162,8 +177,10 @@ func main() {
 	// 9b. Reflection Job: bridge episodic events to long-term knowledge
 	// Layer 1 wiring — framework manages lifecycle via Runnable interface.
 	// Returns nil when Phase 2 backends (Qdrant + embedder) are unavailable.
-	if reflectionJob, _ := memory.BuildReflectionJob(memBackends.ToDeps(), agent.AI, agent.Logger); reflectionJob != nil {
-		framework.RegisterRunnable(reflectionJob)
+	if memBackends != nil {
+		if reflectionJob, _ := memory.BuildReflectionJob(memBackends.ToDeps(), agent.AI, agent.Logger); reflectionJob != nil {
+			framework.RegisterRunnable(reflectionJob)
+		}
 	}
 
 	// 10. Run the framework
@@ -181,8 +198,8 @@ func validateConfig() error {
 		log.Println("Warning: No AI provider API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY")
 	}
 
-	if os.Getenv("REDIS_URL") == "" {
-		return fmt.Errorf("REDIS_URL is required for service discovery")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 
 	return nil

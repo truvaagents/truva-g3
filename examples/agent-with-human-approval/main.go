@@ -9,7 +9,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -32,6 +31,10 @@ func main() {
 	if err := validateConfig(); err != nil {
 		log.Fatalf("Configuration error: %v", err)
 	}
+	redisConnection, redisKeyspace, err := resolveRedisRuntime()
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
 
 	// 2. Set component type for service_type labeling in telemetry
 	core.SetCurrentComponentType(core.ComponentTypeAgent)
@@ -41,11 +44,13 @@ func main() {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		telemetry.Shutdown(ctx)
+		if err := telemetry.Shutdown(ctx); err != nil {
+			log.Println("Telemetry shutdown did not complete")
+		}
 	}()
 
 	// 4. Create agent AFTER telemetry is initialized
-	agent, err := NewHITLChatAgent()
+	agent, err := NewHITLChatAgent(redisConnection, redisKeyspace)
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
@@ -69,11 +74,16 @@ func main() {
 	}
 
 	// 5. Setup HITL infrastructure
-	hitl, err := SetupHITL(agent.Logger, hitlConfig)
+	hitlRedisClient, err := core.NewRedisUniversalClient(redisConnection)
+	if err != nil {
+		log.Fatalf("HITL Redis connection failed: %v", err)
+	}
+	defer func() { _ = hitlRedisClient.Close() }()
+	hitl, err := SetupHITL(hitlRedisClient, redisKeyspace, "agent-with-human-approval", agent.Logger, hitlConfig)
 	if err != nil {
 		log.Fatalf("HITL setup failed: %v", err)
 	}
-	defer hitl.Close()
+	defer func() { _ = hitl.Close() }()
 
 	agent.Logger.Info("HITL infrastructure initialized", map[string]interface{}{
 		"sensitive_capabilities": hitlConfig.SensitiveCapabilities,
@@ -95,7 +105,7 @@ func main() {
 		core.WithName("agent-with-human-approval"),
 		core.WithPort(getPort()),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(os.Getenv("REDIS_URL")),
+		core.WithRedisConnection(redisConnection),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORSDefaults(), // Allows all headers including X-Truvag3-Original-Request-ID
 		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("agent-with-human-approval", middlewareConfig)),
@@ -109,14 +119,14 @@ func main() {
 		startTime := time.Now()
 		lastWarning := time.Time{}
 
-		for agent.BaseAgent.Discovery == nil {
+		for agent.Discovery == nil {
 			time.Sleep(100 * time.Millisecond)
 
 			elapsed := time.Since(startTime)
 			if elapsed > 30*time.Second && time.Since(lastWarning) > 60*time.Second {
 				if lastWarning.IsZero() {
 					agent.Logger.Warn("Discovery not available after 30s", map[string]interface{}{
-						"hint": "check Redis connectivity (REDIS_URL)",
+						"hint": "check Redis topology configuration and connectivity",
 					})
 				} else {
 					agent.Logger.Warn("Still waiting for Discovery", map[string]interface{}{
@@ -128,7 +138,7 @@ func main() {
 		}
 
 		// Discovery is available, initialize orchestrator with HITL
-		if err := agent.InitializeOrchestrator(agent.BaseAgent.Discovery, hitl, hitlConfig); err != nil {
+		if err := agent.InitializeOrchestrator(agent.Discovery, hitl, hitlConfig); err != nil {
 			agent.Logger.Error("Failed to initialize orchestrator", map[string]interface{}{
 				"error": err.Error(),
 			})
@@ -213,11 +223,6 @@ func validateConfig() error {
 		log.Println("Warning: No AI provider API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY")
 	}
 
-	// Redis is required for service discovery, session storage, and HITL checkpoints
-	if os.Getenv("REDIS_URL") == "" {
-		return fmt.Errorf("REDIS_URL is required for service discovery, sessions, and HITL checkpoints")
-	}
-
 	return nil
 }
 
@@ -254,11 +259,11 @@ func initTelemetry(serviceName string) {
 	telemetry.EnableFrameworkIntegration(nil)
 
 	log.Printf("Telemetry initialized successfully")
-	log.Printf("  Environment: %s", env)
+	log.Printf("  Environment profile: %s", profile)
 	log.Printf("  Profile: %s", profile)
 	log.Printf("  Service: %s", serviceName)
 	if config.Endpoint != "" {
-		log.Printf("  Endpoint: %s", config.Endpoint)
+		log.Println("  Exporter endpoint configured")
 	}
 }
 
@@ -271,7 +276,7 @@ func getPort() int {
 	}
 	p, err := strconv.Atoi(port)
 	if err != nil || p <= 0 {
-		log.Fatalf("PORT must be a positive integer, got: %s", port)
+		log.Fatal("PORT must be a positive integer")
 	}
 	return p
 }

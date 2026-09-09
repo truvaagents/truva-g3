@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -18,10 +17,11 @@ import (
 )
 
 type Config struct {
-	Port      int
-	RedisURL  string
-	Namespace string
-	DevMode   bool
+	Port          int
+	Redis         core.RedisConnectionConfig
+	RedisKeyspace core.RedisKeyspace
+	Namespace     string
+	DevMode       bool
 
 	GitHubToken         string
 	GitHubAPIBaseURL    string
@@ -53,7 +53,7 @@ func main() {
 		_ = telemetry.Shutdown(ctx)
 	}()
 
-	redisClient, err := connectRedis(cfg.RedisURL)
+	redisClient, err := connectRedis(cfg.Redis)
 	if err != nil {
 		log.Fatalf("connect redis: %v", err)
 	}
@@ -68,7 +68,7 @@ func main() {
 		core.WithName("github-tool"),
 		core.WithPort(cfg.Port),
 		core.WithNamespace(cfg.Namespace),
-		core.WithRedisURL(cfg.RedisURL),
+		core.WithRedisConnection(cfg.Redis),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(cfg.DevMode),
@@ -112,9 +112,18 @@ func main() {
 // --- Config / bootstrap helpers ---
 
 func LoadConfig() (Config, error) {
+	resolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		return Config{}, fmt.Errorf("Redis configuration: %w", err)
+	}
+	keyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		return Config{}, fmt.Errorf("Redis namespace: %w", err)
+	}
 	cfg := Config{
 		Port:                envInt("PORT", 8381),
-		RedisURL:            os.Getenv("REDIS_URL"),
+		Redis:               resolution,
+		RedisKeyspace:       keyspace,
 		Namespace:           os.Getenv("NAMESPACE"),
 		DevMode:             os.Getenv("DEV_MODE") == "true",
 		GitHubToken:         os.Getenv("GITHUB_TOKEN"),
@@ -134,12 +143,6 @@ func LoadConfig() (Config, error) {
 }
 
 func (c *Config) Validate() error {
-	if c.RedisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-	if !strings.HasPrefix(c.RedisURL, "redis://") && !strings.HasPrefix(c.RedisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format; expected redis:// or rediss://")
-	}
 	// GITHUB_TOKEN is not strictly required (read-only public PRs work without it),
 	// but warn at startup if absent — the value is a strong signal.
 	return nil
@@ -171,18 +174,8 @@ func initTelemetry(serviceName string) {
 	telemetry.EnableFrameworkIntegration(nil)
 }
 
-func connectRedis(url string) (*redis.Client, error) {
-	opts, err := redis.ParseURL(url)
-	if err != nil {
-		return nil, fmt.Errorf("parse redis url: %w", err)
-	}
-	client := redis.NewClient(core.ApplyRedisClientDefaults(opts))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis ping: %w", err)
-	}
-	return client, nil
+func connectRedis(connection core.RedisConnectionConfig) (redis.UniversalClient, error) {
+	return core.NewRedisUniversalClient(connection)
 }
 
 func envOrDefault(key, def string) string {

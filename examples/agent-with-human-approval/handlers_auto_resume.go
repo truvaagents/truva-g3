@@ -108,7 +108,7 @@ func (t *HITLChatAgent) handleAutoResumeSSE(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Apply header override for original_request_id before BuildResumeContext (RC7-B8).
+	// Apply the original_request_id header override before BuildResumeContext.
 	if originalRequestIDFromHeader != "" {
 		checkpoint.OriginalRequestID = originalRequestIDFromHeader
 	}
@@ -123,7 +123,7 @@ func (t *HITLChatAgent) handleAutoResumeSSE(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// BuildResumeContext creates the linked trace span and sets all required context values (RC7-B8).
+	// BuildResumeContext creates the linked trace span and sets all required context values.
 	ctx, endLinkedSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
 	if err != nil {
 		t.Logger.ErrorWithContext(ctx, "Failed to build resume context", map[string]interface{}{

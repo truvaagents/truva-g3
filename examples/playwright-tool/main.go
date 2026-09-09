@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +19,14 @@ func main() {
 	// Validate configuration first
 	if err := validateConfig(); err != nil {
 		log.Fatalf("Configuration error: %v", err)
+	}
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
+	redisKeyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		log.Fatalf("Redis namespace error: %v", err)
 	}
 
 	// Create playwright tool FIRST so component type is set for telemetry
@@ -38,14 +45,7 @@ func main() {
 	}()
 
 	// Initialize Redis store for test result indexing (best-effort)
-	redisURL := os.Getenv("REDIS_URL")
-	qaDB := 9 // Dedicated DB for QA test data
-	if dbStr := os.Getenv("REDIS_QA_DB"); dbStr != "" {
-		if db, err := strconv.Atoi(dbStr); err == nil {
-			qaDB = db
-		}
-	}
-	store, err := NewTestStore(redisURL, qaDB)
+	store, err := NewTestStore(redisResolution, redisKeyspace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Test store initialization failed: %v (results will not be indexed)\n", err)
 	} else {
@@ -68,7 +68,7 @@ func main() {
 		core.WithNamespace(os.Getenv("NAMESPACE")),
 
 		// Discovery configuration
-		core.WithRedisURL(redisURL),
+		core.WithRedisConnection(redisResolution),
 		core.WithDiscovery(true, "redis"),
 
 		// CORS for web access
@@ -136,12 +136,8 @@ func main() {
 
 // validateConfig validates all required configuration at startup
 func validateConfig() error {
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format (must start with redis:// or rediss://)")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 
 	// S3 config is optional but warn if bucket not set

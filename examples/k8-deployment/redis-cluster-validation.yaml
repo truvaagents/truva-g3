@@ -1,0 +1,226 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster-validation
+  namespace: truvag3-examples
+  labels:
+    app: redis-cluster-validation
+    component: redis-cluster-validation
+    truvag3.framework/backend: redis
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: redis-cluster-validation
+  ports:
+  - name: client
+    port: 6379
+    targetPort: client
+  - name: cluster-bus
+    port: 16379
+    targetPort: cluster-bus
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-cluster-validation-bootstrap
+  namespace: truvag3-examples
+  labels:
+    app: redis-cluster-validation
+    component: redis-cluster-validation
+data:
+  bootstrap.sh: |
+    #!/bin/sh
+    set -eu
+
+    if command -v redis-cli >/dev/null 2>&1; then
+      cli=redis-cli
+    elif command -v valkey-cli >/dev/null 2>&1; then
+      cli=valkey-cli
+    else
+      echo "Redis/Valkey CLI is unavailable" >&2
+      exit 1
+    fi
+
+    nodes=""
+    index=0
+    while [ "$index" -lt 3 ]; do
+      host="redis-cluster-validation-${index}.redis-cluster-validation"
+      attempts=0
+      until "$cli" -h "$host" -p 6379 PING 2>/dev/null | grep -q '^PONG$'; do
+        attempts=$((attempts + 1))
+        if [ "$attempts" -ge 60 ]; then
+          echo "Node ${host} did not become reachable" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+      nodes="${nodes} ${host}:6379"
+      index=$((index + 1))
+    done
+
+    if "$cli" -h redis-cluster-validation-0.redis-cluster-validation -p 6379 \
+        CLUSTER INFO 2>/dev/null | grep -q '^cluster_state:ok'; then
+      echo "Redis/Valkey validation cluster is already healthy"
+      exit 0
+    fi
+
+    # The addresses are stable pod DNS names for creation. Each server
+    # advertises its pod IP so redirects remain reachable from every Kind pod.
+    # shellcheck disable=SC2086
+    "$cli" --cluster create $nodes --cluster-replicas 0 --cluster-yes
+
+    attempts=0
+    until "$cli" -h redis-cluster-validation-0.redis-cluster-validation -p 6379 \
+        CLUSTER INFO 2>/dev/null | grep -q '^cluster_state:ok'; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 60 ]; then
+        echo "Redis/Valkey validation cluster did not become healthy" >&2
+        exit 1
+      fi
+      sleep 1
+    done
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-cluster-validation
+  namespace: truvag3-examples
+  labels:
+    app: redis-cluster-validation
+    component: redis-cluster-validation
+    truvag3.framework/backend: redis
+    truvag3.io/redis-distribution: __TRUVAG3_REDIS_DISTRIBUTION__
+spec:
+  serviceName: redis-cluster-validation
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: redis-cluster-validation
+  template:
+    metadata:
+      labels:
+        app: redis-cluster-validation
+        component: redis-cluster-validation
+        truvag3.framework/backend: redis
+        truvag3.io/redis-distribution: __TRUVAG3_REDIS_DISTRIBUTION__
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+      - name: redis
+        image: __TRUVAG3_REDIS_IMAGE__
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -ec
+        args:
+        - |
+          if command -v redis-server >/dev/null 2>&1; then
+            server=redis-server
+          elif command -v valkey-server >/dev/null 2>&1; then
+            server=valkey-server
+          else
+            echo "Redis/Valkey server is unavailable" >&2
+            exit 1
+          fi
+          exec "$server" \
+            --bind 0.0.0.0 \
+            --protected-mode no \
+            --port 6379 \
+            --appendonly no \
+            --save "" \
+            --cluster-enabled yes \
+            --cluster-config-file /data/nodes.conf \
+            --cluster-node-timeout 5000 \
+            --cluster-require-full-coverage yes \
+            --cluster-announce-ip "$POD_IP" \
+            --cluster-announce-port 6379 \
+            --cluster-announce-bus-port 16379
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        ports:
+        - name: client
+          containerPort: 6379
+        - name: cluster-bus
+          containerPort: 16379
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -ec
+            - |
+              if command -v redis-cli >/dev/null 2>&1; then
+                redis-cli PING | grep -q '^PONG$'
+              else
+                valkey-cli PING | grep -q '^PONG$'
+              fi
+          initialDelaySeconds: 2
+          periodSeconds: 2
+          timeoutSeconds: 2
+          failureThreshold: 30
+        livenessProbe:
+          tcpSocket:
+            port: client
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 20m
+            memory: 48Mi
+          limits:
+            cpu: 250m
+            memory: 256Mi
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        emptyDir: {}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redis-cluster-validation-bootstrap
+  namespace: truvag3-examples
+  labels:
+    app: redis-cluster-validation
+    component: redis-cluster-validation
+    truvag3.io/redis-distribution: __TRUVAG3_REDIS_DISTRIBUTION__
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: redis-cluster-validation-bootstrap
+        component: redis-cluster-validation
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: bootstrap
+        image: __TRUVAG3_REDIS_IMAGE__
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - /scripts/bootstrap.sh
+        volumeMounts:
+        - name: bootstrap
+          mountPath: /scripts
+          readOnly: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+      volumes:
+      - name: bootstrap
+        configMap:
+          name: redis-cluster-validation-bootstrap
+          defaultMode: 0555

@@ -291,8 +291,7 @@ func TestLLMDebugRedisWritersUseCompatibleConversationField(t *testing.T) {
 		errorTTL: errorDebugTTL,
 	}
 	recorder, err := telemetry.NewRedisLLMCallRecorder(
-		telemetry.WithRecorderRedisURL("redis://"+mr.Addr()),
-		telemetry.WithRecorderRedisDB(0),
+		telemetry.WithRecorderRedisURL("redis://" + mr.Addr()),
 	)
 	if err != nil {
 		t.Fatalf("NewRedisLLMCallRecorder: %v", err)
@@ -347,8 +346,7 @@ func TestLLMDebugRedisWritersShareMinimumRetentionContract(t *testing.T) {
 		errorTTL: errorDebugTTL,
 	}
 	recorder, err := telemetry.NewRedisLLMCallRecorder(
-		telemetry.WithRecorderRedisURL("redis://"+mr.Addr()),
-		telemetry.WithRecorderRedisDB(0),
+		telemetry.WithRecorderRedisURL("redis://" + mr.Addr()),
 	)
 	if err != nil {
 		t.Fatalf("NewRedisLLMCallRecorder: %v", err)

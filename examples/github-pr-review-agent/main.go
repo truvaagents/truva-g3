@@ -41,20 +41,23 @@ func main() {
 		_ = telemetry.Shutdown(ctx)
 	}()
 
-	redisClient, err := connectRedis(cfg.RedisURL)
+	redisClient, err := connectRedis(cfg.Redis)
 	if err != nil {
 		log.Fatalf("connect redis: %v", err)
 	}
 	defer func() { _ = redisClient.Close() }()
 
-	taskQueue := orchestration.NewRedisTaskQueue(redisClient, nil)
-	taskStore := orchestration.NewRedisTaskStore(redisClient, nil)
+	taskQueueConfig := orchestration.DefaultRedisTaskQueueConfig()
+	taskQueueConfig.QueueKey = cfg.RedisKeyspace.Plain("tasks", "queue", "github-pr-review-agent")
+	taskQueueConfig.ProcessingKey = cfg.RedisKeyspace.Plain("tasks", "processing", "github-pr-review-agent")
+	taskQueue := orchestration.NewRedisTaskQueue(redisClient, &taskQueueConfig)
+	taskStoreConfig := orchestration.DefaultRedisTaskStoreConfig()
+	taskStoreConfig.KeyPrefix = cfg.RedisKeyspace.Plain("tasks")
+	taskStore := orchestration.NewRedisTaskStore(redisClient, &taskStoreConfig)
 
-	// Shared agent memory (Phase 1 — episodic events). See AGENT_PLAN.md
-	// "Shared Agent Memory" section for the full rationale. Phase 2
-	// (knowledge extraction) is deliberately disabled: we're a producer of
-	// events; devops-chat-agent's reflection job pulls them into shared
-	// knowledge on its own cadence.
+	// Enable shared episodic memory but leave knowledge extraction disabled:
+	// this agent produces events, while devops-chat-agent's reflection job
+	// promotes them into shared knowledge on its own cadence.
 	//
 	// NoOpLogger here because agent.Logger isn't constructed yet at this
 	// point — memory setup failures surface via the returned error which we
@@ -62,6 +65,7 @@ func main() {
 	memBackends, memErr := memory.NewSharedBackends(redisClient, &core.NoOpLogger{},
 		memory.WithAgentName("github-pr-review-agent"),
 		memory.WithDomain("infrastructure"),
+		memory.WithRedisDeployment(cfg.RedisKeyspace.Deployment()),
 		memory.WithKnowledgeDisabled(),
 	)
 	if memErr != nil {
@@ -84,7 +88,7 @@ func main() {
 
 func runAPIMode(
 	cfg *ReviewConfig,
-	redisClient *redis.Client,
+	redisClient redis.UniversalClient,
 	taskQueue core.TaskQueue,
 	taskStore core.TaskStore,
 	memBackends *memory.SharedBackends,
@@ -115,7 +119,7 @@ func runAPIMode(
 
 func runWorkerMode(
 	cfg *ReviewConfig,
-	redisClient *redis.Client,
+	redisClient redis.UniversalClient,
 	taskQueue core.TaskQueue,
 	taskStore core.TaskStore,
 	memBackends *memory.SharedBackends,
@@ -131,7 +135,7 @@ func runWorkerMode(
 	// fail at the discovery check in tool_client.go. Construct discovery
 	// directly (matches event-driven-agent's runWorkerMode pattern) so
 	// worker pods can resolve and call github-tool.
-	discovery, derr := core.NewRedisDiscovery(cfg.RedisURL)
+	discovery, derr := core.NewRedisDiscoveryWithClient(redisClient, cfg.RedisKeyspace, 0)
 	if derr != nil {
 		log.Fatalf("worker mode: create discovery: %v", derr)
 	}
@@ -163,7 +167,7 @@ func runWorkerMode(
 
 func runEmbeddedMode(
 	cfg *ReviewConfig,
-	redisClient *redis.Client,
+	redisClient redis.UniversalClient,
 	taskQueue core.TaskQueue,
 	taskStore core.TaskStore,
 	memBackends *memory.SharedBackends,
@@ -249,7 +253,7 @@ func mustNewFramework(agent *PRReviewAgent, cfg *ReviewConfig, name string) *cor
 		core.WithName(name),
 		core.WithPort(cfg.Port),
 		core.WithNamespace(cfg.Namespace),
-		core.WithRedisURL(cfg.RedisURL),
+		core.WithRedisConnection(cfg.Redis),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
@@ -303,18 +307,8 @@ func initTelemetry(serviceName string) {
 	telemetry.EnableFrameworkIntegration(nil)
 }
 
-func connectRedis(url string) (*redis.Client, error) {
-	opts, err := redis.ParseURL(url)
-	if err != nil {
-		return nil, fmt.Errorf("parse redis url: %w", err)
-	}
-	client := redis.NewClient(core.ApplyRedisClientDefaults(opts))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis ping: %w", err)
-	}
-	return client, nil
+func connectRedis(connection core.RedisConnectionConfig) (redis.UniversalClient, error) {
+	return core.NewRedisUniversalClient(connection)
 }
 
 // startHealthServer provides a minimal /health and /ready for K8s probes

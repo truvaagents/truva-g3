@@ -6,6 +6,7 @@ metadata:
   labels:
     app: redis
     component: infrastructure
+    truvag3.framework/backend: redis
 spec:
   replicas: 1
   selector:
@@ -16,6 +17,7 @@ spec:
       labels:
         app: redis
         component: infrastructure
+        truvag3.framework/backend: redis
     spec:
       containers:
       - name: redis
@@ -79,6 +81,7 @@ metadata:
   labels:
     app: redis
     component: infrastructure
+    truvag3.framework/backend: redis
 spec:
   type: ClusterIP
   ports:

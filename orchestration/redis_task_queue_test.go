@@ -56,7 +56,7 @@ func (*taskQueueCommandFailureHook) ProcessPipelineHook(next redis.ProcessPipeli
 }
 
 // =============================================================================
-// Queue Key Precedence Tests (RC1)
+// Queue Key Precedence Tests
 // =============================================================================
 
 // TestQueueKeyPrecedence verifies the queue key resolution precedence:

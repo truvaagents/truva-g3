@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"os"
 	"time"
@@ -12,11 +13,19 @@ import (
 // HTTP capabilities. No AI client needed — this tool only reads from memory backends.
 type MemoryTool struct {
 	*core.BaseTool
-	episodic    core.EpisodicMemory
-	knowledge   core.SharedKnowledge          // may be nil (graceful degradation)
-	coordinator core.InvestigationCoordinator // may be nil (graceful degradation)
-	embedder    core.EmbeddingClient          // may be nil (needed for vector search)
-	domain      string
+	episodic      core.EpisodicMemory
+	knowledge     core.SharedKnowledge          // may be nil (graceful degradation)
+	coordinator   core.InvestigationCoordinator // may be nil (graceful degradation)
+	embedder      core.EmbeddingClient          // may be nil (needed for vector search)
+	backendCloser io.Closer
+	domain        string
+}
+
+func (t *MemoryTool) Close() error {
+	if t.backendCloser == nil {
+		return nil
+	}
+	return t.backendCloser.Close()
 }
 
 // --- Request Types ---

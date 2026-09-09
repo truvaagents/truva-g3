@@ -376,7 +376,7 @@ This example demonstrates an event-driven agent pattern that is fundamentally di
 4. **Worker pool** (`WORKER_COUNT` background goroutines, default 3) **`BRPOP`-s** alerts from the queue
 5. **Context enrichment** builds a natural-language query from alert labels and annotations
 6. **AI orchestrator** plans a DAG of tool calls (typically: `query_metrics` → `get_pods` → `get_pod_logs` → `rollout_restart`)
-7. **HITL gate** intercepts any step whose capability is in `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` (`rollout_restart`, `scale_deployment`, `delete_pod` by default) and pauses execution. A checkpoint is persisted to Redis (DB 6) and an `expired_approved` / `approved` / `rejected` decision drives resumption via `/hitl/resume/{id}`
+7. **HITL gate** intercepts any step whose capability is in `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` (`rollout_restart`, `scale_deployment`, `delete_pod` by default) and pauses execution. A checkpoint is persisted in the versioned DB 0 HITL subspace and an `expired_approved` / `approved` / `rejected` decision drives resumption via `/hitl/resume/{id}`
 8. **AI synthesizes** a natural-language incident report and the worker releases the dedup key so the same alert can be re-investigated if it fires again
 9. **Side effects** (`create_ticket`, `send_message`, etc.) run as part of the DAG. By default these are **not** HITL-gated — only destructive K8s writes are
 
@@ -386,15 +386,15 @@ See [Event Processing Pipeline](#event-processing-pipeline) for the per-stage br
 
 | Data Type | Backend | Location |
 |-----------|---------|----------|
-| Service Registry | Redis | DB 0, keys `truvag3:services:*` |
-| Alert Event Queue | Redis | DB 0, list key `truvag3:event:alert_queue` ([queue_consumer.go:36](queue_consumer.go#L36)), LPUSH'd by the webhook receiver, BRPOP'd by workers |
-| Alert Dedup Fingerprints | Redis | DB 0, keys `truvag3:event:dedup:<fingerprint>` ([webhook_receiver.go:195](webhook_receiver.go#L195)) with TTL from `TRUVAG3_EVENT_DEDUP_TTL` (default 5 min) |
-| Shared Agent Memory — Episodic Events | Redis | DB 0, keys `truvag3:memory:infrastructure:event:<uuid>` (per-record string) and stream `truvag3:memory:infrastructure:events:stream`. Domain (`infrastructure`) is set via `TRUVAG3_AGENT_DOMAIN`. Shared with sister agents (e.g., devops-chat-agent) in the same domain |
-| Shared Agent Memory — Entity Records | Redis | DB 0, keys `truvag3:memory:infrastructure:entity:<type>:<id>` — per-entity rollups built from events |
-| Activity Coordination Signals | Redis | DB 0 (separate top-level prefix), keys `truvag3:activity:infrastructure:{requestID}` with 5-min TTL (`TRUVAG3_ACTIVITY_SIGNAL_TTL`). Each in-flight investigation announces itself here; other agents in the domain see active signals in their `<agent_coordination>` planning context — **advisory, not blocking** |
-| HITL Checkpoints & Commands | Redis | DB 6 (override via `TRUVAG3_HITL_REDIS_DB`), keys `truvag3:hitl:<agent-name>:*` |
-| LLM Debug Records | Redis | DB 7, keys `llm_debug:*` (active when `TRUVAG3_LLM_DEBUG_ENABLED=true`) |
-| Execution Debug DAGs | Redis | DB 8 (when `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`) |
+| Service Registry | Redis/Valkey | DB 0, versioned deployment registry subspace |
+| Alert Event Queue | Redis/Valkey | DB 0, list key `truvag3:v1:<deployment>:events:alerts:queue` ([event_agent.go](event_agent.go)), LPUSH'd by the webhook receiver and BRPOP'd by workers |
+| Alert Dedup Fingerprints | Redis/Valkey | DB 0, keys `truvag3:v1:<deployment>:events:alerts:dedup:<fingerprint>` ([event_agent.go](event_agent.go)) with TTL from `TRUVAG3_EVENT_DEDUP_TTL` (default 5 min) |
+| Shared Agent Memory — Episodic Events | Redis/Valkey | DB 0, versioned deployment memory subspace. Domain (`infrastructure`) is set via `TRUVAG3_AGENT_DOMAIN` and is shared with sister agents such as devops-chat-agent |
+| Shared Agent Memory — Entity Records | Redis/Valkey | DB 0, versioned deployment/domain entity keys built from events |
+| Activity Coordination Signals | Redis/Valkey | DB 0, versioned deployment memory subspace with a 5-minute TTL (`TRUVAG3_ACTIVITY_SIGNAL_TTL`). Each in-flight investigation announces itself here; other agents in the domain see active signals in their `<agent_coordination>` planning context — **advisory, not blocking** |
+| HITL Checkpoints & Commands | Redis/Valkey | DB 0, cluster-tagged `truvag3:v1:<deployment>:hitl:*` keys scoped to `event-driven-agent` |
+| LLM Debug Records | Redis/Valkey | DB 0, versioned LLM-debug subspace (active when `TRUVAG3_LLM_DEBUG_ENABLED=true`) |
+| Execution Debug DAGs | Redis/Valkey | DB 0, versioned execution-debug subspace (when `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`) |
 
 ---
 
@@ -690,7 +690,7 @@ TRUVAG3_HITL_DEFAULT_TIMEOUT=5m
 1. Worker begins alert investigation
 2. AI planner creates a DAG (e.g., check metrics -> get logs -> restart pod -> create JIRA)
 3. When the `restart pod` step is reached, HITL pauses execution
-4. A checkpoint is stored in Redis (DB 6) with the execution state
+4. A checkpoint is stored in the versioned DB 0 HITL subspace with the execution state
 5. The task result includes `"status": "pending_approval"` and a `checkpoint_id`
 6. A human approves or rejects via the registry-viewer-app or API
 7. On approval, execution resumes from the checkpoint; on rejection or timeout, the investigation completes without the write operation
@@ -718,7 +718,7 @@ TRUVAG3_HITL_DEFAULT_TIMEOUT=5m
 | `TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL` | false | Require approval for entire execution plan |
 | `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` | - | Comma-separated list of capabilities requiring step-level approval |
 | `TRUVAG3_HITL_DEFAULT_TIMEOUT` | 5m | Timeout for approval requests |
-| `TRUVAG3_LLM_DEBUG_ENABLED` | true | Enable LLM debug store (Redis DB 7) |
+| `TRUVAG3_LLM_DEBUG_ENABLED` | true | Enable the DB 0 versioned LLM-debug store |
 | `TRUVAG3_LOG_LEVEL` | info | Log level (debug/info/warn/error) |
 
 ### .env File
@@ -1018,7 +1018,7 @@ For debugging orchestration issues, the LLM Debug Store captures complete prompt
 TRUVAG3_LLM_DEBUG_ENABLED=true
 ```
 
-This captures all LLM interactions at the standard recording sites (`plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`) with full payload visibility. Records are stored in Redis DB 7 with configurable TTL.
+This captures all LLM interactions at the standard recording sites (`plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`) with full payload visibility. Records are stored in the versioned LLM-debug subspace of Redis/Valkey DB 0 with configurable TTL.
 
 ### Metrics (Prometheus/Grafana)
 

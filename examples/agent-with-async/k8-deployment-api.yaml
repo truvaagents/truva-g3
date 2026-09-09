@@ -101,8 +101,6 @@ spec:
           value: "async-travel-agent-api"
         - name: REDIS_URL
           value: "redis://redis.truvag3-examples:6379"
-        - name: TRUVAG3_REDIS_URL
-          value: "redis://redis.truvag3-examples:6379"
         # Redis Registration Resilience
         - name: TRUVAG3_DISCOVERY_RETRY
           value: "true"

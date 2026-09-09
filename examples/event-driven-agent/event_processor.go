@@ -44,7 +44,7 @@ func (a *EventDrivenAgent) HandleAlertInvestigation(
 		return fmt.Errorf("failed to deserialize alert: %w", err)
 	}
 
-	// RC6: Restore originating HTTP trace context across the async queue boundary.
+	// Restore the originating HTTP trace context across the async queue boundary.
 	// Placed after alert deserialization so span attributes are populated with real values.
 	// SpanKindConsumer marks this as a queue-consumer span in Jaeger (distinct from the HTTP producer).
 	// Degrades gracefully when TraceID/ParentSpanID are empty (legacy tasks or untraced alerts).
@@ -74,7 +74,7 @@ func (a *EventDrivenAgent) HandleAlertInvestigation(
 	})
 
 	// Report planning phase
-	reporter.Report(&core.TaskProgress{
+	_ = reporter.Report(&core.TaskProgress{
 		CurrentStep: 1,
 		TotalSteps:  3,
 		StepName:    "Planning Investigation",
@@ -123,7 +123,7 @@ func (a *EventDrivenAgent) HandleAlertInvestigation(
 
 		// Report progress
 		percentage := 10 + int(float64(stepIndex+1)/float64(totalSteps)*80)
-		reporter.Report(&core.TaskProgress{
+		_ = reporter.Report(&core.TaskProgress{
 			CurrentStep: stepIndex + 2,
 			TotalSteps:  totalSteps + 2,
 			StepName:    fmt.Sprintf("%s: %s", status, step.AgentName),
@@ -187,7 +187,7 @@ func (a *EventDrivenAgent) HandleAlertInvestigation(
 	}
 
 	// 5. Cleanup dedup key (allow re-investigation if alert fires again)
-	dedupKey := fmt.Sprintf("truvag3:event:dedup:%s", alert.Fingerprint)
+	dedupKey := a.alertDedupKey(alert.Fingerprint)
 	if err := a.redisClient.Del(ctx, dedupKey).Err(); err != nil {
 		a.Logger.WarnWithContext(ctx, "Failed to cleanup dedup key", map[string]interface{}{
 			"dedup_key": dedupKey,
@@ -198,7 +198,7 @@ func (a *EventDrivenAgent) HandleAlertInvestigation(
 
 	// Report completion
 	duration := time.Since(startTime)
-	reporter.Report(&core.TaskProgress{
+	_ = reporter.Report(&core.TaskProgress{
 		CurrentStep: len(response.AgentsInvolved) + 2,
 		TotalSteps:  len(response.AgentsInvolved) + 2,
 		StepName:    "Complete",
@@ -269,7 +269,7 @@ type StepResultSummary struct {
 //
 // Pipeline:
 //  1. Deserialize checkpoint_id from task input
-//  2. Load checkpoint from Redis DB 6
+//  2. Load the checkpoint from the versioned DB-0 HITL keyspace
 //  3. Restore trace context via StartLinkedSpanWithOptions (consumer span)
 //  4. Build resume context (WithResumeMode, WithPlanOverride, WithCompletedSteps)
 //  5. Re-enter orchestrator with original request
@@ -330,7 +330,7 @@ func (a *EventDrivenAgent) HandleHITLResumeTask(
 		"task_id":       task.ID,
 	})
 
-	reporter.Report(&core.TaskProgress{
+	_ = reporter.Report(&core.TaskProgress{
 		CurrentStep: 1, TotalSteps: 3,
 		StepName:   "Resuming from checkpoint",
 		Percentage: 10,
@@ -387,7 +387,11 @@ func (a *EventDrivenAgent) HandleHITLResumeTask(
 
 	// 5. Mark original checkpoint as completed
 	checkpoint.Status = orchestration.CheckpointStatusCompleted
-	hitl.CheckpointStore.SaveCheckpoint(ctx, checkpoint)
+	if err := hitl.CheckpointStore.SaveCheckpoint(ctx, checkpoint); err != nil {
+		a.Logger.WarnWithContext(ctx, "Checkpoint completion could not be persisted", map[string]interface{}{
+			"operation": "hitl_resume", "checkpoint_id": checkpointID, "error_type": "checkpoint_write_failure",
+		})
+	}
 
 	// 6. Store result
 	duration := time.Since(startTime)
@@ -401,7 +405,7 @@ func (a *EventDrivenAgent) HandleHITLResumeTask(
 		"duration_ms":  duration.Milliseconds(),
 	}
 
-	reporter.Report(&core.TaskProgress{
+	_ = reporter.Report(&core.TaskProgress{
 		CurrentStep: 3, TotalSteps: 3,
 		StepName:   "Complete",
 		Percentage: 100,
@@ -469,7 +473,7 @@ func (a *EventDrivenAgent) HandleHITLResume(w http.ResponseWriter, r *http.Reque
 
 	// Build resume context — sets WithResumeMode, WithPlanOverride, WithCompletedSteps,
 	// WithPreResolvedParams, WithRequestMode, and WithMetadata in a single call.
-	// Also creates a linked trace span (RC7-B3) so the resume is visible in Jaeger.
+	// Also create a linked trace span so the resume is visible in Jaeger.
 	ctx, endLinkedSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
 	if err != nil {
 		a.Logger.ErrorWithContext(ctx, "Failed to build resume context", map[string]interface{}{
@@ -495,7 +499,7 @@ func (a *EventDrivenAgent) HandleHITLResume(w http.ResponseWriter, r *http.Reque
 		if orchestration.IsInterrupted(err) {
 			newCheckpoint := orchestration.GetCheckpoint(err)
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"status":        "interrupted",
 				"checkpoint_id": newCheckpoint.CheckpointID,
 				"message":       "Another step requires approval",
@@ -514,7 +518,11 @@ func (a *EventDrivenAgent) HandleHITLResume(w http.ResponseWriter, r *http.Reque
 
 	// Mark checkpoint as completed
 	checkpoint.Status = orchestration.CheckpointStatusCompleted
-	hitl.CheckpointStore.SaveCheckpoint(ctx, checkpoint)
+	if err := hitl.CheckpointStore.SaveCheckpoint(ctx, checkpoint); err != nil {
+		a.Logger.WarnWithContext(ctx, "Checkpoint completion could not be persisted", map[string]interface{}{
+			"operation": "hitl_resume", "checkpoint_id": checkpointID, "error_type": "checkpoint_write_failure",
+		})
+	}
 
 	a.Logger.InfoWithContext(ctx, "Resume orchestration completed", map[string]interface{}{
 		"checkpoint_id": checkpointID,
@@ -523,7 +531,7 @@ func (a *EventDrivenAgent) HandleHITLResume(w http.ResponseWriter, r *http.Reque
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":       "completed",
 		"resumed_from": checkpointID,
 		"response":     response.Response,

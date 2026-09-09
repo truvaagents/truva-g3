@@ -379,7 +379,7 @@ Please provide:
 		MaxTokens:   5000,
 	})
 	if err != nil {
-		// ORCH-008 Fix 1: Preserve original HTTP status for provider errors
+		// Preserve the original HTTP status for provider errors.
 		var pe core.ProviderError
 		if errors.As(err, &pe) && pe.StatusCode() >= 400 && pe.StatusCode() < 500 {
 			r.Logger.WarnWithContext(ctx, "LLM provider returned client error", map[string]interface{}{
@@ -667,7 +667,7 @@ func (r *ResearchAgent) handleFinancialAnalysis(rw http.ResponseWriter, req *htt
 	if err != nil {
 		status = "error"
 		telemetry.RecordSpanError(ctx, err)
-		// ORCH-008 Fix 1: Preserve original HTTP status for provider errors
+		// Preserve the original HTTP status for provider errors.
 		var pe core.ProviderError
 		if errors.As(err, &pe) && pe.StatusCode() >= 400 && pe.StatusCode() < 500 {
 			telemetry.AddSpanEvent(ctx, "agent.provider_error",
@@ -864,7 +864,7 @@ func (r *ResearchAgent) handleSentimentAnalysis(rw http.ResponseWriter, req *htt
 	if err != nil {
 		status = "error"
 		telemetry.RecordSpanError(ctx, err)
-		// ORCH-008 Fix 1: Preserve original HTTP status for provider errors
+		// Preserve the original HTTP status for provider errors.
 		var pe core.ProviderError
 		if errors.As(err, &pe) && pe.StatusCode() >= 400 && pe.StatusCode() < 500 {
 			telemetry.AddSpanEvent(ctx, "agent.provider_error",
@@ -1060,7 +1060,7 @@ func (r *ResearchAgent) handleComparativeAnalysis(rw http.ResponseWriter, req *h
 	if err != nil {
 		status = "error"
 		telemetry.RecordSpanError(ctx, err)
-		// ORCH-008 Fix 1: Preserve original HTTP status for provider errors
+		// Preserve the original HTTP status for provider errors.
 		var pe core.ProviderError
 		if errors.As(err, &pe) && pe.StatusCode() >= 400 && pe.StatusCode() < 500 {
 			telemetry.AddSpanEvent(ctx, "agent.provider_error",
@@ -1464,7 +1464,7 @@ func (r *ResearchAgent) handleMathAnalysis(rw http.ResponseWriter, req *http.Req
 	if err != nil {
 		status = "error"
 		telemetry.RecordSpanError(ctx, err)
-		// ORCH-008 Fix 1: Preserve original HTTP status for provider errors
+		// Preserve the original HTTP status for provider errors.
 		var pe core.ProviderError
 		if errors.As(err, &pe) && pe.StatusCode() >= 400 && pe.StatusCode() < 500 {
 			telemetry.AddSpanEvent(ctx, "agent.provider_error",

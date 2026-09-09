@@ -36,7 +36,7 @@ type DevOpsChatAgent struct {
 }
 
 // NewDevOpsChatAgent creates a new DevOps chat agent with AI and telemetry configured.
-func NewDevOpsChatAgent() (*DevOpsChatAgent, error) {
+func NewDevOpsChatAgent(connection core.RedisConnectionConfig, keyspace core.RedisKeyspace) (*DevOpsChatAgent, error) {
 	agent := core.NewBaseAgent("devops-chat-agent")
 
 	// Create AI client with provider chain for failover.
@@ -91,6 +91,7 @@ func NewDevOpsChatAgent() (*DevOpsChatAgent, error) {
 		var recErr error
 		debugRecorder, recErr = telemetry.NewRedisLLMCallRecorder(
 			telemetry.WithRecorderLogger(agent.Logger),
+			telemetry.WithRecorderKeyspace(keyspace),
 		)
 		if recErr != nil {
 			agent.Logger.Warn("LLM debug recording unavailable for agent-side calls", map[string]interface{}{
@@ -148,13 +149,8 @@ func NewDevOpsChatAgent() (*DevOpsChatAgent, error) {
 	})
 	tracedClient.Timeout = 300 * time.Second // Increased for complex orchestration
 
-	// Create Redis-backed session store
-	// Uses Redis DB 2 (RedisDBSessions) to isolate from service registry (DB 0)
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return nil, fmt.Errorf("REDIS_URL is required for session storage")
-	}
-	sessionStore, err := NewSessionStore(redisURL, 48*time.Hour, 50, agent.Logger)
+	// Session data shares DB 0 and is isolated by the versioned deployment keyspace.
+	sessionStore, err := NewSessionStore(connection, keyspace, 48*time.Hour, 50, agent.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session store: %w", err)
 	}
@@ -386,7 +382,7 @@ func (t *DevOpsChatAgent) formatConversationHistory(history []Message) string {
 		if msg.Role == "assistant" {
 			role = "Assistant"
 		}
-		sb.WriteString(fmt.Sprintf("%s: %s\n", role, msg.Content))
+		fmt.Fprintf(&sb, "%s: %s\n", role, msg.Content)
 	}
 	return strings.TrimSpace(sb.String())
 }

@@ -5,7 +5,7 @@
 // in the same format as orchestration.RedisLLMDebugStore.RecordInteraction. This
 // allows agents to record LLM calls WITHOUT importing the orchestration module.
 //
-// Design: Phase 8 of AGENT_LLM_DEBUG_CAPTURE_DESIGN.md
+// Recorder contract:
 // - Write-only: agents append interactions, registry-viewer reads them
 // - Format-compatible: writes match orchestration.LLMInteraction JSON structure
 // - Atomic: one Redis script appends data and preserves minimum retention
@@ -123,7 +123,6 @@ type RecorderOption func(*recorderConfig)
 
 type recorderConfig struct {
 	redisURL         string
-	redisDB          int
 	logger           core.Logger
 	keys             RedisLLMDebugKeys
 	ttl              time.Duration
@@ -151,12 +150,6 @@ func WithRecorderRedisURL(url string) RecorderOption {
 	return func(c *recorderConfig) { c.redisURL = url }
 }
 
-// WithRecorderRedisDB selects a numbered standalone database for compatibility.
-// Deprecated: use DB 0 and WithRecorderKeyspace.
-func WithRecorderRedisDB(db int) RecorderOption {
-	return func(c *recorderConfig) { c.redisDB = db }
-}
-
 // WithRecorderTTL sets the TTL for successful debug records.
 func WithRecorderTTL(ttl time.Duration) RecorderOption {
 	return func(c *recorderConfig) { c.ttl = ttl }
@@ -179,9 +172,13 @@ func WithRecorderKeyspace(keyspace core.RedisKeyspace) RecorderOption {
 // LLM calls. Connection resolution is shared with every other Redis adapter and
 // therefore supports standalone, Sentinel, and cluster topology.
 func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, error) {
+	for _, name := range []string{"TRUVAG3_LLM_DEBUG_REDIS_DB", "TRUVAG3_LLM_DEBUG_KEY_PREFIX"} {
+		if value := os.Getenv(name); strings.TrimSpace(value) != "" {
+			return nil, fmt.Errorf("%s is unsupported; use DB 0 with WithRecorderKeyspace: %w", name, core.ErrInvalidConfiguration)
+		}
+	}
 	cfg := &recorderConfig{
 		redisURL: "",
-		redisDB:  0,
 		logger:   &core.NoOpLogger{},
 		keys:     NewRedisLLMDebugKeys(telemetryDefaultRedisKeyspace()),
 		ttl:      recorderGetEnvDuration("TRUVAG3_LLM_DEBUG_TTL", recorderDefaultTTL),
@@ -201,19 +198,11 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 	}
 	normalizeRecorderConfig(cfg)
 
-	connection, diagnostics, err := resolveRecorderRedisConnection(cfg.redisURL, cfg.redisDB)
+	connection, err := resolveRecorderRedisConnection(cfg.redisURL)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Redis recorder connection: %w", err)
 	}
-	if cfg.logger != nil {
-		for _, diagnostic := range diagnostics {
-			cfg.logger.Warn("Redis configuration notice", map[string]interface{}{
-				"operation":  "redis_configuration_notice",
-				"diagnostic": diagnostic,
-			})
-		}
-	}
-	client, err := core.NewRedisUniversalClientForCompatibility(connection)
+	client, err := core.NewRedisUniversalClient(connection)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Redis LLM recorder: %w", err)
 	}
@@ -239,29 +228,14 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 	}, nil
 }
 
-func resolveRecorderRedisConnection(explicitURL string, compatibilityDB int) (core.RedisConnectionConfig, []string, error) {
+func resolveRecorderRedisConnection(explicitURL string) (core.RedisConnectionConfig, error) {
 	if strings.TrimSpace(explicitURL) != "" {
-		connection, err := core.ParseStandaloneRedisURLForCompatibility(explicitURL)
-		if err != nil {
-			return core.RedisConnectionConfig{}, nil, err
-		}
-		connection.DB = compatibilityDB
-		resolution, err := core.ResolveRedisConnectionConfig(&connection, nil)
-		return resolution.Config, resolution.Diagnostics, err
+		return core.ParseStandaloneRedisURL(explicitURL)
 	}
-	resolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
-	if err != nil {
-		return core.RedisConnectionConfig{}, nil, err
-	}
-	if compatibilityDB != 0 {
-		resolution.Config.DB = compatibilityDB
-		resolution, err = core.ResolveRedisConnectionConfig(&resolution.Config, nil)
-	}
-	return resolution.Config, resolution.Diagnostics, err
+	return core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
 }
 
-// NewRedisLLMCallRecorderWithClient creates a recorder using an
-// application-owned topology-aware client. Close leaves the client open.
+// NewRedisLLMCallRecorderWithClient borrows client; the caller owns its lifetime.
 func NewRedisLLMCallRecorderWithClient(
 	client redis.UniversalClient,
 	keyspace core.RedisKeyspace,

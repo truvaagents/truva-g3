@@ -10,24 +10,10 @@ import (
 	"github.com/truvaagents/truva-g3/orchestration"
 )
 
-type diagnosticCaptureLogger struct {
-	core.NoOpLogger
-	diagnostics []string
-}
-
-func (logger *diagnosticCaptureLogger) Warn(message string, fields map[string]interface{}) {
-	if message == "Redis configuration notice" && fields["operation"] == "redis_configuration_notice" {
-		if diagnostic, ok := fields["diagnostic"].(string); ok {
-			logger.diagnostics = append(logger.diagnostics, diagnostic)
-		}
-	}
-}
-
 func TestDefaultBackendsConstructsOnlySelectedRolesAndOwnsClients(t *testing.T) {
 	server := miniredis.RunT(t)
 	lookup := lookupValues(map[string]string{
 		"REDIS_URL":                         "redis://" + server.Addr(),
-		"TRUVAG3_SKILLS_REDIS_DB":           "4",
 		"TRUVAG3_HITL_REDIS_DB":             "invalid-unused-value",
 		"TRUVAG3_WORKFLOW_STATE_TTL":        "invalid-unused-value",
 		"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS": "invalid-unused-value",
@@ -52,8 +38,8 @@ func TestDefaultBackendsConstructsOnlySelectedRolesAndOwnsClients(t *testing.T) 
 		t.Fatalf("owned Redis clients = %d, want one", len(owned.clients.clients))
 	}
 	client, ok := owned.clients.ClientSet().Resolve(ClientRoleSkills).(*redis.Client)
-	if !ok || client.Options().DB != 4 {
-		t.Fatalf("skills client = %#v, want Redis DB 4", client)
+	if !ok || client.Options().DB != 0 {
+		t.Fatalf("skills client = %#v, want Redis DB 0", client)
 	}
 	if err := owned.Close(); err != nil {
 		t.Fatal(err)
@@ -69,13 +55,11 @@ func TestDefaultBackendsPreservesCodePrecedenceAndCapabilityOverrides(t *testing
 	owned, err := newDefaultBackends(
 		&core.NoOpLogger{},
 		lookupValues(map[string]string{
-			"REDIS_URL":                  "redis://environment.invalid:6379",
-			"TRUVAG3_LLM_DEBUG_REDIS_DB": "3",
+			"REDIS_URL": "redis://environment.invalid:6379",
 		}),
 		WithDefaultBackendRoles(ClientRoleLLMDebug),
 		WithDefaultBackendClientConfig(
 			WithClientURL("redis://"+server.Addr()),
-			WithRoleDatabase(ClientRoleLLMDebug, 6),
 		),
 		WithDefaultBackendOverrides(orchestration.WithLLMDebugBackend(custom)),
 	)
@@ -84,8 +68,8 @@ func TestDefaultBackendsPreservesCodePrecedenceAndCapabilityOverrides(t *testing
 	}
 	t.Cleanup(func() { _ = owned.Close() })
 	client, ok := owned.clients.ClientSet().Resolve(ClientRoleLLMDebug).(*redis.Client)
-	if !ok || client.Options().DB != 6 {
-		t.Fatalf("LLM-debug client = %#v, want code-owned Redis DB 6", client)
+	if !ok || client.Options().DB != 0 {
+		t.Fatalf("LLM-debug client = %#v, want code-owned Redis DB 0", client)
 	}
 	if owned.Backends().LLMDebug() != custom {
 		t.Fatal("provider-neutral backend override did not win")
@@ -103,7 +87,6 @@ func TestDefaultBackendsCompleteClientConfigBypassesConflictingConnectionEnviron
 			"TRUVAG3_REDIS_MODE":         "cluster",
 			"TRUVAG3_REDIS_ADDRS":        "cluster.example:6379",
 			"TRUVAG3_REDIS_POOL_SIZE":    "not-an-integer",
-			"TRUVAG3_SKILLS_REDIS_DB":    "0",
 			"TRUVAG3_WORKFLOW_REDIS_DB":  "invalid-unselected-value",
 			"TRUVAG3_LLM_DEBUG_REDIS_DB": "invalid-unselected-value",
 		}),
@@ -160,23 +143,6 @@ func TestOwnedBackendsNilSafety(t *testing.T) {
 	owned = &OwnedBackends{clients: &OwnedClients{clients: []redis.UniversalClient{closeErrorClient{}}}}
 	if err := owned.Close(); err == nil || !errors.Is(err, errCloseClient) {
 		t.Fatalf("Close error = %v, want %v", err, errCloseClient)
-	}
-}
-
-func TestDefaultBackendsEmitsDeprecatedURLDiagnosticOnce(t *testing.T) {
-	server := miniredis.RunT(t)
-	logger := &diagnosticCaptureLogger{}
-	owned, err := newDefaultBackends(
-		logger,
-		lookupValues(map[string]string{"TRUVAG3_REDIS_URL": "redis://" + server.Addr()}),
-		WithDefaultBackendRoles(ClientRoleSkills),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = owned.Close() })
-	if len(logger.diagnostics) != 1 || logger.diagnostics[0] != "TRUVAG3_REDIS_URL is deprecated; use REDIS_URL" {
-		t.Fatalf("diagnostics = %#v", logger.diagnostics)
 	}
 }
 

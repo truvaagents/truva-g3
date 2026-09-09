@@ -627,7 +627,7 @@ cd examples/agent-with-orchestration
 
 ```bash
 # Check that tools are registered in Redis
-redis-cli keys "truvag3:*"
+redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # Or via the agent's discover endpoint
 curl http://localhost:8094/discover
@@ -1217,7 +1217,7 @@ kubectl port-forward -n truvag3-examples svc/grafana 3000:80
 Ensure Redis is running and tools are discovered:
 
 ```bash
-redis-cli keys "truvag3:*"
+redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 ```
 
 **2. "AI client not configured"**
@@ -1258,7 +1258,7 @@ cd ../news-tool && ./setup.sh deploy
 ./setup.sh forward-all
 
 # Check Redis tool registration
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:services:*'
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # Restart the deployment (e.g., to pick up a new ConfigMap from .env)
 ./setup.sh rollout

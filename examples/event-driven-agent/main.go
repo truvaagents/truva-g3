@@ -50,50 +50,57 @@ func main() {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		telemetry.Shutdown(ctx)
+		if err := telemetry.Shutdown(ctx); err != nil {
+			log.Println("Telemetry shutdown did not complete")
+		}
 	}()
 
-	// 5. Connect to Redis
-	redisURL := os.Getenv("REDIS_URL")
-	redisOpt, err := redis.ParseURL(redisURL)
+	// 5. Resolve one Redis/Valkey topology and DB-0 keyspace for every role.
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
 	if err != nil {
-		log.Fatalf("Failed to parse REDIS_URL: %v", err)
+		log.Fatalf("Failed to resolve Redis configuration: %v", err)
 	}
-	redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		cancel()
+	redisKeyspace, err := core.NewRedisKeyspace(os.Getenv("TRUVAG3_REDIS_NAMESPACE"))
+	if err != nil {
+		log.Fatalf("Failed to resolve Redis namespace: %v", err)
+	}
+	redisClient, err := core.NewRedisUniversalClient(redisResolution)
+	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
-	cancel()
+	defer func() { _ = redisClient.Close() }()
 	fmt.Println("Connected to Redis") // Pre-framework: agent not created yet
 
 	// 6. Create async task infrastructure
-	// Queue key is auto-namespaced from TRUVAG3_K8S_SERVICE_NAME by the framework
-	// (RC1 fix) — no hardcoded key needed here.
-	taskQueue := orchestration.NewRedisTaskQueue(redisClient, nil)
-	taskStore := orchestration.NewRedisTaskStore(redisClient, nil)
+	// API and worker pods advertise different services, so use one explicit
+	// deployment-scoped queue identity for both roles.
+	taskQueueConfig := orchestration.DefaultRedisTaskQueueConfig()
+	taskQueueConfig.QueueKey = redisKeyspace.Plain("tasks", "queue", "event-driven-agent")
+	taskQueueConfig.ProcessingKey = redisKeyspace.Plain("tasks", "processing", "event-driven-agent")
+	taskQueue := orchestration.NewRedisTaskQueue(redisClient, &taskQueueConfig)
+	taskStoreConfig := orchestration.DefaultRedisTaskStoreConfig()
+	taskStoreConfig.KeyPrefix = redisKeyspace.Plain("tasks")
+	taskStore := orchestration.NewRedisTaskStore(redisClient, &taskStoreConfig)
 
 	// 7. Switch on deployment mode
 	port := getPort()
 	switch mode {
 	case "api":
-		runAPIMode(redisURL, redisClient, taskQueue, taskStore, port, startupStart)
+		runAPIMode(redisResolution, redisKeyspace, redisClient, taskQueue, taskStore, port, startupStart)
 	case "worker":
-		runWorkerMode(redisClient, taskQueue, taskStore, port, startupStart)
+		runWorkerMode(redisKeyspace, redisClient, taskQueue, taskStore, port, startupStart)
 	default:
-		runEmbeddedMode(redisURL, redisClient, taskQueue, taskStore, port, startupStart)
+		runEmbeddedMode(redisResolution, redisKeyspace, redisClient, taskQueue, taskStore, port, startupStart)
 	}
 }
 
 // runAPIMode runs HTTP API server only (no workers)
 // Workers are deployed separately with TRUVAG3_MODE=worker
-func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
+func runAPIMode(redisConnection core.RedisConnectionConfig, redisKeyspace core.RedisKeyspace, redisClient redis.UniversalClient, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
 	log.Println("Starting in API mode (HTTP server only, workers run separately)")
 
 	// Create the agent
-	agent, err := NewEventDrivenAgent(redisClient)
+	agent, err := NewEventDrivenAgent(redisClient, redisKeyspace)
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
@@ -116,11 +123,11 @@ func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestra
 	}
 
 	// HITL endpoint registration (query + command + resume — no orchestrator needed)
-	// The worker creates checkpoints in Redis DB 6; the API surfaces them to the UI.
+	// The worker creates checkpoints in the shared DB-0 HITL keyspace; the API surfaces them to the UI.
 	hitlConfig := orchestration.DefaultConfig().HITL
 	var hitl *HITLInfrastructure
 	if hitlConfig.Enabled {
-		hitl, err = SetupHITL(agent.Logger, hitlConfig)
+		hitl, err = SetupHITL(redisClient, redisKeyspace, "event-driven-agent", agent.Logger, hitlConfig)
 		if err != nil {
 			agent.Logger.Error("HITL setup failed", map[string]interface{}{
 				"operation": "startup",
@@ -128,7 +135,7 @@ func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestra
 			})
 			os.Exit(1)
 		}
-		defer hitl.Close()
+		defer func() { _ = hitl.Close() }()
 
 		hitlHandler := orchestration.NewHITLHandler(
 			hitl.Controller,
@@ -174,7 +181,7 @@ func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestra
 			if strings.HasPrefix(string(cp.Status), "expired") {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusGone) // 410
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"error":  "checkpoint expired",
 					"status": string(cp.Status),
 				})
@@ -217,7 +224,7 @@ func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestra
 			})
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"status":  "enqueued",
 				"task_id": resumeTask.ID,
 				"message": "Resume task enqueued for worker processing",
@@ -239,7 +246,7 @@ func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestra
 		core.WithName("event-driven-agent-api"),
 		core.WithPort(port),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(redisURL),
+		core.WithRedisConnection(redisConnection),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
@@ -296,7 +303,7 @@ func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestra
 
 // runWorkerMode runs task workers only with minimal health endpoint
 // API is deployed separately with TRUVAG3_MODE=api
-func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
+func runWorkerMode(redisKeyspace core.RedisKeyspace, redisClient redis.UniversalClient, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
 	log.Println("Starting in Worker mode (task processing only, API runs separately)")
 
 	// Create worker pool configuration
@@ -314,7 +321,7 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 	workerPool := orchestration.NewTaskWorkerPool(taskQueue, taskStore, &defaultWorkerConfig)
 
 	// Create the agent for task handling
-	agent, err := NewEventDrivenAgent(redisClient)
+	agent, err := NewEventDrivenAgent(redisClient, redisKeyspace)
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
@@ -340,13 +347,9 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 	// memBackends lifted to function scope so reflection job can use it after workerCtx exists
 	var memBackends *memory.SharedBackends
 
-	// Initialize AI orchestrator (workers need it for task execution)
-	// Create a discovery client directly for worker mode
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		log.Fatalf("REDIS_URL environment variable is required for worker mode")
-	}
-	discovery, err := core.NewRedisDiscovery(redisURL)
+	// Initialize AI orchestrator (workers need it for task execution).
+	// Worker mode reuses the application-owned topology-aware client.
+	discovery, err := core.NewRedisDiscoveryWithClient(redisClient, redisKeyspace, 30*time.Second)
 	if err != nil {
 		log.Printf("Warning: Failed to create discovery: %v (AI orchestration will be disabled)", err)
 	} else {
@@ -354,7 +357,7 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 		hitlConfig := orchestration.DefaultConfig().HITL
 		var hitl *HITLInfrastructure
 		if hitlConfig.Enabled {
-			hitl, err = SetupHITL(agent.Logger, hitlConfig)
+			hitl, err = SetupHITL(redisClient, redisKeyspace, "event-driven-agent", agent.Logger, hitlConfig)
 			if err != nil {
 				agent.Logger.Error("HITL setup failed", map[string]interface{}{
 					"operation": "startup",
@@ -362,12 +365,12 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 				})
 				os.Exit(1)
 			}
-			defer hitl.Close()
+			defer func() { _ = hitl.Close() }()
 		}
 
 		// Setup shared agent memory
 		var memErr error
-		memBackends, memErr = setupMemoryBackends(redisClient, agent)
+		memBackends, memErr = setupMemoryBackends(redisClient, redisKeyspace, agent)
 		if memErr != nil {
 			agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
 				"error": memErr.Error(),
@@ -393,17 +396,19 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 
 	// Start minimal health server for K8s probes
 	healthServer := &http.Server{
-		Addr: fmt.Sprintf(":%d", port),
+		Addr:              fmt.Sprintf(":%d", port),
+		ReadHeaderTimeout: 5 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" || r.URL.Path == "/ready" {
+			switch r.URL.Path {
+			case "/health", "/ready":
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
-				fmt.Fprintf(w, `{"status":"healthy","mode":"worker","workers":%d}`, workerCount)
-			} else if r.URL.Path == "/metrics" {
+				_, _ = fmt.Fprintf(w, `{"status":"healthy","mode":"worker","workers":%d}`, workerCount)
+			case "/metrics":
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusOK)
-				fmt.Fprintf(w, "# Metrics exported via OTLP to OTel Collector\n# Worker mode: %d workers\n", workerCount)
-			} else {
+				_, _ = fmt.Fprintf(w, "# Metrics exported via OTLP to OTel Collector\n# Worker mode: %d workers\n", workerCount)
+			default:
 				http.NotFound(w, r)
 			}
 		}),
@@ -455,14 +460,16 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 		// Stop health server
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		healthServer.Shutdown(shutdownCtx)
+		if err := healthServer.Shutdown(shutdownCtx); err != nil {
+			log.Println("Health server shutdown did not complete")
+		}
 
 		// Stop workers
 		workerCancel()
 	}()
 
 	// Start alert queue consumer (bridges alert queue → task queue)
-	consumer := NewAlertQueueConsumer(redisClient, taskQueue, agent.Logger)
+	consumer := NewAlertQueueConsumer(redisClient, agent.alertQueueKey(), taskQueue, agent.Logger)
 	go func() {
 		if err := consumer.Start(workerCtx); err != nil && !errors.Is(err, context.Canceled) {
 			agent.Logger.Error("Alert queue consumer error", map[string]interface{}{
@@ -481,7 +488,7 @@ func runWorkerMode(redisClient *redis.Client, taskQueue *orchestration.RedisTask
 
 // runEmbeddedMode runs both API and workers in the same process
 // This is the default for local development
-func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
+func runEmbeddedMode(redisConnection core.RedisConnectionConfig, redisKeyspace core.RedisKeyspace, redisClient redis.UniversalClient, taskQueue *orchestration.RedisTaskQueue, taskStore *orchestration.RedisTaskStore, port int, startupStart time.Time) {
 	log.Println("Starting in Embedded mode (API + workers in same process)")
 
 	// Create worker pool configuration
@@ -499,7 +506,7 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 	workerPool := orchestration.NewTaskWorkerPool(taskQueue, taskStore, &defaultWorkerConfig)
 
 	// Create the agent
-	agent, err := NewEventDrivenAgent(redisClient)
+	agent, err := NewEventDrivenAgent(redisClient, redisKeyspace)
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
@@ -543,7 +550,7 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 	hitlConfig := orchestration.DefaultConfig().HITL
 	var hitl *HITLInfrastructure
 	if hitlConfig.Enabled {
-		hitl, err = SetupHITL(agent.Logger, hitlConfig)
+		hitl, err = SetupHITL(redisClient, redisKeyspace, "event-driven-agent", agent.Logger, hitlConfig)
 		if err != nil {
 			agent.Logger.Error("HITL setup failed", map[string]interface{}{
 				"operation": "startup",
@@ -551,7 +558,7 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 			})
 			os.Exit(1)
 		}
-		defer hitl.Close()
+		defer func() { _ = hitl.Close() }()
 
 		// Register HITL API routes for approval/rejection via HTTP
 		hitlHandler := orchestration.NewHITLHandler(
@@ -581,7 +588,7 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 		core.WithName("event-driven-agent"),
 		core.WithPort(port),
 		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisURL(redisURL),
+		core.WithRedisConnection(redisConnection),
 		core.WithDiscovery(true, "redis"),
 		core.WithCORS([]string{"*"}, true),
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
@@ -597,7 +604,7 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 	}
 
 	// Setup shared agent memory (before orchestrator init)
-	memBackends, memErr := setupMemoryBackends(redisClient, agent)
+	memBackends, memErr := setupMemoryBackends(redisClient, redisKeyspace, agent)
 	if memErr != nil {
 		agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
 			"error": memErr.Error(),
@@ -613,7 +620,7 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 		startTime := time.Now()
 		lastWarning := time.Time{}
 
-		for agent.BaseAgent.Discovery == nil {
+		for agent.Discovery == nil {
 			time.Sleep(100 * time.Millisecond)
 
 			elapsed := time.Since(startTime)
@@ -665,7 +672,7 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 	}()
 
 	// Start alert queue consumer (bridges alert queue → task queue)
-	consumer := NewAlertQueueConsumer(redisClient, taskQueue, agent.Logger)
+	consumer := NewAlertQueueConsumer(redisClient, agent.alertQueueKey(), taskQueue, agent.Logger)
 	go func() {
 		if err := consumer.Start(workerCtx); err != nil && !errors.Is(err, context.Canceled) {
 			agent.Logger.Error("Alert queue consumer error", map[string]interface{}{
@@ -740,12 +747,8 @@ func runEmbeddedMode(redisURL string, redisClient *redis.Client, taskQueue *orch
 }
 
 func validateConfig() error {
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 	return nil
 }
@@ -806,12 +809,12 @@ func initTelemetry(serviceName string) {
 	}
 
 	telemetry.EnableFrameworkIntegration(nil)
-	log.Printf("Telemetry initialized: %s (%s)", serviceName, env)
+	log.Println("Telemetry initialized")
 }
 
 // setupMemoryBackends creates shared memory backends using NewSharedBackends + Phase 2 embedding.
 // Used by both worker and embedded modes to avoid duplication.
-func setupMemoryBackends(redisClient *redis.Client, agent *EventDrivenAgent) (*memory.SharedBackends, error) {
+func setupMemoryBackends(redisClient redis.UniversalClient, keyspace core.RedisKeyspace, agent *EventDrivenAgent) (*memory.SharedBackends, error) {
 	// Phase 2: create embedding client if configured (memory module can't import ai)
 	var embedOpt memory.SharedBackendsOption
 	embedder, err := ai.NewEmbeddingClient(ai.WithEmbeddingLogger(agent.Logger))
@@ -822,6 +825,7 @@ func setupMemoryBackends(redisClient *redis.Client, agent *EventDrivenAgent) (*m
 	opts := []memory.SharedBackendsOption{
 		memory.WithAgentName("event-driven-agent"),
 		memory.WithDomain("infrastructure"),
+		memory.WithRedisDeployment(keyspace.Deployment()),
 	}
 	if embedOpt != nil {
 		opts = append(opts, embedOpt)

@@ -783,10 +783,6 @@ func (cb *CircuitBreaker) transitionToUnlocked(newState CircuitState) {
 		return
 	}
 
-	cb.state.Store(newState)
-	cb.stateChangedAt.Store(time.Now())
-	cb.generation++
-
 	// Reset half-open counters when entering half-open
 	if newState == StateHalfOpen {
 		cb.halfOpenCount.Store(0)
@@ -799,6 +795,12 @@ func (cb *CircuitBreaker) transitionToUnlocked(newState CircuitState) {
 			return true
 		})
 	}
+
+	cb.stateChangedAt.Store(time.Now())
+	cb.generation++
+	// Publish the new state only after its counters and tokens are ready.
+	// Lock-free admission must not increment a counter we then reset.
+	cb.state.Store(newState)
 
 	// Log state change
 	cb.config.Logger.Info("Circuit breaker state changed", map[string]interface{}{

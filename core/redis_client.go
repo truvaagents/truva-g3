@@ -22,15 +22,6 @@ type RedisClient struct {
 	closeMu    sync.Mutex
 }
 
-// RedisClientOptions configures the deprecated standalone numbered-DB wrapper.
-// Deprecated: use RedisClientConnectionOptions and NewRedisClientWithConnection.
-type RedisClientOptions struct {
-	RedisURL  string
-	DB        int    // Redis DB number for isolation (0-15)
-	Namespace string // Key namespace for organization
-	Logger    Logger // Optional logger
-}
-
 // RedisClientConnectionOptions configures an owning topology-aware client.
 // Built-in callers pass a prefix returned by RedisKeyspace.Plain or Tagged.
 type RedisClientConnectionOptions struct {
@@ -39,45 +30,8 @@ type RedisClientConnectionOptions struct {
 	Logger     Logger
 }
 
-// NewRedisClient retains standalone numbered-DB behavior for the precursor
-// compatibility window.
-// Deprecated: use NewRedisClientWithConnection.
-func NewRedisClient(opts RedisClientOptions) (*RedisClient, error) {
-	if opts.RedisURL == "" {
-		return nil, fmt.Errorf("redis URL is required: %w", ErrInvalidConfiguration)
-	}
-	connection, err := parseStandaloneRedisURL(opts.RedisURL, true)
-	if err != nil {
-		return nil, err
-	}
-	if opts.DB < 0 || opts.DB > 15 {
-		return nil, fmt.Errorf("redis database must be between 0 and 15: %w", ErrInvalidConfiguration)
-	}
-	connection.DB = opts.DB
-	logger := coreComponentLogger(opts.Logger)
-	if logger != nil {
-		logger.Warn("Numbered Redis database compatibility path is deprecated", map[string]interface{}{
-			"operation":   "redis_client_compatibility",
-			"db":          opts.DB,
-			"replacement": "DB 0 with core.RedisKeyspace",
-		})
-	}
-	return newRedisClientWithConnection(RedisClientConnectionOptions{
-		Connection: connection,
-		Namespace:  opts.Namespace,
-		Logger:     logger,
-	}, true)
-}
-
-// NewRedisClientWithConnection constructs and owns a topology-aware client.
+// NewRedisClientWithConnection constructs and owns a topology-aware DB-0 client.
 func NewRedisClientWithConnection(opts RedisClientConnectionOptions) (*RedisClient, error) {
-	return newRedisClientWithConnection(opts, false)
-}
-
-func newRedisClientWithConnection(
-	opts RedisClientConnectionOptions,
-	allowNumberedDatabase bool,
-) (*RedisClient, error) {
 	namespace := strings.TrimSuffix(strings.TrimSpace(opts.Namespace), ":")
 	if namespace == "" {
 		return nil, fmt.Errorf("redis key namespace is required: %w", ErrInvalidConfiguration)
@@ -86,12 +40,7 @@ func newRedisClientWithConnection(
 	if err != nil {
 		return nil, err
 	}
-	var client redis.UniversalClient
-	if allowNumberedDatabase {
-		client, err = NewRedisUniversalClientForCompatibility(profile)
-	} else {
-		client, err = NewRedisUniversalClient(profile)
-	}
+	client, err := NewRedisUniversalClient(profile)
 	if err != nil {
 		return nil, fmt.Errorf("initialize namespaced Redis client: %w", err)
 	}
@@ -144,7 +93,6 @@ func (r *RedisClient) Close() error {
 		r.logger.Info("Closing Redis client connection", map[string]interface{}{
 			"operation": "redis_client_close",
 			"db":        r.dbID,
-			"db_name":   GetRedisDBName(r.dbID),
 			"namespace": r.namespace,
 		})
 	}
@@ -295,7 +243,6 @@ func (r *RedisClient) HealthCheck(ctx context.Context) error {
 				"error_type":  "backend",
 				"duration_ms": time.Since(startedAt).Milliseconds(),
 				"db":          r.dbID,
-				"db_name":     GetRedisDBName(r.dbID),
 				"namespace":   r.namespace,
 			})
 		}

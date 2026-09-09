@@ -164,11 +164,12 @@ route is converging. Strict commands fail fast on `404`, and the read-only
 `skills-check` uses a shorter retry budget for other temporary failures.
 
 The management API and the agent must also address the same logical datastore.
-For the included Redis implementation, keep `TRUVAG3_SKILLS_REDIS_DB` consistent
-between Registry Viewer and every skill-enabled agent. Changing the value in an
-agent `.env` and running only `rollout` updates the agent reader, not Registry
-Viewer's writer. Run an infrastructure-capable example's `./setup.sh infra`
-with the new value before `skills-sync` and the agent rollout.
+For the included Redis implementation, keep the Redis connection topology and
+`TRUVAG3_REDIS_NAMESPACE` consistent between Registry Viewer and every
+skill-enabled agent; canonical examples share DB 0. Changing an agent `.env`
+and running only `rollout` updates the agent reader, not Registry Viewer's
+writer. Run an infrastructure-capable example's `./setup.sh infra` with the new
+topology/namespace before `skills-sync` and the agent rollout.
 
 When a coding agent adds a new skill, it must add the package under the standard
 directory and add an explicit runtime binding for the same namespace and name.

@@ -16,6 +16,7 @@ Welcome to your production-ready TruvaG3 infrastructure! This guide will walk yo
   - [Setting Up Kind Cluster](#setting-up-kind-cluster)
   - [Deploy Infrastructure to Kind](#deploy-infrastructure-to-kind)
   - [Local Access URLs](#local-access-urls)
+  - [Redis and Valkey Cluster Validation](#redis-and-valkey-cluster-validation)
 - [Production Server Deployment](#production-server-deployment)
   - [Storage Requirements](#storage-requirements)
   - [Ingress Configuration](#ingress-configuration-recommended)
@@ -194,9 +195,7 @@ so its old OTTL transform is gone, then rebuild `otel-collector-logs` so the new
 `k8sattributes`-enriched records land on a central collector that won't overwrite
 their `service.name`. Running the DaemonSet first with the old central still in
 place produces a transient window where the old transform silently reverts the new
-resource attribute. For this specific change, the
-[LOGS_PIPELINE_FIX_PLAN.md — Rollout order](LOGS_PIPELINE_FIX_PLAN.md#rollout-order-important)
-section spells out the exact sequence.
+resource attribute.
 
 For most config changes that touch a single workload, order is irrelevant.
 
@@ -345,6 +344,67 @@ For Kind clusters, the infrastructure automatically:
 - Uses `emptyDir` volumes (data is ephemeral)
 - Configures smaller resource limits
 - Skips ingress setup (use port-forward instead)
+
+### Redis and Valkey Cluster Validation
+
+The repository includes an isolated, lightweight three-node Cluster fixture for
+live application validation. It runs alongside the normal standalone `redis`
+deployment, uses ephemeral storage, and creates three primaries with all 16,384
+slots assigned. This local fixture exercises sharding, redirects, and
+cross-slot behavior without replica overhead; the separate Linux integration
+fixture remains responsible for replica promotion and failover. The helper
+pins the same provider versions as the optional Linux integration fixtures:
+
+- Redis OSS `8.8.0-alpine`
+- Valkey `8.1.9-alpine`
+- Valkey `9.1.1-alpine`
+
+Deploy and verify one distribution:
+
+```bash
+cd examples/k8-deployment
+./setup-redis-cluster-validation.sh deploy redis-oss
+./setup-redis-cluster-validation.sh status
+```
+
+Point only the selected live-test deployments at the cluster. The helper sets
+the structured cluster connection, DB 0, and one shared deployment namespace,
+then waits for every rollout:
+
+```bash
+./setup-redis-cluster-validation.sh configure-cluster redis-cluster-validation \
+  registry-viewer weather-tool-v2 geocoding-tool travel-chat-agent
+```
+
+Example manifests intentionally retain a portable standalone `REDIS_URL`
+default. Therefore `configure-cluster` is the last deployment step: rerun the
+same command after any selected example's `setup.sh deploy` or `setup.sh
+rebuild`. This replaces that workload's URL shorthand with the structured
+cluster settings and avoids presenting contradictory topology forms to the
+framework resolver.
+
+After the Viewer is connected to the cluster, reconcile agent-owned skills via
+each owning example's `setup.sh`, generate records through the framework APIs,
+and follow the strict and browser checks in
+[Registry Viewer Live-Data Verification](../registry-viewer-app/LIVE_DATA_VERIFICATION.md).
+Do not seed Redis keys directly.
+
+The validation cluster is disposable. Remove it before changing providers,
+then deploy the next pinned distribution:
+
+```bash
+./setup-redis-cluster-validation.sh cleanup
+./setup-redis-cluster-validation.sh deploy valkey-8
+# Repeat with valkey-9 after another cleanup.
+```
+
+To return the same deployments to the normal standalone Redis service without
+removing either datastore:
+
+```bash
+./setup-redis-cluster-validation.sh configure-standalone redis-standalone-validation \
+  registry-viewer weather-tool-v2 geocoding-tool travel-chat-agent
+```
 
 ## Production Server Deployment
 

@@ -548,8 +548,8 @@ kubectl port-forward -n truvag3-examples svc/weather-service 8080:80 &
 curl http://localhost:8080/health
 
 # Check service discovery (in Redis)
-kubectl exec -it deployment/redis -n default -- redis-cli KEYS "truvag3:services:*"
-kubectl exec -it deployment/redis -n default -- redis-cli GET "truvag3:services:weather-service"
+kubectl exec -it deployment/redis -n default -- redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
+kubectl exec -it deployment/redis -n default -- redis-cli GET 'truvag3:v1:default:registry:{default:registry}:service:weather-service'
 ```
 
 ### Cleanup
@@ -646,8 +646,8 @@ curl http://localhost:8080/api/capabilities/current_weather/schema | jq '.'
 
 ```bash
 # Check Redis for service registration
-kubectl exec -it deployment/redis -n default -- redis-cli KEYS "truvag3:services:*"
-kubectl exec -it deployment/redis -n default -- redis-cli GET "truvag3:services:weather-service"
+kubectl exec -it deployment/redis -n default -- redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
+kubectl exec -it deployment/redis -n default -- redis-cli GET 'truvag3:v1:default:registry:{default:registry}:service:weather-service'
 
 # Expected output shows registered capabilities and metadata
 ```
@@ -870,7 +870,7 @@ kubectl exec -n truvag3-examples deployment/weather-tool -- \
 
 # 4. Check service registration in Redis
 kubectl exec -it deployment/redis -n default -- \
-  redis-cli KEYS "truvag3:services:*"
+  redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # 5. Check REDIS_URL configuration
 kubectl get deployment weather-tool -n truvag3-examples -o yaml | grep REDIS_URL
@@ -1105,35 +1105,37 @@ When the weather-tool is deployed and running, it automatically registers itself
 - **metadata**: Framework version, discovery status, last heartbeat timestamp
 
 **Service Discovery Pattern:**
-- Both pod replicas send heartbeats to the same Redis key: `truvag3:services:weather-service`
+- Both pod replicas send heartbeats to the same versioned registry record: `truvag3:v1:default:registry:{default:registry}:service:weather-service`
 - Kubernetes Service (`weather-tool-service`) load-balances traffic across pods
 - Agents discover one service entry, Kubernetes handles pod-level routing
 - Heartbeat keeps TTL fresh - service auto-expires if pods stop
 
 **Redis Index Structure:**
 ```
-truvag3:services:weather-service          → Full service data (30s TTL)
-truvag3:types:tool                        → Set of all tools (60s TTL)
-truvag3:names:weather-service             → Name index (60s TTL)
-truvag3:capabilities:current_weather      → Capability index (60s TTL)
-truvag3:capabilities:forecast             → Capability index (60s TTL)
-truvag3:capabilities:alerts               → Capability index (60s TTL)
-truvag3:capabilities:historical_analysis  → Capability index (60s TTL)
+truvag3:v1:default:registry:{default:registry}:service:weather-service
+  → Full service data (30s TTL)
+...:index:all                             → All-service index (60s TTL)
+...:index:type:tool                       → Set of all tools (60s TTL)
+...:index:name:weather-service            → Name index (60s TTL)
+...:index:capability:current_weather      → Capability index (60s TTL)
+...:index:capability:forecast             → Capability index (60s TTL)
+...:index:capability:alerts               → Capability index (60s TTL)
+...:index:capability:historical_analysis  → Capability index (60s TTL)
 ```
 
 You can inspect this data in your cluster:
 ```bash
 # Get the full service entry
 kubectl exec -it deployment/redis -n default -- \
-  redis-cli GET "truvag3:services:weather-service"
+  redis-cli GET 'truvag3:v1:default:registry:{default:registry}:service:weather-service'
 
 # List all service keys
 kubectl exec -it deployment/redis -n default -- \
-  redis-cli KEYS "truvag3:services:*"
+  redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 
 # See all tools
 kubectl exec -it deployment/redis -n default -- \
-  redis-cli SMEMBERS "truvag3:types:tool"
+  redis-cli SMEMBERS 'truvag3:v1:default:registry:{default:registry}:index:type:tool'
 ```
 
 ## 📚 Next Steps

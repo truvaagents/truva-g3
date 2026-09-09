@@ -56,7 +56,7 @@ type RedisCheckpointStore struct {
 	logger    core.Logger    // Defaults to NoOp
 	telemetry core.Telemetry // Defaults to NoOp
 
-	// Agent identity — stamped onto every checkpoint saved by this store (RC3-Backend)
+	// Agent identity stamped onto every checkpoint saved by this store.
 	agentName    string // from TRUVAG3_AGENT_NAME (with TRUVAG3_K8S_SERVICE_NAME fallback)
 	agentAddress string // from core.ResolveServiceAddress; empty if address cannot be resolved
 
@@ -77,49 +77,34 @@ type RedisCheckpointStore struct {
 // redisCheckpointConfig holds configuration for the checkpoint store
 type redisCheckpointConfig struct {
 	redisURL          string
-	redisDB           int
 	keyPrefix         string
 	ttl               time.Duration
 	logger            core.Logger
 	telemetry         core.Telemetry
 	instanceID        string // For distributed claim mechanism
 	keyPrefixExplicit bool
-	legacyPrefix      bool
 }
 
 type redisCheckpointIdentity struct {
-	basePrefix         string
-	basePrefixExplicit bool
-	agentName          string
-	agentNameSource    string
-	keyPrefix          string
-	agentAddress       string
-	validationErr      error
-	legacyPrefix       bool
+	basePrefix      string
+	agentName       string
+	agentNameSource string
+	keyPrefix       string
+	agentAddress    string
+	validationErr   error
 }
 
 func resolveRedisCheckpointIdentity() redisCheckpointIdentity {
-	legacyPrefix := os.Getenv("TRUVAG3_HITL_KEY_PREFIX")
-	keyspace := defaultRedisKeyspace()
-	var validationErr error
-	if legacyPrefix == "" {
-		var err error
-		keyspace, err = redisKeyspaceFromEnvironment()
-		if err != nil {
-			validationErr = fmt.Errorf("resolve HITL Redis keyspace: %w", err)
-			keyspace = defaultRedisKeyspace()
-		}
+	keyspace, validationErr := redisKeyspaceFromEnvironment()
+	if validationErr != nil {
+		validationErr = fmt.Errorf("resolve HITL Redis keyspace: %w", validationErr)
+		keyspace = defaultRedisKeyspace()
 	}
 	identity := redisCheckpointIdentity{
-		basePrefix:         keyspace.Tagged("hitl", ""),
-		basePrefixExplicit: legacyPrefix != "",
-		agentName:          getEnvOrDefault("TRUVAG3_AGENT_NAME", ""),
-		agentNameSource:    "TRUVAG3_AGENT_NAME",
-		validationErr:      validationErr,
-		legacyPrefix:       legacyPrefix != "",
-	}
-	if legacyPrefix != "" {
-		identity.basePrefix = legacyPrefix
+		basePrefix:      keyspace.Tagged("hitl", ""),
+		agentName:       getEnvOrDefault("TRUVAG3_AGENT_NAME", ""),
+		agentNameSource: "TRUVAG3_AGENT_NAME",
+		validationErr:   validationErr,
 	}
 	if identity.agentName == "" {
 		identity.agentName = getEnvOrDefault(core.EnvServiceName, "")
@@ -128,14 +113,7 @@ func resolveRedisCheckpointIdentity() redisCheckpointIdentity {
 	if identity.agentName == "" {
 		identity.agentNameSource = "none"
 	}
-	identity.keyPrefix = identity.basePrefix
-	if identity.agentName != "" {
-		if identity.basePrefixExplicit {
-			identity.keyPrefix = fmt.Sprintf("%s:%s", identity.basePrefix, identity.agentName)
-		} else {
-			identity.keyPrefix = keyspace.Tagged("hitl", identity.agentName)
-		}
-	}
+	identity.keyPrefix = keyspace.Tagged("hitl", identity.agentName)
 
 	config := core.DefaultConfig()
 	_ = config.LoadFromEnv()
@@ -154,13 +132,13 @@ func logRedisCheckpointIdentity(config *redisCheckpointConfig, identity redisChe
 			"source":     identity.agentNameSource,
 		})
 	}
-	if identity.agentName == "" && !identity.basePrefixExplicit &&
+	if identity.agentName == "" && !config.keyPrefixExplicit &&
 		config.keyPrefix == identity.basePrefix && config.logger != nil {
 		config.logger.Warn("HITL checkpoint store using shared key prefix — set TRUVAG3_AGENT_NAME (or TRUVAG3_K8S_SERVICE_NAME) to isolate per-agent state", map[string]interface{}{
 			"operation":   "checkpoint_store_init",
 			"key_prefix":  config.keyPrefix,
 			"impact":      "multiple agents sharing this Redis will share the pending index; viewer may show duplicate HITL checkpoints",
-			"remediation": "set TRUVAG3_AGENT_NAME, TRUVAG3_K8S_SERVICE_NAME, TRUVAG3_HITL_KEY_PREFIX, or pass WithCheckpointKeyPrefix",
+			"remediation": "set TRUVAG3_AGENT_NAME, TRUVAG3_K8S_SERVICE_NAME, or pass WithCheckpointKeyspace",
 		})
 	}
 }
@@ -175,30 +153,11 @@ func WithCheckpointRedisURL(url string) RedisCheckpointStoreOption {
 	}
 }
 
-// WithCheckpointRedisDB selects a numbered standalone database.
-// Deprecated: use DB 0 and an injected provider client.
-func WithCheckpointRedisDB(db int) RedisCheckpointStoreOption {
-	return func(c *redisCheckpointConfig) {
-		c.redisDB = db
-	}
-}
-
-// WithCheckpointKeyPrefix sets the precursor standalone key prefix.
-// Deprecated: use WithCheckpointKeyspace for cluster-capable composition.
-func WithCheckpointKeyPrefix(prefix string) RedisCheckpointStoreOption {
-	return func(c *redisCheckpointConfig) {
-		c.keyPrefix = prefix
-		c.keyPrefixExplicit = true
-		c.legacyPrefix = true
-	}
-}
-
 // WithCheckpointKeyspace selects the canonical versioned DB-0 HITL keyspace.
 func WithCheckpointKeyspace(keyspace core.RedisKeyspace, agentScope string) RedisCheckpointStoreOption {
 	return func(c *redisCheckpointConfig) {
 		c.keyPrefix = keyspace.Tagged("hitl", agentScope)
 		c.keyPrefixExplicit = true
-		c.legacyPrefix = false
 	}
 }
 
@@ -254,22 +213,14 @@ func WithCheckpointStoreTelemetry(telemetry core.Telemetry) RedisCheckpointStore
 //  2. Shared Redis connection environment (REDIS_URL or structured topology)
 //  3. Default value
 func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error) {
-	// Build key prefix with optional agent name for multi-agent isolation.
-	// Format: {base_prefix}:{agent_name} or just {base_prefix} if no agent name.
-	// Capture source before config/options so we can log accurately after options applied.
-	// basePrefixExplicit tracks whether the operator explicitly set TRUVAG3_HITL_KEY_PREFIX
-	// — used by the shared-prefix warning below to suppress false positives when the
-	// operator has already chosen an isolating prefix via that env var.
 	identity := resolveRedisCheckpointIdentity()
 
 	// Initialize config with defaults
 	config := &redisCheckpointConfig{
-		redisURL:     "",
-		redisDB:      0,
-		keyPrefix:    identity.keyPrefix,
-		ttl:          24 * time.Hour,
-		logger:       &core.NoOpLogger{},
-		legacyPrefix: identity.legacyPrefix,
+		redisURL:  "",
+		keyPrefix: identity.keyPrefix,
+		ttl:       24 * time.Hour,
+		logger:    &core.NoOpLogger{},
 	}
 
 	// Apply options (may inject a real logger via WithCheckpointStoreLogger)
@@ -282,28 +233,11 @@ func NewRedisCheckpointStore(opts ...interface{}) (*RedisCheckpointStore, error)
 		return nil, identity.validationErr
 	}
 
-	// Log resolved key prefix AFTER options so a real logger (if injected) is used.
-	// Read from config.keyPrefix (not the local keyPrefix) so WithCheckpointKeyPrefix
-	// overrides are reflected accurately. Emit unconditionally — operators should be
-	// able to confirm which prefix this process is actually using.
 	logRedisCheckpointIdentity(config, identity)
 
-	// Warn when no isolating identifier has been supplied through any of the
-	// available paths. Multiple agents that all land in this branch share a single
-	// pending index in Redis — anything that fans out across agents (e.g., the
-	// registry viewer's HITL list) will see duplicate checkpoints.
-	//
-	// Suppress the warning when the operator has chosen isolation through any of:
-	//   - TRUVAG3_AGENT_NAME / TRUVAG3_K8S_SERVICE_NAME (covered by agentName != "")
-	//   - TRUVAG3_HITL_KEY_PREFIX (covered by basePrefixExplicit — they made a deliberate choice)
-	//   - WithCheckpointKeyPrefix option (covered by config.keyPrefix != basePrefix)
-	client, connection, err := newOwnedRedisUniversalClient(config.redisURL, config.redisDB, config.logger)
+	client, _, err := newOwnedRedisUniversalClient(config.redisURL, "TRUVAG3_HITL_REDIS_DB", "TRUVAG3_HITL_KEY_PREFIX")
 	if err != nil {
 		return nil, fmt.Errorf("initialize Redis checkpoint store: %w", err)
-	}
-	if err := rejectLegacyRedisPrefixForMode(connection.Mode, config.legacyPrefix, "HITL checkpoint store"); err != nil {
-		_ = client.Close()
-		return nil, err
 	}
 
 	// Generate instance ID if not provided
@@ -334,10 +268,9 @@ func NewRedisCheckpointStoreWithClient(client redis.UniversalClient, opts ...Red
 	}
 	identity := resolveRedisCheckpointIdentity()
 	config := &redisCheckpointConfig{
-		keyPrefix:    identity.keyPrefix,
-		ttl:          24 * time.Hour,
-		logger:       &core.NoOpLogger{},
-		legacyPrefix: identity.legacyPrefix,
+		keyPrefix: identity.keyPrefix,
+		ttl:       24 * time.Hour,
+		logger:    &core.NoOpLogger{},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -346,9 +279,6 @@ func NewRedisCheckpointStoreWithClient(client redis.UniversalClient, opts ...Red
 	}
 	if identity.validationErr != nil && !config.keyPrefixExplicit {
 		return nil, identity.validationErr
-	}
-	if err := rejectLegacyRedisPrefixForClient(client, config.legacyPrefix, "HITL checkpoint store"); err != nil {
-		return nil, err
 	}
 	logRedisCheckpointIdentity(config, identity)
 	instanceID := config.instanceID
@@ -371,7 +301,7 @@ func NewRedisCheckpointStoreWithClient(client redis.UniversalClient, opts ...Red
 func (s *RedisCheckpointStore) SaveCheckpoint(ctx context.Context, cp *ExecutionCheckpoint) error {
 	key := s.keys.checkpoint(cp.CheckpointID)
 
-	// Stamp physical agent identity onto the checkpoint (RC3-Backend).
+	// Stamp the physical agent identity onto the checkpoint.
 	// Only set if not already populated — allow callers to override if needed.
 	if cp.AgentName == "" && s.agentName != "" {
 		cp.AgentName = s.agentName
@@ -1050,8 +980,7 @@ func (s *RedisCheckpointStore) processExpiredCheckpoint(ctx context.Context, che
 
 	// ┌────────────────────────────────────────────────────────────────────┐
 	// │  TRACE CORRELATION: Extract original trace context from checkpoint │
-	// │  RC7-B5: Read typed fields first; fall back to UserContext for    │
-	// │  checkpoints created before RC7-B2 was deployed.                  │
+	// │  Read typed fields first; use UserContext when they are absent.    │
 	// └────────────────────────────────────────────────────────────────────┘
 	originalTraceID := checkpoint.OriginalTraceID
 	originalSpanID := checkpoint.OriginalSpanID

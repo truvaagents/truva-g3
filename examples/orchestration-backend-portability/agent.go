@@ -16,7 +16,7 @@ import (
 const maxRequestBytes = 64 << 10
 
 type API struct {
-	workflow   orchestration.StateStore
+	workflow   orchestration.WorkflowStateStore
 	dispatcher core.TaskDispatcher
 	queue      string
 	workflowID string
@@ -132,7 +132,7 @@ func (api *API) get(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, "invalid_execution_id", "execution ID is required")
 		return
 	}
-	execution, err := api.workflow.GetExecution(request.Context(), id)
+	execution, err := api.workflow.GetExecution(request.Context(), api.workflowID, id)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, "execution_not_found", err.Error())
 		return

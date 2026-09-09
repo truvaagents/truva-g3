@@ -28,7 +28,7 @@ Last updated: 2026-08-28
 
 ## 1. Purpose
 
-Convert `examples/orchestration-backend-portability` from a Phase 4 proof harness
+Convert `examples/orchestration-backend-portability` from a proof-of-concept harness
 into a self-contained reference implementation that other TruvaG3 developers can
 copy, understand, and adapt without learning a new example structure.
 
@@ -57,7 +57,7 @@ Implementation decisions in this plan must conform to these repository sources:
 - [Framework Design Principles](../../FRAMEWORK_DESIGN_PRINCIPLES.md)
 - [Core Architecture](../../core/ARCHITECTURE.md)
 - [Orchestration Architecture](../../orchestration/ARCHITECTURE.md)
-- [Backend Portability Design](../../orchestration/notes/ORCHESTRATION_BACKEND_PORTABILITY_DESIGN.md)
+- [Backend Portability Guide](../../docs/orchestration/ORCHESTRATION_BACKEND_PORTABILITY_GUIDE.md)
 - [Examples conventions](../AGENTS.md)
 - [Portable Example Contract](../README.md#portable-example-contract)
 

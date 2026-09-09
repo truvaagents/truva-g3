@@ -154,8 +154,6 @@ func HTTPStatusForCategory(category ErrorCategory) int {
 // messages and maps them to the correct tool HTTP response for orchestrator
 // error routing. This replaces per-tool apiErrorStatus functions that relied
 // on fragile string matching (e.g., "status NNN" missed "error NNN").
-//
-// See: resilience/bugs/BUG_TOOL_ERROR_CLASSIFICATION_AND_EXECUTOR_BACKOFF.md
 
 // UpstreamErrorInfo classifies an upstream API error for correct orchestrator routing.
 // HTTPStatus is the status code the TOOL should return (not the upstream code).

@@ -38,8 +38,6 @@ spec:
           value: "truvag3-examples"
         - name: REDIS_URL
           value: "redis://redis.truvag3-examples:6379"
-        - name: TRUVAG3_REDIS_URL
-          value: "redis://redis.truvag3-examples:6379"
         - name: TRUVAG3_DISCOVERY_RETRY
           value: "true"
         - name: TRUVAG3_DISCOVERY_RETRY_INTERVAL

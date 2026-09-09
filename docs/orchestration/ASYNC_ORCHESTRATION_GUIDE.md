@@ -1774,7 +1774,7 @@ type TaskWorkerConfig struct {
 
 ```go
 type RedisTaskQueueConfig struct {
-    QueueKey       string         // Redis key for queue list (default: "truvag3:tasks:queue")
+    QueueKey       string         // Versioned queue key; service-scoped by default
     ProcessingKey  string         // Redis list for in-flight payloads (service-scoped by default)
     RetryAttempts  int            // Retry count for Redis operations (default: 3)
     RetryDelay     time.Duration  // Delay between retries (default: 100ms)
@@ -1787,7 +1787,7 @@ type RedisTaskQueueConfig struct {
 
 ```go
 type RedisTaskStoreConfig struct {
-    KeyPrefix     string        // Prefix for task keys (default: "truvag3:tasks")
+    KeyPrefix     string        // Default: "truvag3:v1:default:tasks"
     TTL           time.Duration // Task data expiration (default: 24h)
     RetryAttempts int           // Retry count for Redis operations (default: 3)
     RetryDelay    time.Duration // Delay between retries (default: 100ms)
@@ -2756,8 +2756,10 @@ kubectl get pods -l app=my-agent-worker -n truvag3-examples
 # Check worker logs
 kubectl logs -l app=my-agent-worker -n truvag3-examples --tail=50
 
-# Check Redis queue depth
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli LLEN truvag3:tasks:queue
+# Check the shipped async example's queue depth (standalone, default namespace).
+# Match the logical queue used by BOTH API and worker configuration.
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 \
+  LLEN 'truvag3:v1:default:tasks:queue:async-travel-agent'
 ```
 
 **Solution**:

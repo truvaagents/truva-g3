@@ -167,64 +167,12 @@ func TestInjectedRedisAdaptersDoNotCloseApplicationClient(t *testing.T) {
 	}
 }
 
-func TestClusterAdaptersRejectLegacyPrefixesAndAcceptTypedKeyspaces(t *testing.T) {
+func TestClusterAdaptersAcceptTypedKeyspaces(t *testing.T) {
 	client := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{"127.0.0.1:1"}})
 	t.Cleanup(func() { _ = client.Close() })
 	keyspace, err := core.NewRedisKeyspace("cluster-prefix-test")
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	legacyConstructors := []struct {
-		name      string
-		construct func() error
-	}{
-		{
-			name: "HITL checkpoint",
-			construct: func() error {
-				_, err := NewRedisCheckpointStoreWithClient(client, WithCheckpointKeyPrefix("legacy:hitl"))
-				return err
-			},
-		},
-		{
-			name: "HITL command",
-			construct: func() error {
-				_, err := NewRedisCommandStoreWithClient(client, WithCommandStoreKeyPrefix("legacy:hitl"))
-				return err
-			},
-		},
-		{
-			name: "execution debug",
-			construct: func() error {
-				_, err := NewRedisExecutionDebugStoreWithClient(
-					client,
-					DefaultExecutionStoreConfig(),
-					WithExecutionDebugKeyPrefix("legacy:execution"),
-				)
-				return err
-			},
-		},
-		{
-			name: "LLM debug",
-			construct: func() error {
-				_, err := NewRedisLLMDebugStoreWithClient(client, WithDebugKeyPrefix("legacy:llm"))
-				return err
-			},
-		},
-		{
-			name: "schedule",
-			construct: func() error {
-				_, err := NewRedisScheduleStore(client, &RedisScheduleStoreConfig{KeyPrefix: "legacy:schedules"})
-				return err
-			},
-		},
-	}
-	for _, test := range legacyConstructors {
-		t.Run(test.name, func(t *testing.T) {
-			if err := test.construct(); !errors.Is(err, core.ErrInvalidConfiguration) {
-				t.Fatalf("legacy cluster constructor error = %v, want ErrInvalidConfiguration", err)
-			}
-		})
 	}
 
 	checkpoint, err := NewRedisCheckpointStoreWithClient(client, WithCheckpointKeyspace(keyspace, "agent"))

@@ -105,9 +105,6 @@ func (target *deterministicTargetOrchestrator) GetMetrics() orchestration.Orches
 }
 
 func runTargetAgent(ctx context.Context, config Config, port int) error {
-	if strings.TrimSpace(config.RedisURL) == "" {
-		return fmt.Errorf("target agent: REDIS_URL is required")
-	}
 	agent, framework, err := newAgentFramework(portableTargetService, config, port, true)
 	if err != nil {
 		return err

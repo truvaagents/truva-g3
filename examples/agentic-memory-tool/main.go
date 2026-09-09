@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -21,9 +20,14 @@ func main() {
 	if err := validateConfig(); err != nil {
 		log.Fatalf("Configuration error: %v", err)
 	}
+	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
+	if err != nil {
+		log.Fatalf("Redis configuration error: %v", err)
+	}
 
 	// 2. Create tool FIRST so component type is set for telemetry
 	tool := NewMemoryTool()
+	defer tool.Close()
 
 	// 3. Initialize telemetry AFTER tool creation
 	initTelemetry("agentic-memory-tool")
@@ -52,7 +56,7 @@ func main() {
 		core.WithNamespace(os.Getenv("NAMESPACE")),
 
 		// Discovery: tools can register but not discover
-		core.WithRedisURL(os.Getenv("REDIS_URL")),
+		core.WithRedisConnection(redisResolution),
 		core.WithDiscovery(true, "redis"),
 
 		// CORS for web access
@@ -122,12 +126,8 @@ func main() {
 
 // validateConfig validates all required configuration at startup.
 func validateConfig() error {
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return fmt.Errorf("REDIS_URL environment variable required")
-	}
-	if !strings.HasPrefix(redisURL, "redis://") && !strings.HasPrefix(redisURL, "rediss://") {
-		return fmt.Errorf("invalid REDIS_URL format (must start with redis:// or rediss://)")
+	if _, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv); err != nil {
+		return fmt.Errorf("invalid Redis configuration: %w", err)
 	}
 	if portStr := os.Getenv("PORT"); portStr != "" {
 		if _, err := strconv.Atoi(portStr); err != nil {

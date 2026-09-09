@@ -15,8 +15,6 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-const lockKeyPrefix = "truvag3:lock"
-
 var releaseOwnedLock = redis.NewScript(`
 if redis.call("GET", KEYS[1]) == ARGV[1] then
   return redis.call("DEL", KEYS[1])
@@ -28,23 +26,19 @@ return 0
 // owner-safe release. A delayed holder cannot delete a lease that expired and
 // was subsequently acquired by another process.
 type DistributedLock struct {
-	client    redis.Cmdable
-	namespace string
+	client   redis.Cmdable
+	keyspace core.RedisKeyspace
 
 	mu     sync.Mutex
 	tokens map[string]string
 }
 
-func NewDistributedLock(client redis.Cmdable, namespace string) (*DistributedLock, error) {
+func NewDistributedLock(client redis.Cmdable, keyspace core.RedisKeyspace) (*DistributedLock, error) {
 	if client == nil {
 		return nil, fmt.Errorf("redis adapter: distributed lock client is required")
 	}
-	namespace = strings.TrimSpace(namespace)
-	if namespace == "" {
-		return nil, fmt.Errorf("redis adapter: distributed lock namespace is required")
-	}
 	return &DistributedLock{
-		client: client, namespace: namespace, tokens: make(map[string]string),
+		client: client, keyspace: keyspace, tokens: make(map[string]string),
 	}, nil
 }
 
@@ -97,7 +91,7 @@ func (lock *DistributedLock) Release(ctx context.Context, key string) error {
 }
 
 func (lock *DistributedLock) redisKey(key string) string {
-	return lockKeyPrefix + ":" + lock.namespace + ":" + key
+	return lock.keyspace.Tagged("locks", key, "lease")
 }
 
 func validateLockKey(key string) (string, error) {

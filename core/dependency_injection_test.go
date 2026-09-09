@@ -33,17 +33,11 @@ func TestWithDiscoveryAutoConfiguresRedisURL(t *testing.T) {
 		}
 	})
 
-	t.Run("uses TRUVAG3_REDIS_URL environment variable", func(t *testing.T) {
+	t.Run("rejects removed TRUVAG3_REDIS_URL", func(t *testing.T) {
 		os.Unsetenv("REDIS_URL")
 		os.Setenv("TRUVAG3_REDIS_URL", "redis://truvag3.example.com:6379")
-
-		config, err := NewConfig(WithDiscovery(true, "redis"))
-		if err != nil {
-			t.Fatalf("NewConfig failed: %v", err)
-		}
-
-		if config.Discovery.RedisURL != "redis://truvag3.example.com:6379" {
-			t.Errorf("Expected RedisURL from TRUVAG3_REDIS_URL env var, got: %s", config.Discovery.RedisURL)
+		if _, err := NewConfig(WithDiscovery(true, "redis")); err == nil {
+			t.Fatal("expected removed Redis URL alias to fail")
 		}
 	})
 

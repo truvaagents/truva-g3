@@ -739,7 +739,7 @@ grep CURRENCYBEACON_API_KEY .env
 
 Verify the tool is registered with Redis:
 ```bash
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 KEYS 'truvag3:services:*'
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100
 ```
 
 **4. Port forward not working**

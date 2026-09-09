@@ -27,8 +27,6 @@ import (
 // Orphan agent_llm_call rows — those with no typed partner (reflection
 // job, knowledge-extraction hook, custom agent endpoints, step-scoped
 // agent-side calls orchestration doesn't record) — survive untouched.
-//
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md Layer 1.
 func DedupeLLMInteractions(interactions []LLMInteraction) []LLMInteraction {
 	if len(interactions) == 0 {
 		return interactions

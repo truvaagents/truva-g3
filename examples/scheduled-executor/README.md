@@ -143,7 +143,7 @@ examples/scheduled-executor/
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| Executor not consuming tasks | Redis unreachable or queue key wrong | Check `REDIS_URL` and `truvag3:tasks:queue:scheduled-executor` |
+| Executor not consuming tasks | Redis unreachable or queue key wrong | Check Redis topology, DB 0, and `truvag3:v1:<deployment>:tasks:queue:scheduled-executor`; producer and consumer must share the deployment namespace |
 | DLQ entry with `unknown_target_agent` | Target agent not registered | Check target agent is running via registry viewer |
 | DLQ entry with `max_retries_exhausted` | Target agent returning 5xx | Check target agent logs |
 | `catalog_agents_known` gauge = 0 | Registry empty | Check Redis and agent registrations |

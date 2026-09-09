@@ -3,6 +3,7 @@ package redisprovider
 import (
 	"crypto/tls"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -117,16 +118,13 @@ func TestClientConfigClonesTLSAndAddresses(t *testing.T) {
 
 func TestClientConfigEnvironmentUsesSharedResolver(t *testing.T) {
 	config, err := LoadClientConfigFromEnvironment(DefaultClientConfig(), lookupValues(map[string]string{
-		"TRUVAG3_REDIS_URL": "redis://legacy.example:6379/0",
+		"REDIS_URL": "redis://standalone.example:6379/0",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.connection.DB != 0 {
 		t.Fatalf("canonical DB = %d, want 0", config.connection.DB)
-	}
-	if got := config.Diagnostics(); len(got) != 1 || got[0] != "TRUVAG3_REDIS_URL is deprecated; use REDIS_URL" {
-		t.Fatalf("diagnostics = %#v", got)
 	}
 
 	_, err = LoadClientConfigFromEnvironment(DefaultClientConfig(), lookupValues(map[string]string{
@@ -155,8 +153,34 @@ func TestPhaseTwoClusterProfileHasNoLegacyRoleDatabases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.legacyRoleDB) != 0 {
-		t.Fatalf("cluster profile retained legacy role databases: %#v", config.legacyRoleDB)
+	if config.connection.DB != 0 {
+		t.Fatalf("Redis DB = %d, want 0", config.connection.DB)
+	}
+}
+
+func TestRemovedRedisSettingsAreRejectedOnlyForSelectedRoles(t *testing.T) {
+	for name, role := range removedRedisEnvironmentVariables {
+		t.Run(name, func(t *testing.T) {
+			for _, value := range []string{"0", "8", "unit-test-secret"} {
+				lookup := lookupValues(map[string]string{name: value})
+				_, err := LoadClientConfigFromEnvironment(DefaultClientConfig(), lookup)
+				if err == nil || !strings.Contains(err.Error(), name) || strings.Contains(err.Error(), "unit-test-secret") {
+					t.Fatalf("removed setting error = %v", err)
+				}
+				_, err = loadClientConfigFromEnvironment(DefaultClientConfig(), lookupForDefaultBackendRoles(lookup, []ClientRole{role}), false)
+				if err == nil {
+					t.Fatal("explicit connection override hid a removed selected-role setting")
+				}
+				other := ClientRoleSkills
+				if role == other {
+					other = ClientRoleExecution
+				}
+				_, err = LoadClientConfigFromEnvironment(DefaultClientConfig(), lookupForDefaultBackendRoles(lookup, []ClientRole{other}))
+				if err != nil {
+					t.Fatalf("unselected role setting affected construction: %v", err)
+				}
+			}
+		})
 	}
 }
 
@@ -175,7 +199,7 @@ func TestClusterEnvironmentIgnoresEmptyLegacyRoleDatabases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.legacyRoleDB) != 0 {
-		t.Fatalf("cluster profile retained empty legacy role databases: %#v", config.legacyRoleDB)
+	if config.connection.DB != 0 {
+		t.Fatalf("Redis DB = %d, want 0", config.connection.DB)
 	}
 }

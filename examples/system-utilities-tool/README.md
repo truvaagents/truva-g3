@@ -524,7 +524,7 @@ system-utilities-tool/
 
 ```bash
 # Check Redis registration
-kubectl exec -n truvag3-examples deploy/redis -- redis-cli KEYS "truvag3:*" | grep system
+kubectl exec -n truvag3-examples deploy/redis -- redis-cli SSCAN 'truvag3:v1:default:registry:{default:registry}:index:all' 0 COUNT 100 | grep system
 
 # Check tool logs
 ./setup.sh logs

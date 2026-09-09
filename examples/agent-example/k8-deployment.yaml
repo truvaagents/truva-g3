@@ -53,12 +53,6 @@ spec:
               name: research-agent-config
               key: redis_url
               optional: false
-        - name: TRUVAG3_REDIS_URL  # For backward compatibility
-          valueFrom:
-            configMapKeyRef:
-              name: research-agent-config
-              key: redis_url
-              optional: false
         # Redis Registration Resilience (handles Redis startup race conditions)
         - name: TRUVAG3_DISCOVERY_RETRY
           value: "true"

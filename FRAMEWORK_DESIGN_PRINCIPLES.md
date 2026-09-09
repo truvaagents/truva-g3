@@ -1,6 +1,6 @@
 # TruvaG3 Framework Design Principles & Architecture Guidelines
 
-**Version**: 1.9
+**Version**: 1.10
 
 **Purpose**: Ensure consistency and maintainability across all framework development
 
@@ -487,6 +487,19 @@ func (a *Agent) Process(ctx context.Context) error {
 ## Testing Requirements
 
 ### Unit Test Coverage
+
+Unit tests are mandatory for every production behavior that can be isolated,
+and the existing CI workflow is their required automated gate. CI must run the
+complete default unit-test selection without `-short`; it must not skip part of
+the unit suite to shorten the gate. Prefer focused tests with narrow mocks,
+fakes, and existing in-memory fixtures.
+
+Integration tests are optional, manually invoked supplements. If written, they
+must remain outside CI (for example, behind an `integration` build tag and any
+required explicit environment opt-in). They do not replace mandatory unit
+coverage, and unit tests must not claim to prove real-server redirects,
+replication, failover, or other behavior that only a live topology can verify.
+
 - **Same-change ownership**: Every newly written production behavior that can
   be isolated must receive a unit test in the same change. This includes public
   adapters and defaulting wrappers, even when their implementation is small;
@@ -499,7 +512,8 @@ func (a *Agent) Process(ctx context.Context) error {
 - **Error Paths**: Test failure scenarios and error propagation
 - **Edge Cases**: Empty configurations, missing dependencies, network failures
 
-### Integration Test Patterns
+### Unit Test Pattern
+
 ```go
 // ✅ Good: Test actual framework behavior
 func TestFrameworkDependencyInjection(t *testing.T) {
@@ -557,6 +571,16 @@ return fmt.Errorf("failed to connect to Redis at %s: %w", url, err)
 ---
 
 ## Backwards Compatibility
+
+### Development-stage Redis cleanup exception
+
+The author confirmed on 2026-09-08 that the framework remains in development
+with no external users. The Redis/Valkey DB-0 cleanup therefore removes obsolete
+APIs and configuration directly, updates every in-repository caller/example,
+and documents the source changes without a precursor release, migration layer,
+or waiting period. This is a scoped exception for this cleanup, not a waiver of
+dependency, ownership, payload-fidelity, logging, tracing, or testing contracts.
+The released-API policy below remains the policy for future adopted releases.
 
 ### API Stability
 - Public interfaces are stable once released
@@ -703,7 +727,8 @@ func (t *BaseTool) processRequest() {
 1. **Design interfaces first** in `core` module
 2. **Implement in separate module** (avoid core bloat)
 3. **Provide intelligent defaults** in configuration system
-4. **Add comprehensive tests** including integration scenarios
+4. **Add mandatory comprehensive unit tests** with focused mocks and in-memory
+   fixtures; any integration tests remain optional, manual, and outside CI
 5. **Update documentation** with examples
 
 ### Modifying Existing Features  
@@ -716,7 +741,9 @@ func (t *BaseTool) processRequest() {
 - [ ] Follows interface-first design
 - [ ] Maintains Tool/Agent architectural separation
 - [ ] Includes intelligent configuration defaults
-- [ ] Has comprehensive test coverage
+- [ ] Every isolatable production behavior has mandatory unit-test coverage
+- [ ] CI runs the complete default unit-test selection without `-short`
+- [ ] Any integration tests are optional, manually invoked, and excluded from CI
 - [ ] Provides clear error messages
 - [ ] Updates relevant documentation
 - [ ] No backwards compatibility breaks without major version
@@ -725,9 +752,8 @@ func (t *BaseTool) processRequest() {
       architecture decision and corresponding principles update
 - [ ] Telemetry usage is nil-safe (checks before use)
 - [ ] Application examples show proper telemetry initialization
-- [ ] Storage-topology changes are exercised against every claimed real
-      topology/provider family, including routing changes and failover—not only
-      mocks, emulators, or locally computed partition keys
+- [ ] Verification claims distinguish mandatory unit-test evidence from any
+      optional live-topology evidence; mocks do not claim real failover behavior
 
 ---
 
@@ -735,6 +761,7 @@ func (t *BaseTool) processRequest() {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.10 | 2026-09-08 | Recorded the author-approved development-stage Redis API cleanup exception and the mandatory, complete unit-test CI gate without `-short`; integration tests remain optional, manual, and outside CI |
 | 1.9 | 2026-09-01 | Required real provider/topology integration gates for storage-routing claims, including routing transitions and failover beyond mock or computed-key coverage |
 | 1.8 | 2026-08-31 | Recorded the Redis/Valkey constructor-redaction retirement, bounded startup-error contract, and the exact Redis-provider legacy transformations retained for the later repository-wide audit |
 | 1.7 | 2026-08-31 | Clarified that precedence ranks valid representations, while contradictory or mutually exclusive configuration forms fail validation instead of silently overriding one another |
