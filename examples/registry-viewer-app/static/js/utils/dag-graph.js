@@ -96,7 +96,7 @@ export function isPostExecutionHook(hook) {
 }
 
 /**
- * Trace spans wrap hook implementations. Some framework hooks already expose
+ * Stored hook records wrap hook implementations. Some framework hooks expose
  * their internal operations as richer LLM-debug nodes. Suppress only those
  * wrapper nodes in Full Flow so the graph does not imply duplicate execution;
  * the Pre/Post tabs still show both the hook invocation and its operations.
@@ -131,30 +131,21 @@ export function pipelineHookHasDetailedInteractions(hook, interactions) {
 }
 
 /**
- * Associate AfterPlanning spans with the latest phase plan created before the
- * span began. The trace schema does not carry phase_number on hook spans, but
- * both timestamps are authoritative and preserve the actual iterative order.
- * Hooks that cannot be placed safely remain tab-visible and are omitted from
- * Full Flow instead of being attached to a guessed phase.
+ * Associate AfterPlanning hook records with their explicitly stored iterative
+ * plan phase. Unknown phases remain tab-visible and are omitted from Full Flow
+ * instead of being attached to a guessed phase.
  */
 export function assignAfterPlanningHooksToPhases(hooks, phasePlans) {
     const plans = phasePlans || [];
     const assignments = plans.map(() => []);
-    const planTimes = plans.map(plan => Date.parse(plan?.created_at || ''));
 
     (hooks || []).forEach(hook => {
-        const hookTime = Date.parse(hook?.started_at || '');
-        if (!Number.isFinite(hookTime)) return;
-
-        let bestIndex = -1;
-        let bestTime = -Infinity;
-        planTimes.forEach((planTime, index) => {
-            if (Number.isFinite(planTime) && planTime <= hookTime && planTime > bestTime) {
-                bestIndex = index;
-                bestTime = planTime;
-            }
-        });
-        if (bestIndex >= 0) assignments[bestIndex].push(hook);
+        const phaseNumber = Number(hook?.plan_phase);
+        if (!Number.isInteger(phaseNumber) || phaseNumber <= 0) return;
+        const phaseIndex = plans.findIndex((plan, index) =>
+            Number(plan?.phase_number || index + 1) === phaseNumber
+        );
+        if (phaseIndex >= 0) assignments[phaseIndex].push(hook);
     });
 
     return assignments;

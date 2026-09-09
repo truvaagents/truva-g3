@@ -651,6 +651,7 @@ func (t *HITLChatAgent) registerCapabilities() {
 
 // RegisterHITLCapabilities registers HITL-specific endpoints using the framework's handler.
 func (t *HITLChatAgent) RegisterHITLCapabilities(hitlHandler *orchestration.HITLHandler) {
+	t.RegisterCapability(hitlWebhookCapability())
 	// Custom SSE resume endpoint (returns SSE, not JSON)
 	t.RegisterCapability(core.Capability{
 		Name:        "hitl_resume_sse",

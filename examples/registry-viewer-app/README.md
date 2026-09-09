@@ -12,6 +12,7 @@ container-build changes described below.
 - [Quick Start](#quick-start)
 - [Setup Script Commands](#setup-script-commands)
 - [Configuration](#configuration)
+- [Live Data Verification](#live-data-verification)
 - [API Endpoints](#api-endpoints)
 - [Skills Management](#skills-management)
 - [Service Data Structure](#service-data-structure)
@@ -91,7 +92,7 @@ cd examples/registry-viewer-app
 **What `./setup.sh deploy` does:**
 1. Builds the Docker image with Go backend and embedded static files
 2. Loads the image into the Kind cluster
-3. Creates ConfigMap with Redis connection info (auto-extracted from k8-deployment/redis.yaml)
+3. Creates a ConfigMap for non-secret topology plus Secrets for URL/credentials and an optional CA
 4. Deploys the app to Kubernetes
 
 Once complete, the dashboard is available at:
@@ -101,6 +102,7 @@ Once complete, the dashboard is available at:
 | **Registry Viewer** | http://localhost:8361 | Web dashboard for service registry |
 | **API** | http://localhost:8361/api/services | JSON list of registered services |
 | **Health** | http://localhost:8361/api/health | Health check endpoint |
+| **Readiness** | http://localhost:8361/api/readiness | Redis topology and reachability check |
 
 ### Run Locally with Mock Data
 
@@ -124,11 +126,14 @@ Local Development:
   build         Build the application locally
   run           Run locally with mock data (default)
   run-redis     Run locally connected to Redis
+  verify        Read-only verification of every Viewer data path
+  verify-all    Strict verification with representative framework-owned data
   status        Show status of local/docker/k8s resources
 
 Docker:
-  docker        Build Docker image
-  docker-run    Run Docker container locally
+  docker             Build Docker image
+  docker-run         Run Docker container locally with mock data
+  docker-run redis   Run Docker container with URL or structured Redis configuration
 
 Kubernetes Deployment:
   deploy        Build, load to Kind, and deploy to K8s
@@ -145,8 +150,8 @@ Kubernetes Deployment:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-mock` | `true` | Use mock data instead of Redis |
-| `-redis-url` | `redis://localhost:6379` | Redis connection URL |
-| `-namespace` | `truvag3` | Redis key namespace for service discovery |
+| `-redis-url` | unset | Deprecated DB-0 standalone URL override; use connection environment for new deployments |
+| `-namespace` | `default` | Deployment namespace shared by all versioned DB-0 keys |
 | `-port` | `8361` | HTTP server port |
 
 ### Environment Variables
@@ -155,15 +160,24 @@ Environment variables override command-line flags, making the app easy to config
 
 | Variable | Description |
 |----------|-------------|
-| `REDIS_URL` | Redis connection URL (overrides `-redis-url`) |
-| `REDIS_NAMESPACE` | Redis key namespace (overrides `-namespace`) |
+| `REDIS_URL` | Standard DB-0 standalone Redis/Valkey shorthand |
+| `TRUVAG3_REDIS_MODE` / `TRUVAG3_REDIS_ADDRS` | Structured standalone, Sentinel, or cluster topology; mutually exclusive with `REDIS_URL` |
+| `TRUVAG3_REDIS_MASTER_NAME` | Sentinel master name |
+| `TRUVAG3_REDIS_DB` | Logical database; must be `0` for every Registry Viewer topology |
+| `TRUVAG3_REDIS_USERNAME` / `TRUVAG3_REDIS_PASSWORD` | Data-node ACL credentials; deployed through a Kubernetes Secret |
+| `TRUVAG3_REDIS_SENTINEL_USERNAME` / `TRUVAG3_REDIS_SENTINEL_PASSWORD` | Sentinel ACL credentials; deployed through a Kubernetes Secret |
+| `TRUVAG3_REDIS_TLS_ENABLED` / `TRUVAG3_REDIS_TLS_SERVER_NAME` | Structured-topology TLS settings |
+| `TRUVAG3_REDIS_CA_FILE` | Host PEM CA path copied to a read-only Secret volume for Kubernetes deployment |
+| `TRUVAG3_REDIS_POOL_SIZE` / `TRUVAG3_REDIS_MIN_IDLE_CONNS` | Optional shared client pool settings |
+| `TRUVAG3_REDIS_DIAL_TIMEOUT` / `TRUVAG3_REDIS_READ_TIMEOUT` / `TRUVAG3_REDIS_WRITE_TIMEOUT` | Optional shared client timeouts |
+| `TRUVAG3_REDIS_MAX_RETRIES` | Optional shared client retry limit |
+| `TRUVAG3_REDIS_NAMESPACE` | Deployment key namespace (overrides `REDIS_NAMESPACE` and `-namespace`) |
+| `REDIS_NAMESPACE` | Deprecated Viewer-only namespace alias (overrides `-namespace`) |
 | `USE_MOCK` | Set to `false` to use Redis (overrides `-mock`) |
 | `PORT` | HTTP server port (overrides `-port`) |
 | `APP_ENV` | Selects the `development` (default), `staging`, or `production` telemetry profile |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP endpoint used by Registry Viewer and framework telemetry |
-| `JAEGER_QUERY_URL` | Server-side Jaeger Query base URL used to enrich execution details. A direct binary start leaves enrichment disabled; `setup.sh deploy` supplies `http://jaeger-query` by default. |
 | `JAEGER_UI_URL` | Browser-facing Jaeger UI base URL used by trace redirects (default `http://jaeger.localhost`) |
-| `TRUVAG3_SKILLS_REDIS_DB` | Redis role database for skill packages (default `9`) |
 | `TRUVAG3_SKILL_AUTHORING_MAX_NAME_CHARS` | Maximum namespace/name/domain/tag/resource slug length (default `64`) |
 | `TRUVAG3_SKILL_AUTHORING_MAX_DESCRIPTION_CHARS` | Maximum main skill catalog-description length (default `1024`) |
 | `TRUVAG3_SKILL_AUTHORING_MAX_MANIFEST_TOKENS` | Maximum estimated tokens in one main manifest (default `5000`) |
@@ -182,25 +196,47 @@ non-positive values fail application startup. See the
 for the runtime variables consumed by skill-enabled agents.
 
 The binary reads these settings from its process environment. The bundled
-`setup.sh` currently materializes `TRUVAG3_SKILLS_REDIS_DB` but does not copy the
-authoring/admin overrides from the invoking shell into the Deployment. For a
-persistent Kubernetes override, add the chosen keys to your deployment
-configuration (and to the example ConfigMap/env mapping if you retain the
-bundled manifest).
+`setup.sh` forwards the shared connection form and DB-0 deployment namespace,
+but does not copy authoring/admin overrides from the invoking shell into the
+Deployment. For a persistent Kubernetes override, add the chosen keys to your
+deployment configuration (and to the example ConfigMap/env mapping if you
+retain the bundled manifest).
 
-### Kubernetes ConfigMap
+### Kubernetes Configuration
 
-When deployed to Kubernetes, the app reads configuration from a ConfigMap named `registry-viewer-config`. The `setup.sh deploy` command automatically:
+When deployed to Kubernetes, the app reads non-secret configuration from
+`registry-viewer-config`, URL/ACL values from
+`registry-viewer-redis-credentials`, and an optional PEM CA from
+`registry-viewer-redis-ca`. The `setup.sh deploy` command automatically:
 
 1. Extracts Redis service info from `../k8-deployment/redis.yaml`
-2. Creates/updates the ConfigMap with the correct Redis URL
-3. Deploys the app with environment variables from the ConfigMap
+2. Creates or updates the topology ConfigMap and credential/CA Secrets
+3. Deploys the app with environment variables and the optional CA mount from those objects
 
 To override the Redis URL during deployment:
 
 ```bash
 REDIS_URL=redis://custom-redis:6379 ./setup.sh deploy
 ```
+
+`REDIS_URL` is stored in `registry-viewer-redis-credentials`, not the
+ConfigMap, because the URL may contain credentials. Structured ACL credentials
+use the same Secret. Non-secret topology, namespace, pool, timeout, and retry
+settings remain in `registry-viewer-config`.
+
+## Live Data Verification
+
+After forwarding the Viewer port, run the read-only API contract check:
+
+```bash
+./setup.sh verify
+```
+
+To prove representative service, execution, conversation, LLM, HITL, skill,
+memory, and trace evidence, supply the documented expected identifiers and run
+`./setup.sh verify-all`. The complete producer workflow, environment variables,
+manual UI checklist, and cluster acceptance rules are in
+[LIVE_DATA_VERIFICATION.md](LIVE_DATA_VERIFICATION.md).
 
 ## API Endpoints
 
@@ -209,11 +245,12 @@ REDIS_URL=redis://custom-redis:6379 ./setup.sh deploy
 | `GET /` | Web UI |
 | `GET /api/services` | JSON list of all registered services |
 | `GET /api/health` | Health check endpoint |
+| `GET /api/readiness` | Credential-safe Redis reachability, topology, DB-0, and deployment-namespace status |
 | `GET /api/llm-debug` | List recent LLM debug records |
 | `GET /api/llm-debug/{request_id}` | Get full debug record by request ID |
 | `GET /api/executions` | List recent executions in the existing flat response shape |
-| `GET /api/executions?group_conversations=true` | List server-owned conversation groups; stable DB 8 sorts support filter-aware cursor pagination |
-| `GET /api/executions/{request_id}/unified` | Get the unified execution, DAG, LLM, HITL, trace, and conversation detail |
+| `GET /api/executions?group_conversations=true` | List server-owned conversation groups; stable execution-debug indexes support filter-aware cursor pagination |
+| `GET /api/executions/{request_id}/unified` | Get unified execution, DAG, LLM, HITL, stored trace identity, and conversation detail |
 | `GET /api/traces/{trace_id}` | Temporarily redirect the browser to the trace page under the configured `JAEGER_UI_URL` |
 | `GET /api/conversations?conversation_id={id}` | Get one verified chronological conversation timeline |
 | `GET /api/v1/skills` | List body-free published skill metadata; optional `namespace`, `domain`, `tag`, and `limit` filters |
@@ -238,12 +275,13 @@ Built-in stores preserve those payloads rather than inferring redaction. Do not
 expose the bundled local ingress to an untrusted network without an application-
 owned authentication, authorization, and data-protection layer.
 
-The conversation endpoints read framework-owned LLM evidence from Redis DB 7
-and execution evidence from DB 8. DB 7 is read-only to the Viewer. DB 8 is not:
+The conversation endpoints read framework-owned LLM and execution evidence
+from their versioned subspaces on one shared DB-0 client. LLM-debug records are
+read-only to the Viewer. The execution-debug projection is not:
 grouped and timeline reads remove only index members whose authoritative
 execution key has been confirmed missing. They never delete an execution record
-or invent a relationship. The Viewer therefore needs read access to DB 7 and
-read/write access to the DB 8 sorted-set indexes.
+or invent a relationship. The Viewer therefore needs read access to the
+LLM-debug subspace and read/write access to execution-debug sorted-set indexes.
 
 ### Grouped execution safety bounds
 
@@ -265,29 +303,29 @@ Viewer implementation limits, not `TRUVAG3_*` framework configuration:
 | Maximum encoded grouped cursor length | 2048 bytes |
 | Background stale global-index scan | 200 members, at most once per 30 seconds per Viewer process |
 
-When a DB 8 membership or grouping bound is reached, the response sets
+When an execution-debug membership or grouping bound is reached, the response sets
 `partial=true` and omits a grouped continuation cursor. The existing flat
 execution list remains available for request-by-request troubleshooting.
 
 Elapsed-duration sorting (`sort=total_duration_ms`, retained as the compatible
 query name) uses a non-additive wall-clock envelope. The baseline is the stored
-phase-loop duration. Step timestamps may extend that envelope, and bounded DB 7
+phase-loop duration. Step timestamps may extend that envelope, and bounded LLM-debug
 enrichment may extend it to include LLM calls that occurred outside the first
 and last recorded step. The Viewer takes the largest credible envelope; it does
 not add step and LLM durations that may overlap. Aggregate LLM call time is
 reported separately.
 
-Because the elapsed envelope can depend on mutable DB 7 evidence, duration
+Because the elapsed envelope can depend on mutable LLM-debug evidence, duration
 sorting is a bounded point-in-time sort: when more groups exist than the
 requested limit, the response is partial and does not provide a continuation
 cursor. A supplied duration-sort cursor is rejected. Created and request-text
-sorts use immutable DB 8 values and retain grouped keyset pagination.
+sorts use immutable execution-debug values and retain grouped keyset pagination.
 
-If a DB 7 enrichment read fails or reaches any enrichment bound, timeline and
+If an LLM-debug enrichment read fails or reaches any enrichment bound, timeline and
 grouped responses set `llm_enrichment_incomplete=true`. Created and request-text
-sorts paginate from DB 8 first and enrich only the returned page, so incomplete
-optional DB 7 details do not suppress their valid `next_cursor`. Combined
-duration sorting sets `partial=true` when enrichment is incomplete because DB 7
+sorts paginate from execution-debug indexes first and enrich only the returned page, so incomplete
+optional LLM-debug details do not suppress their valid `next_cursor`. Combined
+duration sorting sets `partial=true` when enrichment is incomplete because LLM-debug data
 contributes to its ordering. The Viewer does not publish a partial per-execution
 LLM duration or call count as though it were complete.
 
@@ -313,17 +351,32 @@ business outcome.
 ### Unified-detail enrichment cost
 
 Each `GET /api/executions/{request_id}/unified` load is assembled on demand and
-is not cached by the Viewer. It reads the DB 8 execution, reads bounded DB 7 LLM
+is not cached by the Viewer. It reads the execution record, reads bounded LLM-debug
 evidence, may fan out to agent checkpoint APIs for HITL state, and may inspect
-up to 200 recent execution summaries to find an HITL sibling. When
-`JAEGER_QUERY_URL` is configured, it also makes one synchronous Jaeger request
-with a three-second HTTP client timeout and an 8 MiB response limit. Jaeger
-failure marks trace enrichment unavailable but does not fail the Redis-backed
-execution detail.
+up to 200 recent execution summaries to find an HITL sibling. Pipeline-hook
+diagnostics are part of the provider-neutral execution record; the Viewer never
+queries Jaeger to construct execution detail. A stored trace ID provides only
+an optional browser link through `JAEGER_UI_URL`.
+
+Hook-card status is explicitly labeled as an **invocation outcome**. A
+successful invocation means the hook callback returned normally; it does not
+assert that fail-open or asynchronously scheduled side effects completed.
+Each card renders separately statused **Reported effects** from the stored
+execution record. Expanding **View captured values** shows the exact versioned
+JSON retained by the execution store—for example the activity signal and
+selected coordination context, injected memory context, submitted episodic
+event envelopes, extracted knowledge fragments, or cleanup call. Effect status
+is labeled as the producer's report, not an independent durability guarantee;
+fail-open memory providers may expose stronger internal failure detail only in
+their logs. Pending asynchronous knowledge extraction is replaced by its
+terminal result through a later provider-neutral execution-record write; the
+Viewer still performs no Jaeger query.
 
 ## Service Data Structure
 
-The app expects services to be stored in Redis with keys matching the pattern `{namespace}:services:*`. Each service should be a JSON object:
+The app reads services through Core's registry adapter. Canonical service keys
+match `truvag3:v1:<deployment>:registry:{<deployment>:registry}:service:*` and
+each value is a JSON object:
 
 ```json
 {
@@ -395,9 +448,11 @@ The app expects services to be stored in Redis with keys matching the pattern `{
 registry-viewer-app/
 ├── main.go                  # HTTP server, registry, execution, HITL, and memory APIs
 ├── conversation_api.go      # Conversation grouping and timeline API
-├── jaeger_trace.go          # Jaeger enrichment and browser redirect
+├── jaeger_trace.go          # Optional browser redirect for stored trace IDs
 ├── skills_api.go            # Skills management API host
 ├── redis_storage_provider.go # Redis adapter used by viewer APIs
+├── LIVE_DATA_VERIFICATION.md # Standalone/cluster API and UI acceptance runbook
+├── scripts/                  # Read-only live-data verification
 ├── go.mod                   # Module plus local framework replacements
 ├── go.sum                   # Dependency checksums
 ├── static/                  # HTML, CSS, JavaScript, and image assets
@@ -450,9 +505,9 @@ Redis, Grafana, Prometheus, and Jaeger retains its own ports and ingress routes.
 
 | Variable | Description |
 |----------|-------------|
-| `REDIS_URL` | Override Redis URL for deployment (default: extracted from redis.yaml) |
-| `REDIS_NAMESPACE` | Redis key namespace (default: `truvag3`) |
-| `JAEGER_QUERY_URL` | Jaeger Query base URL supplied to the Deployment (default: `http://jaeger-query`) |
+| `REDIS_URL` | Override the DB-0 standalone shorthand (default: extracted from `redis.yaml`) |
+| `TRUVAG3_REDIS_MODE` / `TRUVAG3_REDIS_ADDRS` | Select structured standalone, Sentinel, or cluster topology instead of `REDIS_URL` |
+| `TRUVAG3_REDIS_NAMESPACE` | Versioned DB-0 deployment namespace (default: `default`) |
 | `JAEGER_UI_URL` | Browser-facing Jaeger UI base URL supplied to the Deployment (default: `http://jaeger.localhost`) |
 | `DOCKER_NO_CACHE` | Set to `true` for fresh Docker build |
 
@@ -469,7 +524,6 @@ Enable LLM debug storage to capture full request/response payloads for troublesh
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable LLM debug payload storage |
 | `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base retention for successful debug records; lineage promotion may extend it |
 | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | Base retention for error debug records; HITL or investigation retention may extend it |
-| `TRUVAG3_LLM_DEBUG_REDIS_DB` | `7` | Redis database number for debug storage |
 
 **Example:**
 ```bash
@@ -490,8 +544,7 @@ Configure HITL checkpoints for human oversight of AI-generated plans:
 | `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` | (empty) | Capabilities requiring step-only approval (comma-separated) |
 | `TRUVAG3_HITL_STEP_SENSITIVE_AGENTS` | (empty) | Agents requiring step-only approval (comma-separated) |
 | `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | Timeout for human response |
-| `TRUVAG3_HITL_REDIS_DB` | `6` | Redis database number for HITL data |
-| `TRUVAG3_HITL_KEY_PREFIX` | `truvag3:hitl` | Redis key prefix for HITL data |
+| `TRUVAG3_REDIS_NAMESPACE` | `default` | Deployment namespace shared with agents for all versioned Redis/Valkey DB 0 data |
 
 **Example:**
 ```bash

@@ -6,12 +6,11 @@ import (
 	"github.com/truvaagents/truva-g3/orchestration"
 )
 
-// TestDedupeLLMInteractions_DropsPairedShadow covers the core Layer 1
+// TestDedupeLLMInteractions_DropsPairedShadow covers the deduplication
 // contract: an agent_llm_call row with the same prompt/response/duration/
 // step_id/phase_number as a typed row is dropped, typed row is retained.
 // This is the pair produced on every orchestration-initiated LLM call when
 // the agent wraps core.AIClient with ai.InstrumentedAIClient.
-// See orchestration/bugs/BUG_LLM_INTERACTION_DOUBLE_RECORDING.md Layer 1.
 func TestDedupeLLMInteractions_DropsPairedShadow(t *testing.T) {
 	paired := []orchestration.LLMInteraction{
 		{

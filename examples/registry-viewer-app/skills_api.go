@@ -8,36 +8,42 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 	"github.com/truvaagents/truva-g3/orchestration/redisprovider"
 )
 
 func newSkillAdminAPI(
+	client redis.UniversalClient,
 	keyNamespace string,
 	logger core.Logger,
 	telemetry core.Telemetry,
 ) (httpHandler orchestrationHTTPHandler, closer io.Closer, err error) {
-	defaultOptions := []redisprovider.DefaultBackendsOption{
-		redisprovider.WithDefaultBackendRoles(redisprovider.ClientRoleSkills),
+	clients, err := redisprovider.NewClientSet(nil,
+		redisprovider.WithRoleClient(redisprovider.ClientRoleSkills, client),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create skills client set: %w", err)
 	}
+	providerOptions := []redisprovider.Option{redisprovider.WithLogger(logger)}
 	if strings.TrimSpace(keyNamespace) != "" {
-		defaultOptions = append(defaultOptions, redisprovider.WithDefaultBackendProviderOptions(
-			redisprovider.WithNamespace(strings.TrimSpace(keyNamespace)),
-		))
+		providerOptions = append(providerOptions, redisprovider.WithDeployment(strings.TrimSpace(keyNamespace)))
 	}
-	owned, err := redisprovider.NewDefaultBackends(logger, defaultOptions...)
+	options, err := redisprovider.NewOptions(providerOptions...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create default skills backends: %w", err)
+		return nil, nil, fmt.Errorf("configure skills backends: %w", err)
 	}
-	dependencies, err := owned.Backends().SkillAdministrationDependencies()
+	backends, err := redisprovider.NewOrchestrationBackends(clients, options)
 	if err != nil {
-		_ = owned.Close()
+		return nil, nil, fmt.Errorf("create skills backends: %w", err)
+	}
+	dependencies, err := backends.SkillAdministrationDependencies()
+	if err != nil {
 		return nil, nil, fmt.Errorf("wire skills administration backends: %w", err)
 	}
 	authoringLimits, adminLimits, err := skillAdminLimitsFromEnvironment()
 	if err != nil {
-		_ = owned.Close()
 		return nil, nil, err
 	}
 	dependencies.AuthoringLimits = authoringLimits
@@ -46,11 +52,14 @@ func newSkillAdminAPI(
 	dependencies.Telemetry = telemetry
 	handler, err := orchestration.NewSkillAdminHandler(dependencies)
 	if err != nil {
-		_ = owned.Close()
 		return nil, nil, fmt.Errorf("create skills HTTP handler: %w", err)
 	}
-	return handler, owned, nil
+	return handler, noOpCloser{}, nil
 }
+
+type noOpCloser struct{}
+
+func (noOpCloser) Close() error { return nil }
 
 // orchestrationHTTPHandler is the small host-facing surface needed from the
 // framework handler and keeps this example's setup independently testable.

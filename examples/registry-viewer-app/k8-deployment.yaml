@@ -1,6 +1,6 @@
 # Registry Viewer - Kubernetes Deployment
 # Connects to Redis service defined in ../k8-deployment/redis.yaml
-# Redis URL can be overridden via REDIS_URL environment variable
+# Redis topology is resolved through the framework's shared configuration.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -11,19 +11,26 @@ metadata:
     app: registry-viewer
     component: ui
 data:
-  # Default Redis URL - points to Redis service in same namespace
-  # Format: redis://<service-name>.<namespace>.svc.cluster.local:<port>
-  # Simplified: redis://<service-name>:<port> (same namespace)
-  REDIS_URL: "redis://redis:6379"
-  REDIS_NAMESPACE: "truvag3"
+  TRUVAG3_REDIS_MODE: "standalone"
+  TRUVAG3_REDIS_ADDRS: "redis:6379"
+  TRUVAG3_REDIS_MASTER_NAME: ""
+  TRUVAG3_REDIS_DB: "0"
+  TRUVAG3_REDIS_NAMESPACE: "default"
+  TRUVAG3_REDIS_TLS_ENABLED: "false"
+  TRUVAG3_REDIS_TLS_SERVER_NAME: ""
+  TRUVAG3_REDIS_CA_FILE: ""
+  TRUVAG3_REDIS_POOL_SIZE: ""
+  TRUVAG3_REDIS_MIN_IDLE_CONNS: ""
+  TRUVAG3_REDIS_DIAL_TIMEOUT: ""
+  TRUVAG3_REDIS_READ_TIMEOUT: ""
+  TRUVAG3_REDIS_WRITE_TIMEOUT: ""
+  TRUVAG3_REDIS_MAX_RETRIES: ""
   USE_MOCK: "false"
   PORT: "8361"
   APP_ENV: "development"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
-  JAEGER_QUERY_URL: "http://jaeger-query"
   JAEGER_UI_URL: "http://jaeger.localhost"
   TRUVAG3_VIEWER_MEMORY_DOMAINS: "infrastructure"
-  TRUVAG3_SKILLS_REDIS_DB: "9"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -33,6 +40,7 @@ metadata:
   labels:
     app: registry-viewer
     component: ui
+    truvag3.io/setup-workload: "true"
 spec:
   replicas: 1
   selector:
@@ -51,60 +59,19 @@ spec:
         ports:
         - containerPort: 8361
           name: http
-        env:
-        # Load config from ConfigMap (can be overridden by pod-level env vars)
-        - name: REDIS_URL
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: REDIS_URL
-        - name: REDIS_NAMESPACE
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: REDIS_NAMESPACE
-        - name: USE_MOCK
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: USE_MOCK
-        - name: PORT
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: PORT
-        - name: APP_ENV
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: APP_ENV
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: OTEL_EXPORTER_OTLP_ENDPOINT
-        - name: JAEGER_QUERY_URL
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: JAEGER_QUERY_URL
-        - name: JAEGER_UI_URL
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: JAEGER_UI_URL
-        - name: TRUVAG3_VIEWER_MEMORY_DOMAINS
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: TRUVAG3_VIEWER_MEMORY_DOMAINS
-              optional: true
-        - name: TRUVAG3_SKILLS_REDIS_DB
-          valueFrom:
-            configMapKeyRef:
-              name: registry-viewer-config
-              key: TRUVAG3_SKILLS_REDIS_DB
-              optional: true
+        # Non-secret topology and Viewer settings come from the ConfigMap.
+        # REDIS_URL and ACL credentials stay in a Secret because the URL may
+        # itself contain credentials.
+        envFrom:
+        - configMapRef:
+            name: registry-viewer-config
+        - secretRef:
+            name: registry-viewer-redis-credentials
+            optional: true
+        volumeMounts:
+        - name: redis-ca
+          mountPath: /etc/truvag3/redis-ca
+          readOnly: true
         resources:
           requests:
             cpu: "25m"
@@ -121,11 +88,16 @@ spec:
           timeoutSeconds: 3
         readinessProbe:
           httpGet:
-            path: /api/health
+            path: /api/readiness
             port: 8361
           initialDelaySeconds: 3
           periodSeconds: 5
           timeoutSeconds: 3
+      volumes:
+      - name: redis-ca
+        secret:
+          secretName: registry-viewer-redis-ca
+          optional: true
 ---
 apiVersion: v1
 kind: Service
@@ -135,6 +107,7 @@ metadata:
   labels:
     app: registry-viewer
     component: ui
+    truvag3.io/setup-workload: "true"
 spec:
   type: ClusterIP
   ports:

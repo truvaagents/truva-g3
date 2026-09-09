@@ -151,68 +151,147 @@ function pipelineHookPhaseLabel(phase) {
     return labels[phase] || String(phase || 'Unknown').replaceAll('_', ' ');
 }
 
-function formatPipelineHookDuration(durationUS) {
-    const microseconds = Number(durationUS) || 0;
+function formatPipelineHookDuration(durationNS) {
+    const microseconds = Math.round(Math.max(0, Number(durationNS) || 0) / 1000);
     if (microseconds < 1000) return `${microseconds}µs`;
     const milliseconds = microseconds / 1000;
     return milliseconds < 10 ? `${milliseconds.toFixed(2)}ms` : formatDuration(Math.round(milliseconds));
 }
 
+function pipelineHookStatus(status) {
+    switch (status) {
+    case 'succeeded':
+        return { css: 'completed', label: '✓ Invocation succeeded', text: 'INVOCATION SUCCEEDED', color: 'var(--accent-green)' };
+    case 'failed':
+        return { css: 'failed', label: '✗ Invocation failed', text: 'INVOCATION FAILED', color: 'var(--accent-red)' };
+    case 'skipped':
+        return { css: 'skipped', label: '– Invocation skipped', text: 'INVOCATION SKIPPED', color: 'var(--text-muted)' };
+    default:
+        return { css: 'pending', label: '? Invocation unknown', text: 'INVOCATION UNKNOWN', color: 'var(--accent-orange)' };
+    }
+}
+
+function pipelineHookEffectStatus(status) {
+    switch (status) {
+    case 'succeeded':
+        return { css: 'completed', label: 'Producer reports success', color: 'var(--accent-green)' };
+    case 'partial':
+        return { css: 'partial', label: 'Producer reports partial', color: 'var(--accent-orange)' };
+    case 'failed':
+        return { css: 'failed', label: 'Producer reports failure', color: 'var(--accent-red)' };
+    case 'skipped':
+        return { css: 'skipped', label: 'Producer reports skipped', color: 'var(--text-muted)' };
+    case 'pending':
+        return { css: 'pending', label: 'Producer reports pending', color: 'var(--accent-orange)' };
+    default:
+        return { css: 'pending', label: 'Effect status unknown', color: 'var(--accent-orange)' };
+    }
+}
+
+function renderPipelineHookEffects(effects) {
+    if (!effects?.length) {
+        return `<div class="pipeline-hook-effects-empty">No structured effects were reported by this invocation.</div>`;
+    }
+    return `<div class="pipeline-hook-effects">
+        <div class="pipeline-hook-effects-heading">Reported effects</div>
+        ${effects.map(effect => {
+            const status = pipelineHookEffectStatus(effect.status);
+            const hasData = effect.data !== undefined && effect.data !== null;
+            return `<article class="pipeline-hook-effect ${status.css}">
+                <div class="pipeline-hook-effect-header">
+                    <div>
+                        <span class="pipeline-hook-effect-name">${escapeHtml(effect.name || effect.effect_id || 'Unnamed effect')}</span>
+                        <span class="pipeline-hook-effect-id">${escapeHtml(effect.effect_id || '')}${effect.schema_version ? ` · schema v${Number(effect.schema_version)}` : ''}</span>
+                    </div>
+                    <span class="pipeline-hook-effect-status ${status.css}">${status.label}</span>
+                </div>
+                ${effect.summary ? `<div class="pipeline-hook-effect-summary">${escapeHtml(effect.summary)}</div>` : ''}
+                <div class="pipeline-hook-effect-meta">
+                    ${effect.started_at ? `<span>Started ${escapeHtml(formatDateTime(effect.started_at))}</span>` : ''}
+                    ${effect.duration ? `<span>${formatPipelineHookDuration(effect.duration)}</span>` : ''}
+                </div>
+                ${effect.error ? `<div class="pipeline-hook-effect-error"><span>Effect failure</span>${escapeHtml(effect.error)}</div>` : ''}
+                ${hasData ? `<details class="pipeline-hook-effect-values">
+                    <summary>View captured values</summary>
+                    <div class="json-container"><pre class="json-view pipeline-hook-effect-json">${syntaxHighlightJson(effect.data)}</pre></div>
+                </details>` : ''}
+            </article>`;
+        }).join('')}
+    </div>`;
+}
+
 function pipelineHookNodeData(hook, id) {
     const phase = pipelineHookPhaseLabel(hook.phase);
+    const hookName = hook.hook_name || 'Unknown hook';
     return {
         id,
-        label: `🪝 ${phase}\n${hook.hook_name}`,
+        label: `🪝 ${phase}\n${hookName}`,
         nodeType: 'pipeline_hook',
-        hookName: hook.hook_name || 'unknown',
+        hookName,
         hookPhase: hook.phase || '',
-        operationName: hook.operation_name || '',
-        hookStatus: hook.status || 'completed',
-        durationUS: hook.duration_us || 0,
-        traceID: hook.trace_id || selected?.trace_id || '',
-        spanID: hook.span_id || '',
+        hookStatus: hook.status || '',
+        durationNS: hook.duration || 0,
+        sequence: hook.sequence || 0,
+        planPhase: hook.plan_phase || 0,
         startedAt: hook.started_at || '',
+        error: hook.error || '',
+        effects: hook.effects || [],
     };
 }
 
 function renderPipelineHookObservations(hooks) {
     if (!hooks?.length) return '';
     return `
-        <section style="margin-bottom: 20px;">
-            <div style="font-size: 14px; font-weight: 600; color: #64d2ff; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
-                🪝 Pipeline hook executions
-                <span style="font-size: 11px; font-weight: 400; color: var(--text-muted);">${hooks.length} trace-backed invocation${hooks.length === 1 ? '' : 's'}</span>
+        <section class="pipeline-hook-section">
+            <div class="pipeline-hook-section-heading">
+                <span>🪝 Pipeline hook executions</span>
+                <span class="pipeline-hook-section-count">${hooks.length} recorded invocation${hooks.length === 1 ? '' : 's'}</span>
             </div>
-            ${hooks.map(hook => {
-                const failed = hook.status === 'failed';
-                const statusColor = failed ? 'var(--accent-red)' : 'var(--accent-green)';
-                return `
-                    <div class="dag-step-card" style="margin-bottom: 8px; border-left: 3px solid ${statusColor};">
-                        <div class="dag-step-header">
-                            <div class="dag-step-title">
-                                <span style="font-weight: 700; color: var(--text-primary);">${escapeHtml(hook.hook_name || 'unknown hook')}</span>
-                                <span class="dag-step-id">${escapeHtml(pipelineHookPhaseLabel(hook.phase))}</span>
+            <div class="pipeline-hook-card-list">
+                ${hooks.map(hook => {
+                    const status = pipelineHookStatus(hook.status);
+                    const startedAt = hook.started_at ? formatDateTime(hook.started_at) : 'Unavailable';
+                    const sequence = Number(hook.sequence);
+                    const order = Number.isInteger(sequence) && sequence > 0
+                        ? `#${sequence} in this phase`
+                        : 'Unavailable';
+                    const phaseDetail = hook.plan_phase
+                        ? `<span class="dag-step-label">Plan phase</span><span class="dag-step-value">${Number(hook.plan_phase)}</span>`
+                        : '';
+                    const errorDetail = hook.error
+                        ? `<span class="dag-step-label">Failure</span><span class="dag-step-value pipeline-hook-error">${escapeHtml(hook.error)}</span>`
+                        : '';
+                    return `
+                        <article class="dag-step-card pipeline-hook-card ${status.css}">
+                            <div class="dag-step-header">
+                                <div class="dag-step-title pipeline-hook-title">
+                                    <span class="pipeline-hook-kind">🪝 Hook</span>
+                                    <span class="pipeline-hook-name">${escapeHtml(hook.hook_name || 'Unknown hook')}</span>
+                                    <span class="dag-step-id">${escapeHtml(pipelineHookPhaseLabel(hook.phase))}</span>
+                                </div>
+                                <span class="dag-step-status ${status.css}">${status.label}</span>
                             </div>
-                            <span style="color: ${statusColor}; font-size: 11px; font-weight: 700;">${failed ? '✗ Failed' : '✓ Completed'}</span>
-                        </div>
-                        <div class="dag-step-body">
-                            <div class="dag-step-info">
-                                <span class="dag-step-label">Duration</span>
-                                <span class="dag-step-value">${formatPipelineHookDuration(hook.duration_us)}</span>
-                                <span class="dag-step-label">Evidence</span>
-                                <span class="dag-step-value" style="color: var(--accent-teal);">Jaeger pipeline span</span>
-                                <span class="dag-step-label">Operation</span>
-                                <span class="dag-step-value dag-mono">${escapeHtml(hook.operation_name || '')}</span>
-                                ${hook.span_id ? `<span class="dag-step-label">Span ID</span><span class="dag-step-value dag-mono">${escapeHtml(hook.span_id)}</span>` : ''}
+                            <div class="dag-step-body">
+                                <div class="dag-step-info pipeline-hook-info">
+                                    <span class="dag-step-label">Order</span>
+                                    <span class="dag-step-value">${order}</span>
+                                    ${phaseDetail}
+                                    <span class="dag-step-label">Duration</span>
+                                    <span class="dag-step-value">${formatPipelineHookDuration(hook.duration)}</span>
+                                    <span class="dag-step-label">Started</span>
+                                    <span class="dag-step-value">${escapeHtml(startedAt)}</span>
+                                    ${errorDetail}
+                                </div>
+                                ${renderPipelineHookEffects(hook.effects || [])}
                             </div>
-                        </div>
-                    </div>`;
-            }).join('')}
+                        </article>`;
+                }).join('')}
+            </div>
         </section>`;
 }
 
 // ---------------------------------------------------------------------------
-// LLM call identification primitives (ORCH-021 traceability)
+// LLM call identification primitives
 // ---------------------------------------------------------------------------
 // Derived entirely from fields LLMInteraction already carries — no Go-side
 // schema change needed. The same string is rendered in both the DAG popup
@@ -729,7 +808,7 @@ function updateDagLastUpdated(timestamp) {
 function updateGroupedDiagnostics(data) {
     const messages = [];
     if (data.llm_enrichment_incomplete) {
-        messages.push('LLM duration and call counts are incomplete because DB 7 could not be fully read.');
+        messages.push('LLM duration and call counts are incomplete because the LLM-debug keyspace could not be fully read.');
     }
     if (data.partial) {
         messages.push('This grouped result reached a safety bound; some groups may not be shown.');
@@ -1419,7 +1498,7 @@ function renderConversationTimeline(timeline, selectedRequestID = selected?.requ
 
     const diagnosticMessages = [];
     if (timeline.index_incomplete) {
-        diagnosticMessages.push('The reverse index is incomplete; verified DB 8 records are still shown.');
+        diagnosticMessages.push('The reverse index is incomplete; verified execution records are still shown.');
     }
     if (timeline.llm_enrichment_incomplete) {
         diagnosticMessages.push('LLM call counts and history status are incomplete.');
@@ -1686,8 +1765,8 @@ function updateDetailTabs() {
         hitlTab.style.display = selected?.has_hitl_data ? 'block' : 'none';
     }
 
-    // LLM-debug interactions describe hook-internal operations. Jaeger-backed
-    // pipeline_hooks prove deterministic hook invocations that make no LLM
+    // LLM-debug interactions describe hook-internal operations. Stored
+    // pipeline_hooks preserve deterministic hook invocations that make no LLM
     // call. Either source must make the respective tab visible.
     const interactions = selected?.llm_interactions || [];
     const pipelineHooks = selected?.pipeline_hooks || [];
@@ -2117,10 +2196,9 @@ function renderDAGVisualization(container) {
     // Check if we can show Full Flow (has LLM or HITL data)
     const canShowFullFlow = hasLLM || hasHITL || hasPipelineHooks;
     const agentName = selected.agent_name || 'orchestrator';
-    // Keep one direct observability affordance without filling the header with
-    // separate processing/submission trace pills. Prefer the execution's own
-    // processing trace and use a linked trace only as a legacy fallback.
-    const traceID = selected.trace_id || selected.linked_traces?.[0]?.trace_id;
+    // The trace ID is stored with the execution. This link is an optional
+    // navigation affordance; no Viewer data is loaded from Jaeger.
+    const traceID = selected.trace_id;
 
     container.innerHTML = `
         <div class="dag-viz-container">
@@ -2171,7 +2249,7 @@ function renderDAGVisualization(container) {
                     <span class="dag-legend-dot llm-call"></span>
                     <span>LLM Call</span>
                 </div>
-                ${hasPipelineHooks ? `<div class="dag-legend-item" title="Trace-backed deterministic pipeline hook">
+                ${hasPipelineHooks ? `<div class="dag-legend-item" title="Stored deterministic pipeline hook">
                     <span class="dag-legend-dot" style="background: #64d2ff;"></span>
                     <span>Hook</span>
                 </div>` : ''}
@@ -2544,7 +2622,7 @@ function initCytoscape() {
         const agentName = selected.agent_name || 'orchestrator';
         const llmInteractions = selected.llm_interactions || [];
         const checkpoints = selected.hitl_checkpoints || [];
-        const traceOnlyPipelineHooks = (selected.pipeline_hooks || []).filter(hook =>
+        const storedPipelineHooks = (selected.pipeline_hooks || []).filter(hook =>
             !pipelineHookHasDetailedInteractions(hook, llmInteractions)
         );
 
@@ -2568,7 +2646,7 @@ function initCytoscape() {
             ? phasePlans
             : (selected.plan ? [selected.plan] : []);
         const afterPlanningByPhase = assignAfterPlanningHooksToPhases(
-            traceOnlyPipelineHooks.filter(hook => hook.phase === 'after_planning'),
+            storedPipelineHooks.filter(hook => hook.phase === 'after_planning'),
             hookPlacementPlans
         );
 
@@ -2601,7 +2679,7 @@ function initCytoscape() {
             return previousNodeID || sources[0] || '';
         };
 
-        const beforePlanningHooks = traceOnlyPipelineHooks.filter(hook => hook.phase === 'before_planning');
+        const beforePlanningHooks = storedPipelineHooks.filter(hook => hook.phase === 'before_planning');
         if (beforePlanningHooks.length > 0) {
             previousPhaseExitNode = appendPipelineHookChain(beforePlanningHooks, previousPhaseExitNode);
         }
@@ -2693,10 +2771,10 @@ function initCytoscape() {
                     lastLLMNodeInPhase = nodeId;
                 });
 
-                // Trace-backed AfterPlanning hooks run after the phase plan is
+                // Stored AfterPlanning hooks run after the phase plan is
                 // generated and before any approval checkpoint or step from
-                // that phase. Timestamp association avoids inventing a phase
-                // number that the current trace span schema does not carry.
+                // that phase. The framework records the iterative plan phase
+                // explicitly, so placement does not infer from timestamps.
                 const phaseHookIndex = phasePlans.length > 0 ? phaseIdx : 0;
                 const phaseAfterPlanningHooks = afterPlanningByPhase[phaseHookIndex] || [];
                 if (phaseAfterPlanningHooks.length > 0) {
@@ -3088,7 +3166,7 @@ function initCytoscape() {
         });
         const leafSteps = lastPhasePlanSteps.filter(s => !lastPhaseDependedOn.has(s.step_id));
 
-        // ORCH-018: when the planner emits NeedsUserInput (clarification short-
+        // When the planner emits NeedsUserInput (clarification short-
         // circuit), the last phase has zero steps — leafSteps is empty and the
         // synthesis node would be orphaned in the DAG. In that case the synthesis
         // node should connect from the last upstream node before execution: the
@@ -3113,10 +3191,10 @@ function initCytoscape() {
         })();
 
         // Deterministic AfterExecution hooks do not necessarily emit an LLM
-        // interaction. Place their trace-backed nodes after the terminal step
+        // interaction. Place their stored nodes after the terminal step
         // leaves and before synthesis. Hooks whose internal activity already
         // has richer graph nodes were filtered above.
-        const afterExecutionHooks = traceOnlyPipelineHooks.filter(hook => hook.phase === 'after_execution');
+        const afterExecutionHooks = storedPipelineHooks.filter(hook => hook.phase === 'after_execution');
         let afterExecutionHookExit = '';
         if (afterExecutionHooks.length > 0) {
             const sources = leafSteps.length > 0
@@ -3164,7 +3242,7 @@ function initCytoscape() {
                         // event-summarization node — and the synthesis + response
                         // chain that hangs off it — float away as an orphaned
                         // component ("disconnect from the event summary box onwards").
-                        // Anchor it to the last upstream node, mirroring the ORCH-018
+                        // Anchor it to the last upstream node, mirroring the
                         // synthesis fallback below, so the tail stays connected.
                         edges.push({ data: { source: lastPlanningNodeId, target: nodeId, edgeType: 'memory_llm' } });
                     }
@@ -3208,7 +3286,7 @@ function initCytoscape() {
                             });
                         });
                     } else {
-                        // ORCH-018: clarification short-circuit case — last phase
+                        // Clarification short-circuit case — the last phase
                         // had zero steps because the planner emitted NeedsUserInput.
                         // Connect synthesis from the last planning node so the DAG
                         // remains a single connected graph instead of two orphaned
@@ -3226,7 +3304,7 @@ function initCytoscape() {
         //   1. Last synthesis call (normal happy path)
         //   2. Last event summarization (rare — synthesis disabled)
         //   3. First leaf step (synthesis-less single-phase)
-        //   4. Last planning node (ORCH-018 clarification short-circuit edge case
+        //   4. Last planning node (clarification short-circuit edge case
         //      where synthesis was somehow skipped — defensive)
         //   5. Orchestrator root (fully degenerate trace)
         let responseSource = synthesisCalls.length > 0 ? `llm_synth_${synthesisCalls.length - 1}` :
@@ -3236,9 +3314,9 @@ function initCytoscape() {
             (lastPlanningNodeId !== 'orchestrator' ? lastPlanningNodeId : 'orchestrator'))));
 
         // AfterSynthesis hooks run after the model draft and before the
-        // terminal application response. This is the key trace-only path for
-        // deterministic response-governance hooks used by domain applications.
-        const afterSynthesisHooks = traceOnlyPipelineHooks.filter(hook => hook.phase === 'after_synthesis');
+        // terminal application response. Their stored records preserve
+        // deterministic response-governance outcomes without tracing.
+        const afterSynthesisHooks = storedPipelineHooks.filter(hook => hook.phase === 'after_synthesis');
         if (afterSynthesisHooks.length > 0) {
             const hookSources = synthesisCalls.length > 0 || eventSumNodes.length > 0 || afterExecutionHookExit
                 ? [responseSource]
@@ -3272,7 +3350,7 @@ function initCytoscape() {
                 });
             });
         } else {
-            // ORCH-018 defensive: no synthesis, no event summarization, no leaf
+            // Defensive case: no synthesis, no event summarization, no leaf
             // steps (clarification short-circuit with synthesis disabled — not
             // currently reachable in the orchestrator but kept connected so a
             // future config that disables synthesis still produces a valid DAG).
@@ -3776,7 +3854,7 @@ function initCytoscape() {
                 }
             },
             {
-                // Trace-backed framework pipeline hook. This remains visible
+                // Stored framework pipeline hook. This remains visible
                 // even when the hook is deterministic and emits no LLM record.
                 selector: 'node[nodeType="pipeline_hook"]',
                 style: {
@@ -3799,6 +3877,14 @@ function initCytoscape() {
                     'background-color': '#3d1717',
                     'border-color': '#ff6b6b',
                     'color': '#ffd0d0'
+                }
+            },
+            {
+                selector: 'node[nodeType="pipeline_hook"][hookStatus="skipped"]',
+                style: {
+                    'background-color': '#292d33',
+                    'border-color': '#8b949e',
+                    'color': '#c2c9d1'
                 }
             },
             {
@@ -4331,29 +4417,35 @@ function showFullFlowNodePopup(node, nodeData) {
             break;
         }
         case 'pipeline_hook': {
-            const hookFailed = nodeData.hookStatus === 'failed';
-            const hookTraceID = nodeData.traceID || selected?.trace_id || '';
+            const status = pipelineHookStatus(nodeData.hookStatus);
+            const sequence = Number(nodeData.sequence);
+            const order = Number.isInteger(sequence) && sequence > 0
+                ? `#${sequence} in this phase`
+                : 'Unavailable';
             title = `🪝 ${pipelineHookPhaseLabel(nodeData.hookPhase)}`;
-            color = hookFailed ? 'var(--accent-red)' : '#64d2ff';
+            color = status.color;
             content = `
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Hook</div>
                     <div style="font-weight: 600; color: var(--text-primary);">${escapeHtml(nodeData.hookName || 'unknown')}</div>
                 </div>
                 <div style="margin-top: 10px;">
-                    <div style="font-size: 11px; color: var(--text-muted);">Status</div>
-                    <div style="font-weight: 600; color: ${hookFailed ? 'var(--accent-red)' : 'var(--accent-green)'};">${hookFailed ? 'FAILED' : 'COMPLETED'}</div>
+                    <div style="font-size: 11px; color: var(--text-muted);">Invocation outcome</div>
+                    <div style="font-weight: 600; color: ${status.color};">${status.text}</div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <div style="font-size: 11px; color: var(--text-muted);">Order</div>
+                    <div>${order}${nodeData.planPhase ? ` · Plan phase ${Number(nodeData.planPhase)}` : ''}</div>
                 </div>
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Duration</div>
-                    <div>${formatPipelineHookDuration(nodeData.durationUS)}</div>
+                    <div>${formatPipelineHookDuration(nodeData.durationNS)}</div>
                 </div>
-                <div style="margin-top: 10px;">
-                    <div style="font-size: 11px; color: var(--text-muted);">Trace evidence</div>
-                    <div style="font-family: 'SF Mono', monospace; font-size: 11px; overflow-wrap: anywhere;">${escapeHtml(nodeData.operationName || '')}</div>
-                    ${nodeData.spanID ? `<div style="font-family: 'SF Mono', monospace; font-size: 10px; color: var(--text-muted); margin-top: 4px;">Span ${escapeHtml(nodeData.spanID)}</div>` : ''}
-                    ${hookTraceID ? `<a href="${jaegerTraceURL(hookTraceID)}" target="_blank" rel="noopener noreferrer" style="display: inline-block; margin-top: 7px; color: #9bdcff;">Open trace ↗</a>` : ''}
-                </div>`;
+                ${nodeData.startedAt ? `<div style="margin-top: 10px;"><div style="font-size: 11px; color: var(--text-muted);">Started</div><div>${escapeHtml(formatDateTime(nodeData.startedAt))}</div></div>` : ''}
+                ${nodeData.error ? `<div style="margin-top: 10px;"><div style="font-size: 11px; color: var(--text-muted);">Failure</div><div style="color: var(--accent-red); overflow-wrap: anywhere;">${escapeHtml(nodeData.error)}</div></div>` : ''}`;
+            if (nodeData.effects?.length) {
+                content += renderPipelineHookEffects(nodeData.effects);
+            }
             break;
         }
         case 'llm_step':
@@ -5723,7 +5815,7 @@ function getLLMCardConfig(type) {
 // the card header; when omitted it falls back to idx+1. This lets the
 // LLM Calls tab renumber contiguously after filtering out hook ops
 // without breaking per-interaction DOM references. `displayLabel` (optional)
-// is the traceability label shown next to the type (ORCH-021); when omitted
+// is the traceability label shown next to the type; when omitted
 // it falls back to `callLabel(interaction)`. Callers that compute per-tab
 // collision disambiguation pass a suffixed variant (e.g. "... #2"); the
 // default is the plain base label.

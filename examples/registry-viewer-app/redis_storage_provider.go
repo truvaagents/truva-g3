@@ -40,11 +40,11 @@ return previous
 // This is an application-level implementation that the orchestration module
 // accepts through dependency injection.
 type RedisStorageProvider struct {
-	client *redis.Client
+	client redis.Cmdable
 }
 
 // NewRedisStorageProvider creates a Redis-backed execution storage provider.
-func NewRedisStorageProvider(client *redis.Client) *RedisStorageProvider {
+func NewRedisStorageProvider(client redis.Cmdable) *RedisStorageProvider {
 	return &RedisStorageProvider{
 		client: client,
 	}
@@ -130,7 +130,12 @@ func providerTTLMilliseconds(ttl time.Duration) (int64, error) {
 
 // Del deletes one or more keys.
 func (r *RedisStorageProvider) Del(ctx context.Context, keys ...string) error {
-	return r.client.Del(ctx, keys...).Err()
+	for _, key := range keys {
+		if err := r.client.Del(ctx, key).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Exists checks if a key exists.

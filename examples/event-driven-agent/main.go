@@ -226,19 +226,8 @@ func runAPIMode(redisURL string, redisClient *redis.Client, taskQueue *orchestra
 			log.Fatalf("Failed to register HITL resume handler: %v", err)
 		}
 
-		// RC2: Webhook receive endpoint (worker POSTs here when HITL triggers)
-		// Just ACK — the checkpoint is already in Redis DB 6. UI discovers via polling.
-		if err := agent.HandleFunc("/internal/hitl-webhook", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"received"}`))
-		}); err != nil {
-			log.Fatalf("Failed to register HITL webhook handler: %v", err)
-		}
+		// The webhook acknowledgment capability is registered by the agent in
+		// both API-only and embedded mode.
 
 		agent.Logger.Info("HITL endpoints registered (API mode)", map[string]interface{}{
 			"endpoints": []string{"/hitl/checkpoints", "/hitl/checkpoints/{id}", "/hitl/command", "/hitl/resume/{id}", "/internal/hitl-webhook"},

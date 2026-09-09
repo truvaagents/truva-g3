@@ -2011,6 +2011,214 @@ tr.expandable td:nth-child(2)::before {
     font-weight: 500;
 }
 
+/* Stored pipeline hook diagnostics reuse the standard glass step cards. */
+.pipeline-hook-section {
+    margin-bottom: 20px;
+}
+.pipeline-hook-section-heading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 10px;
+    color: var(--accent-teal);
+    font-size: 14px;
+    font-weight: 600;
+}
+.pipeline-hook-section-count {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 400;
+}
+.pipeline-hook-card-list {
+    display: grid;
+    gap: 28px;
+}
+.dag-step-card.pipeline-hook-card {
+    margin-bottom: 0;
+    padding: 20px;
+}
+.pipeline-hook-title {
+    min-width: 0;
+    flex-wrap: wrap;
+}
+.pipeline-hook-kind {
+    padding: 4px 10px;
+    background: linear-gradient(
+        135deg,
+        rgba(100, 210, 255, 0.14),
+        rgba(255, 255, 255, 0.045)
+    );
+    border: 1px solid rgba(100, 210, 255, 0.24);
+    border-radius: 8px;
+    color: var(--accent-teal);
+    font-size: 11px;
+    font-weight: 700;
+}
+.pipeline-hook-name {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 700;
+}
+.pipeline-hook-info {
+    margin-bottom: 0;
+}
+
+.pipeline-hook-effects {
+    display: grid;
+    gap: 10px;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.11);
+}
+.pipeline-hook-effects-heading {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.45px;
+    text-transform: uppercase;
+}
+.pipeline-hook-effects-empty {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border: 1px dashed rgba(255, 255, 255, 0.14);
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.5;
+}
+.pipeline-hook-effect {
+    position: relative;
+    padding: 14px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    border-radius: var(--radius-lg);
+    /* The parent hook card owns the frosted layer. Keep nested effects on the
+       lightweight glass-surface tier so several effects do not stack GPU-
+       intensive backdrop filters in the same viewport. */
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.025));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 8px 22px rgba(0, 0, 0, 0.16);
+}
+.pipeline-hook-effect-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+.pipeline-hook-effect-header > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+}
+.pipeline-hook-effect-name {
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 700;
+}
+.pipeline-hook-effect-id {
+    color: var(--text-muted);
+    font-family: 'SF Mono', 'Monaco', monospace;
+    font-size: 10px;
+    overflow-wrap: anywhere;
+}
+.pipeline-hook-effect-status {
+    flex: 0 0 auto;
+    padding: 4px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.055);
+    font-size: 10px;
+    font-weight: 650;
+}
+.pipeline-hook-effect-status.completed { color: var(--accent-green); border-color: rgba(50, 215, 75, 0.32); background: rgba(50, 215, 75, 0.1); }
+.pipeline-hook-effect-status.partial,
+.pipeline-hook-effect-status.pending { color: var(--accent-orange); border-color: rgba(255, 179, 64, 0.32); background: rgba(255, 179, 64, 0.1); }
+.pipeline-hook-effect-status.failed { color: var(--accent-red); border-color: rgba(255, 107, 107, 0.32); background: rgba(255, 107, 107, 0.1); }
+.pipeline-hook-effect-status.skipped { color: var(--text-muted); }
+.pipeline-hook-effect-summary {
+    margin-top: 10px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.55;
+}
+.pipeline-hook-effect-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+}
+.pipeline-hook-effect-error {
+    display: grid;
+    gap: 4px;
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 107, 107, 0.24);
+    border-radius: var(--radius-md);
+    color: var(--accent-red);
+    background: rgba(255, 107, 107, 0.07);
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+.pipeline-hook-effect-error span {
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+.pipeline-hook-effect-values {
+    margin-top: 10px;
+}
+.pipeline-hook-effect-values summary {
+    padding-top: 9px;
+    border-top: 1px solid rgba(255, 255, 255, 0.11);
+    color: rgba(255, 255, 255, 0.72);
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    list-style-position: inside;
+    text-transform: uppercase;
+}
+.pipeline-hook-effect-values summary:focus-visible {
+    border-radius: var(--radius-sm);
+    outline: 2px solid var(--accent-teal);
+    outline-offset: 3px;
+}
+.pipeline-hook-effect-values[open] summary { color: var(--accent-teal); }
+.pipeline-hook-effect-values .json-container { margin-top: 8px; }
+.pipeline-hook-effect-values .json-view.pipeline-hook-effect-json {
+    max-height: 300px;
+    margin: 0;
+    /* Preserve the shared JSON surface, but keep prose-readable payloads from
+       inheriting the global break-all behavior. Opaque IDs can still wrap. */
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+.pipeline-hook-error {
+    color: var(--accent-red);
+    white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+    .pipeline-hook-info {
+        grid-template-columns: 84px minmax(0, 1fr);
+    }
+
+    .pipeline-hook-effect-header {
+        flex-direction: column;
+    }
+
+    .pipeline-hook-effect-status {
+        align-self: flex-start;
+    }
+}
+
 /* HITL checkpoint details: neutral dark glass keeps nested content distinct
    from status-tinted checkpoint cards without competing with status color. */
 .hitl-context-panel {

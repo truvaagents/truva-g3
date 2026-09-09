@@ -1,15 +1,18 @@
 package main
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
 )
 
-// Tests for ORCH-022 Phase B: registry viewer's normalizeSteps helper.
-// Proves the three branches (PhasePlans multi-phase, single-phase Plan, and
-// legacy Checkpoint-fallback synthesis) and the buildUnifiedView integration.
+// Tests for the registry viewer's normalizeSteps helper. They cover PhasePlans
+// for multi-phase records, Plan for single-phase records, checkpoint-backed
+// interrupted records, and buildUnifiedView integration.
 
 func TestBuildUnifiedViewPreservesSkillExecutionDebug(t *testing.T) {
 	previousMock := useMock
@@ -52,6 +55,34 @@ func TestBuildUnifiedViewPreservesGovernedFinalResponse(t *testing.T) {
 	}
 	if view.FinalResponseSource != "after_synthesis_hooks" {
 		t.Errorf("final response source = %q", view.FinalResponseSource)
+	}
+}
+
+func TestBuildUnifiedViewPreservesStoredPipelineHookDiagnostics(t *testing.T) {
+	previousMock := useMock
+	useMock = true
+	t.Cleanup(func() { useMock = previousMock })
+
+	startedAt := time.Date(2026, time.September, 3, 12, 30, 0, 0, time.UTC)
+	hook := orchestration.PipelineHookExecution{
+		HookName:  "activity-cleanup",
+		Phase:     orchestration.PipelineHookPhaseAfterSynthesis,
+		Status:    orchestration.PipelineHookSucceeded,
+		Sequence:  2,
+		StartedAt: startedAt,
+		Duration:  750 * time.Microsecond,
+		Effects: []core.PipelineHookEffect{{
+			EffectID: "activity_signal_cleanup", SchemaVersion: 1,
+			Name: "Activity signal cleanup", Status: core.PipelineHookEffectSucceeded,
+			Data: json.RawMessage(`{"request_id":"request-with-hook-diagnostics","provider_error_observed":false}`),
+		}},
+	}
+	view := buildUnifiedView(&StoredExecution{
+		RequestID:     "request-with-hook-diagnostics",
+		PipelineHooks: []orchestration.PipelineHookExecution{hook},
+	})
+	if view == nil || len(view.PipelineHooks) != 1 || !reflect.DeepEqual(view.PipelineHooks[0], hook) {
+		t.Fatalf("unified pipeline hooks = %#v", view)
 	}
 }
 
@@ -180,8 +211,8 @@ func TestNormalizeSteps_SinglePhaseFallback(t *testing.T) {
 }
 
 func TestNormalizeSteps_LegacyInterruptedRecord_FromCheckpoint(t *testing.T) {
-	// Legacy pre-ORCH-022 shape: PhasePlans nil, Plan holds only the
-	// continuation plan (step-3/4/5), Result.Steps empty. Checkpoint carries
+	// PhasePlans is nil, Plan holds only the continuation plan (step-3/4/5),
+	// and Result.Steps is empty. The checkpoint carries
 	// step-1/2/4 in StepResults. normalizeSteps must synthesize step-1/2 as
 	// nodes so the DAG has data to render.
 	exec := &StoredExecution{

@@ -148,7 +148,7 @@ test('continues HITL resume numbering after distinct completed steps', () => {
     );
 });
 
-test('classifies trace-backed hooks into pre- and post-execution stages', () => {
+test('classifies stored hooks into pre- and post-execution stages', () => {
     assertDeepEqual(isPreExecutionHook({ phase: 'before_planning' }), true);
     assertDeepEqual(isPreExecutionHook({ phase: 'after_planning' }), true);
     assertDeepEqual(isPostExecutionHook({ phase: 'after_execution' }), true);
@@ -156,7 +156,7 @@ test('classifies trace-backed hooks into pre- and post-execution stages', () => 
     assertDeepEqual(isPostExecutionHook({ phase: 'after_planning' }), false);
 });
 
-test('suppresses only trace wrappers with richer Full Flow interaction nodes', () => {
+test('suppresses only stored hook wrappers with richer Full Flow interaction nodes', () => {
     const interactions = [
         { type: 'user_memory_recall_identity' },
         { type: 'user_memory_extraction' },
@@ -178,24 +178,24 @@ test('suppresses only trace wrappers with richer Full Flow interaction nodes', (
     );
 });
 
-test('places AfterPlanning spans after the phase whose plan preceded them', () => {
+test('places AfterPlanning hooks using their stored plan phase', () => {
     const phases = [
-        { created_at: '2026-08-27T15:34:36.900Z' },
-        { created_at: '2026-08-27T15:34:47.500Z' },
+        { phase_number: 1 },
+        { phase_number: 3 },
     ];
     const hooks = [
-        { hook_name: 'guard', started_at: '2026-08-27T15:34:47.600Z' },
-        { hook_name: 'guard', started_at: '2026-08-27T15:34:36.950Z' },
+        { hook_name: 'phase-three', plan_phase: 3 },
+        { hook_name: 'phase-one', plan_phase: 1 },
         { hook_name: 'unplaced' },
     ];
 
     assertDeepEqual(
         assignAfterPlanningHooksToPhases(hooks, phases).map(items =>
-            items.map(item => item.started_at)
+            items.map(item => item.hook_name)
         ),
         [
-            ['2026-08-27T15:34:36.950Z'],
-            ['2026-08-27T15:34:47.600Z'],
+            ['phase-one'],
+            ['phase-three'],
         ]
     );
 });
