@@ -1098,7 +1098,7 @@ func TestTieredCapabilityProvider_SetCircuitBreaker(t *testing.T) {
 }
 
 // ============================================================================
-// ORCH-014: CustomInstructions in Tiered Selection Tests
+// CustomInstructions in Tiered Selection Tests
 // ============================================================================
 
 // --- 5a: writeCustomInstructions helper — direct tests ---

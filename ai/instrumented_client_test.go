@@ -991,10 +991,10 @@ func TestInstrumentedClient_RecordAsync_Baggage(t *testing.T) {
 	})
 }
 
-// --- Recording deferral (Layer 2 of BUG_LLM_INTERACTION_DOUBLE_RECORDING.md) ---
+// --- Recording deferral ---
 
 // TestInstrumentedClient_GenerateResponse_DeferralHonoured is the core
-// Layer 2 invariant test: when the caller marks ctx with
+// recording-deferral invariant test: when the caller marks ctx with
 // telemetry.WithLLMCallRecordingDeferred before calling GenerateResponse,
 // the wrapper must NOT emit its own agent_llm_call record. The wrapped
 // client's result and error MUST still be returned verbatim.

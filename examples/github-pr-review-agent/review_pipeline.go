@@ -263,8 +263,8 @@ func (a *PRReviewAgent) HandlePullRequestReview(
 	// Emit a shared-domain episodic event so other agents in the same
 	// "infrastructure" domain (devops-chat-agent, event-driven-agent) and
 	// the registry viewer can see this review in their planning context
-	// without a custom history API. Best-effort — failures don't fail the
-	// task. See AGENT_PLAN.md "Shared Agent Memory" for the design rationale.
+	// without a custom history API. Best-effort: recording failures do not
+	// fail the review task.
 	if a.Episodic != nil {
 		summary := fmt.Sprintf("PR review %s on %s/%s#%d (%d findings)",
 			result.Decision, input.Owner, input.Repo, input.PullNumber,

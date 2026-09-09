@@ -1739,7 +1739,7 @@ func TestWalkForSummary_AllNullShortArray(t *testing.T) {
 	assert.Nil(t, summary.Samples["short[0]"])
 }
 
-// --- Tests for ORCH-010: Large scalar string capping in walkForSummary ---
+// --- Large scalar string capping in walkForSummary ---
 
 func TestGenerateStructuralSummary_LargeScalarCapped(t *testing.T) {
 	// Large string scalar (e.g., base64 screenshot) should be replaced with
@@ -2093,7 +2093,7 @@ func TestMicroResolver_SetModel_SchemaMapping_ErrorPath_RecordsModel(t *testing.
 	}
 }
 
-// --- RC5: MicroResolver SetMaxTokens tests ---
+// --- MicroResolver SetMaxTokens tests ---
 
 func TestMicroResolver_DefaultMaxTokens(t *testing.T) {
 	mr := NewMicroResolver(nil, nil)

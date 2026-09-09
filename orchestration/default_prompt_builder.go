@@ -169,15 +169,10 @@ func (d *DefaultPromptBuilder) SetTelemetry(t core.Telemetry) {
 	d.telemetry = t
 }
 
-// BuildPlanningPrompt implements PromptBuilder interface.
-// Restructured per BUG_PHASE3_SKIPPED_EXECUTION.md Issues 4-6:
-//   - XML section tags for clear boundaries (Issue 5 P9)
-//   - Instructions at top (U-curve primacy, Issue 5 P1)
-//   - Concrete example instead of verbose reference docs (Issue 5 P4)
-//   - Budget-aware iterative instructions (Issue 3, 4)
-//   - Positive instructions only (Issue 5 P3)
-//   - Persona moved to system message (Issue 5 P10, P5)
-//   - Format constraint at bottom (Gemini dual-anchor, Issue 6)
+// BuildPlanningPrompt implements PromptBuilder. It uses explicit XML section
+// boundaries, leads with actionable instructions, supplies a concrete plan
+// example, exposes iterative-planning budgets, and repeats the output-format
+// constraint at the end. Persona instructions belong in the system message.
 func (d *DefaultPromptBuilder) BuildPlanningPrompt(ctx context.Context, input PromptInput) (string, error) {
 	start := time.Now()
 	status := "success"
@@ -365,8 +360,7 @@ func (d *DefaultPromptBuilder) BuildPlanningPrompt(ctx context.Context, input Pr
 }
 
 // buildTypeRulesSection generates the type rules text for the prompt.
-// Simplified per BUG_PHASE3_SKIPPED_EXECUTION.md Issue 5 P3: positive instructions only,
-// anti-patterns removed to avoid Pink Elephant effect (~80 tokens vs ~200).
+// The section uses positive instructions only and avoids repeating anti-patterns.
 func (d *DefaultPromptBuilder) buildTypeRulesSection() string {
 	var rules []string
 
@@ -431,7 +425,7 @@ const defaultOrchestratorPersona = "You are an intelligent orchestrator that cre
 // appendRuntimeContext wraps a persona string with a <runtime_context> block
 // carrying the current UTC date.
 //
-// ORCH-020 RC7: Every framework-built system prompt must carry runtime context
+// Every framework-built system prompt must carry runtime context
 // so the planner can resolve relative date language ("today", "tomorrow", "next
 // week") without inventing {{today_plus_1}}-style macros. Centralised so the
 // four fallback paths (DefaultPromptBuilder, TemplatePromptBuilder nil-fallback,
@@ -451,11 +445,11 @@ func appendRuntimeContext(persona string) string {
 }
 
 // BuildSystemPrompt implements SystemPromptBuilder interface.
-// Per BUG_PHASE3_SKIPPED_EXECUTION.md Issue 5 P10, P5: persona belongs in the
-// system-level message (higher priority across all providers), not in the user prompt.
+// Persona belongs in the system-level message (higher priority across providers),
+// not in the user prompt.
 // This replaces the deleted buildPersonaSection method.
 //
-// ORCH-020 RC7: delegates the runtime-context tail to appendRuntimeContext so
+// Delegate the runtime-context tail to appendRuntimeContext so
 // the same block is emitted by every fallback path in the framework.
 func (d *DefaultPromptBuilder) BuildSystemPrompt(ctx context.Context, input PromptInput) string {
 	source := "default"

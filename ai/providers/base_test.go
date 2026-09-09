@@ -359,7 +359,7 @@ func TestBaseClient_ExecuteWithRetry(t *testing.T) {
 				} else if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
 				}
-				// ORCH-008: Verify transient proxy errors satisfy core.ProviderError
+				// Verify transient proxy errors satisfy core.ProviderError.
 				if err != nil && tt.errContains == "non-API provider response" {
 					var pe core.ProviderError
 					if !errors.As(err, &pe) {

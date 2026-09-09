@@ -11,8 +11,8 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-// Tests in this file cover the ORCH-020 multi-layer defense against unresolved
-// template passthrough (see orchestration/bugs/BUG_UNRESOLVED_TEMPLATE_PASSTHROUGH_TO_TOOL.md).
+// Tests in this file cover the multi-layer defense against unresolved
+// template passthrough.
 // Each RC has its own block; the file ends with a regression-golden that asserts
 // the incident plan is flagged by every plan-time validator.
 
@@ -44,7 +44,7 @@ func simpleAgent(name, capName string, fields ...string) *AgentInfo {
 	}
 }
 
-// ─── RC1: cross-phase-aware validateTemplatePaths ────────────────────────────
+// ─── Cross-phase-aware validateTemplatePaths ─────────────────────────────────
 
 func TestValidateTemplatePaths_CrossPhase_ReferencesMissingStep_Rejects(t *testing.T) {
 	o := newOrchestratorWithCatalog(t, map[string]*AgentInfo{
@@ -52,7 +52,7 @@ func TestValidateTemplatePaths_CrossPhase_ReferencesMissingStep_Rejects(t *testi
 	})
 
 	// Plan references step-1 from a prior phase, but executedStepCaps is empty.
-	// RC1 must reject — no completed phase supplied step-1, so the template is
+	// Validation must reject: no completed phase supplied step-1, so the template is
 	// guaranteed to dispatch as a literal.
 	plan := &RoutingPlan{
 		Steps: []RoutingStep{{
@@ -69,7 +69,7 @@ func TestValidateTemplatePaths_CrossPhase_ReferencesMissingStep_Rejects(t *testi
 
 	err := o.validateTemplatePaths(plan, nil)
 	if err == nil {
-		t.Fatalf("expected RC1 to reject missing cross-phase step, got nil")
+		t.Fatalf("expected template-path validation to reject missing cross-phase step, got nil")
 	}
 	if !strings.Contains(err.Error(), "step-1") {
 		t.Errorf("expected error to name step-1, got: %v", err)
@@ -84,7 +84,7 @@ func TestValidateTemplatePaths_CrossPhase_ReferencesExecutedStep_Accepts(t *test
 
 	// step-1 is named in executedStepCaps (prior-phase completed result), so
 	// the cross-phase reference resolves against its capability's output
-	// schema. RC1 should accept.
+	// schema. Template-path validation should accept it.
 	executed := map[string]stepCapability{
 		"step-1": {agent: "research-agent", capability: "analyze_data"},
 	}
@@ -108,8 +108,8 @@ func TestValidateTemplatePaths_CrossPhase_ReferencesExecutedStep_Accepts(t *test
 }
 
 func TestValidateTemplatePaths_NestedParam_ReferencesInvalidStep_Rejects(t *testing.T) {
-	// ORCH-020 Issue 11: the flat top-level walk used to miss templates that
-	// hid inside nested maps or arrays. RC1 now shares the runtime's
+	// A flat top-level walk would miss templates hidden inside nested maps or
+	// arrays. Validation shares the runtime's
 	// collectTemplateStrings primitive so nested params are covered.
 	o := newOrchestratorWithCatalog(t, map[string]*AgentInfo{
 		"jira-tool": simpleAgent("jira-tool", "create_issue"),
@@ -136,17 +136,17 @@ func TestValidateTemplatePaths_NestedParam_ReferencesInvalidStep_Rejects(t *test
 
 	err := o.validateTemplatePaths(plan, nil)
 	if err == nil {
-		t.Fatalf("expected RC1 to flag nested reference to unknown step-99, got nil")
+		t.Fatalf("expected template-path validation to flag nested reference to unknown step-99, got nil")
 	}
 	if !strings.Contains(err.Error(), "step-99") {
 		t.Errorf("expected error to name step-99, got: %v", err)
 	}
 }
 
-// ─── RC2: validateNoUnknownMacros ────────────────────────────────────────────
+// ─── validateNoUnknownMacros ─────────────────────────────────────────────────
 
 func TestValidateNoUnknownMacros_RejectsHallucinatedMacro(t *testing.T) {
-	// RC2's remit is tokens that LOOK LIKE attempts at the framework's
+	// This validator handles tokens that look like attempts at the framework's
 	// {{step-N.response.data.FIELD}} syntax but get the shape wrong. The
 	// narrowing to {{step-...}} keeps the framework from arbitrating
 	// tool-specific template contracts (see the passthrough test below).
@@ -171,7 +171,7 @@ func TestValidateNoUnknownMacros_RejectsHallucinatedMacro(t *testing.T) {
 			}
 			err := validateNoUnknownMacros(plan)
 			if err == nil {
-				t.Fatalf("expected RC2 to reject %q, got nil", token)
+				t.Fatalf("expected macro validation to reject %q, got nil", token)
 			}
 			if !strings.Contains(err.Error(), token) {
 				t.Errorf("expected error to include the rejected token, got: %v", err)
@@ -181,7 +181,7 @@ func TestValidateNoUnknownMacros_RejectsHallucinatedMacro(t *testing.T) {
 }
 
 func TestValidateNoUnknownMacros_RejectsHallucinatedMacro_Nested(t *testing.T) {
-	// Issue 11 coverage: RC2 walks nested structures via collectTemplateStrings
+	// Macro validation walks nested structures via collectTemplateStrings
 	// so a malformed framework token buried inside arrays/maps is still caught.
 	// The malformed token must match frameworkMacroPattern ({{step-...}}) but
 	// fail stepOutputTemplatePattern — {{step-7}} (no field path) is the
@@ -202,7 +202,7 @@ func TestValidateNoUnknownMacros_RejectsHallucinatedMacro_Nested(t *testing.T) {
 	}
 	err := validateNoUnknownMacros(plan)
 	if err == nil {
-		t.Fatal("expected RC2 to reject nested malformed framework token, got nil")
+		t.Fatal("expected macro validation to reject nested malformed framework token, got nil")
 	}
 	if !strings.Contains(err.Error(), "{{step-7}}") {
 		t.Errorf("expected error to include {{step-7}}, got: %v", err)
@@ -212,11 +212,11 @@ func TestValidateNoUnknownMacros_RejectsHallucinatedMacro_Nested(t *testing.T) {
 func TestValidateNoUnknownMacros_PassesThroughToolSpecificSyntax(t *testing.T) {
 	// Regression: the Prometheus tool's documented input syntax includes
 	// {{now}} and {{now-7d}} — tool-specific relative-time expressions
-	// handled by the tool itself, not the framework. RC2 must NOT reject
+	// handled by the tool itself, not the framework. Validation must not reject
 	// these, since doing so would break the tool's input contract before
 	// the orchestrator ever dispatches. See examples/prometheus-query-tool/handlers.go.
 	//
-	// The contract RC2 enforces is narrower: only {{step-...}} tokens are
+	// The validator's contract is narrower: only {{step-...}} tokens are
 	// inspected. Anything else is considered tool-specific and passes
 	// through — the framework stays domain-agnostic per
 	// FRAMEWORK_DESIGN_PRINCIPLES.md §"Framework is domain-agnostic".
@@ -242,7 +242,7 @@ func TestValidateNoUnknownMacros_PassesThroughToolSpecificSyntax(t *testing.T) {
 				}},
 			}
 			if err := validateNoUnknownMacros(plan); err != nil {
-				t.Errorf("tool-specific %q must pass RC2 (frameworks must not arbitrate tool input contracts), got: %v", token, err)
+				t.Errorf("tool-specific %q must pass macro validation (frameworks must not arbitrate tool input contracts), got: %v", token, err)
 			}
 		})
 	}
@@ -277,7 +277,7 @@ func TestValidateNoUnknownMacros_NilPlan(t *testing.T) {
 // ─── Helper coverage: shared template-extraction primitives ──────────────────
 
 func TestCollectReferencedStepIDs_NilInput(t *testing.T) {
-	// Defensive contract — both validators (RC3) and the runtime sweep (RC4)
+	// Defensive contract: both dependency validation and the runtime skip sweep
 	// invoke this with whatever sits in step.Metadata["parameters"], which is
 	// nil for steps that take no parameters.
 	got := collectReferencedStepIDs(nil)
@@ -307,7 +307,7 @@ func TestCollectReferencedStepIDs_ExtractsAndDedupes(t *testing.T) {
 }
 
 func TestParamsContainUnresolvedFrameworkMacro(t *testing.T) {
-	// Drives RC5's semantic-fallback gate. Must return true ONLY for
+	// Drives the semantic-fallback gate. Must return true only for
 	// framework-form {{step-...}} tokens — tool-specific syntax must not
 	// trigger the LLM-resolver code path.
 	cases := []struct {
@@ -335,7 +335,7 @@ func TestParamsContainUnresolvedFrameworkMacro(t *testing.T) {
 	}
 }
 
-// ─── RC3: branches not covered by the existing assertions ────────────────────
+// ─── Additional dependency-consistency branches ──────────────────────────────
 
 func TestValidateDependencyConsistency_NilPlan(t *testing.T) {
 	o := newOrchestratorWithCatalog(t, nil)
@@ -346,7 +346,7 @@ func TestValidateDependencyConsistency_NilPlan(t *testing.T) {
 
 func TestValidateDependencyConsistency_InPlanRefWithDependsOn_Accepts(t *testing.T) {
 	// Happy path: step-2 references step-1 via template AND lists step-1 in
-	// depends_on. RC3 must accept. Exercises both the declaredDepends loop
+	// depends_on. Dependency validation must accept it. Exercises both the declaredDepends loop
 	// and the in-plan happy-path `continue` branch.
 	o := newOrchestratorWithCatalog(t, nil)
 	plan := &RoutingPlan{
@@ -369,7 +369,7 @@ func TestValidateDependencyConsistency_InPlanRefWithDependsOn_Accepts(t *testing
 	}
 }
 
-// ─── RC4: covers the ImplicitDeps union path + the logger INFO branch ───────
+// ─── ImplicitDeps skip path and logger INFO branch ───────────────────────────
 
 func TestExecuteStep_SkipsOnImplicitDepsFailed(t *testing.T) {
 	// step.ImplicitDeps lists step-1 (without a template referencing it in
@@ -491,7 +491,7 @@ func (nonSystemPromptBuilder) SetLogger(core.Logger)       {}
 func (nonSystemPromptBuilder) SetTelemetry(core.Telemetry) {}
 
 func TestOrchestratorBuildSystemPrompt_FallbackCarriesRuntimeContext(t *testing.T) {
-	// ORCH-020 RC7 universality: every fallback path in
+	// Every fallback path in
 	// AIOrchestrator.buildSystemPrompt must emit <runtime_context>, not just
 	// the SystemPromptBuilder delegation path. Without this, an orchestrator
 	// constructed without a SystemPromptBuilder-capable PromptBuilder (or
@@ -556,7 +556,7 @@ func TestOrchestratorBuildSystemPrompt_FallbackCarriesRuntimeContext(t *testing.
 }
 
 func TestTemplatePromptBuilder_NilFallback_CarriesRuntimeContext(t *testing.T) {
-	// ORCH-020 RC7 universality: TemplatePromptBuilder constructed with no
+	// A TemplatePromptBuilder constructed with no
 	// fallback DefaultPromptBuilder must still emit <runtime_context> from
 	// its nil-safe default branch. Without this, agents that wire a template
 	// builder without supplying a fallback would lose date injection.
@@ -618,8 +618,8 @@ func TestValidateTemplatePaths_AgentMissingFromCatalogIsCarvedOut(t *testing.T) 
 	// branch covers the documented edge case where a prior-phase step exists
 	// in executedStepCaps but its agent is no longer in the catalog (e.g.
 	// because the prior-phase step failed at agent discovery, leaving
-	// Capability set but the agent unreachable now). RC1 must not crash and
-	// must not erroneously reject the field-existence check; RC6 will catch
+	// Capability set but the agent unreachable now). Validation must not crash
+	// or erroneously reject the field-existence check; the pre-dispatch guard catches
 	// the literal at dispatch if it survives to that point.
 	o := newOrchestratorWithCatalog(t, nil) // empty catalog → no agents resolvable
 	executed := map[string]stepCapability{
@@ -661,13 +661,13 @@ func (loggerRecorder) WarnWithContext(ctx context.Context, msg string, fields ma
 func (loggerRecorder) ErrorWithContext(ctx context.Context, msg string, fields map[string]interface{}) {
 }
 
-// ─── RC3: validateDependencyConsistency ──────────────────────────────────────
+// ─── validateDependencyConsistency ───────────────────────────────────────────
 
 func TestValidatePlan_TemplateMustAppearInDependsOn(t *testing.T) {
 	o := newOrchestratorWithCatalog(t, nil)
 
 	// step-2 references step-1 via template but omits it from depends_on.
-	// Both steps are in the same plan (in-plan reference), so RC3 must
+	// Both steps are in the same plan, so dependency validation must
 	// require depends_on — not implicit_deps.
 	plan := &RoutingPlan{
 		Steps: []RoutingStep{
@@ -688,7 +688,7 @@ func TestValidatePlan_TemplateMustAppearInDependsOn(t *testing.T) {
 
 	err := o.validateDependencyConsistency(plan)
 	if err == nil {
-		t.Fatal("expected RC3 to reject in-plan reference missing from depends_on")
+		t.Fatal("expected dependency validation to reject in-plan reference missing from depends_on")
 	}
 	if !strings.Contains(err.Error(), "step-1") || !strings.Contains(err.Error(), "depends_on") {
 		t.Errorf("expected error to explain missing depends_on entry for step-1, got: %v", err)
@@ -720,7 +720,7 @@ func TestValidatePlan_TemplateMustAppearInDependsOn_Nested(t *testing.T) {
 	}
 
 	if err := o.validateDependencyConsistency(plan); err == nil {
-		t.Fatal("expected RC3 to flag nested in-plan reference missing from depends_on")
+		t.Fatal("expected dependency validation to flag nested in-plan reference missing from depends_on")
 	}
 }
 
@@ -729,7 +729,7 @@ func TestValidatePlan_CrossPhaseNeedsImplicitDeps(t *testing.T) {
 
 	// step-3 references prior-phase step-1 (not in current plan.Steps).
 	// depends_on is correctly empty (same-phase only), but implicit_deps is
-	// missing → RC3 rejects.
+	// missing, so dependency validation rejects it.
 	plan := &RoutingPlan{
 		Steps: []RoutingStep{{
 			StepID:    "step-3",
@@ -746,7 +746,7 @@ func TestValidatePlan_CrossPhaseNeedsImplicitDeps(t *testing.T) {
 
 	err := o.validateDependencyConsistency(plan)
 	if err == nil {
-		t.Fatal("expected RC3 to require implicit_deps for cross-phase reference")
+		t.Fatal("expected dependency validation to require implicit_deps for cross-phase reference")
 	}
 	if !strings.Contains(err.Error(), "implicit_deps") {
 		t.Errorf("expected error to name implicit_deps, got: %v", err)
@@ -779,7 +779,7 @@ func TestValidatePlan_SelfReferenceRejected(t *testing.T) {
 	o := newOrchestratorWithCatalog(t, nil)
 
 	// A step referencing its own output is a structural defect that cannot be
-	// fixed by declaration consistency — RC3 surfaces it explicitly.
+	// fixed by declaration consistency, which surfaces it explicitly.
 	plan := &RoutingPlan{
 		Steps: []RoutingStep{{
 			StepID: "step-1",
@@ -799,13 +799,13 @@ func TestValidatePlan_SelfReferenceRejected(t *testing.T) {
 	}
 }
 
-// ─── RC4: executor skip on failed deps (explicit and template-induced) ───────
+// ─── Executor skip on failed dependencies ────────────────────────────────────
 
 func TestExecuteStep_SkipsStampsAllFailedDepsOnMetadata(t *testing.T) {
-	// RC4 regression (production scenario orch-1776802262936110748): when a
+	// Regression: when a
 	// single step templates N failed upstreams, the skip must stamp ALL N
 	// on Metadata[all_failed_dependencies] — not just the first. Without
-	// this, RC9's pattern analyzer sees only one causal failure and the
+	// this, the failure-pattern analyzer sees only one causal failure and the
 	// pattern line is never emitted.
 	executor := newSkipTestExecutor()
 
@@ -942,7 +942,7 @@ func TestExecuteStep_SkipDedupeOnDuplicateDepsOnlyRecordsOnce(t *testing.T) {
 
 func TestCollectTemplateInducedSkips_ReadsAllFailedDependenciesFromMetadata(t *testing.T) {
 	// collectTemplateInducedSkips must surface the plural metadata on
-	// TemplateInducedSkip.FailedDeps so the RC9 analyzer can expand its
+	// TemplateInducedSkip.FailedDeps so the failure-pattern analyzer can expand its
 	// causal window. Accept both []string (production) and []interface{}
 	// (JSON-unmarshalled) shapes.
 	phaseSteps := []StepResult{{
@@ -983,7 +983,7 @@ func TestCollectTemplateInducedSkips_ReadsAllFailedDependenciesFromMetadata(t *t
 
 func TestExecuteStep_SkipsOnTemplateInducedFailedDep(t *testing.T) {
 	// step-3 has depends_on: [] but references {{step-1.response.data.iata_code}}
-	// in its parameters. step-1 already failed. The RC4 sweep must mark step-3
+	// in its parameters. step-1 already failed. The skip sweep must mark step-3
 	// as skipped with blocking_reason=template_induced — previously step-3
 	// would pass findReadySteps and be dispatched with a literal template.
 	executor := newSkipTestExecutor()
@@ -1026,7 +1026,7 @@ func TestExecuteStep_SkipsOnTemplateInducedFailedDep(t *testing.T) {
 	if !executed["step-3"] {
 		t.Errorf("step-3 should be marked executed after skip")
 	}
-	// RC8 contract: structured metadata must be stamped on the skipped
+	// Remediation contract: structured metadata must be stamped on the skipped
 	// StepResult so remediation detection is not string-coupled.
 	md := stepResults["step-3"].Metadata
 	if reason, _ := md[metaKeyBlockingReason].(string); reason != blockingReasonTemplate {
@@ -1075,7 +1075,7 @@ func TestExecuteStep_ExplicitFailedDepTakesPrecedence(t *testing.T) {
 		t.Errorf("explicit-dep failure should not be reported as template-induced: %s", stepResults["step-2"].Error)
 	}
 	// Structured metadata must reflect the same precedence — explicit_dep,
-	// not template_induced. This is what RC8's metadata-primary detection
+	// not template_induced. This is what metadata-primary remediation detection
 	// reads.
 	md := stepResults["step-2"].Metadata
 	if reason, _ := md[metaKeyBlockingReason].(string); reason != blockingReasonExplicit {
@@ -1111,11 +1111,11 @@ func TestExecuteStep_SkipsNothingWhenDepsSucceed(t *testing.T) {
 	}
 }
 
-// ─── RC5: un-gate template interpolation ─────────────────────────────────────
+// ─── Template interpolation with empty dependency results ────────────────────
 
 func TestInterpolateParameters_RunsWithEmptyDeps(t *testing.T) {
 	// Proves the interpolator is callable with an empty depResults map and
-	// leaves unresolved templates intact (the RC6 guard then catches them).
+	// leaves unresolved templates intact for the pre-dispatch guard to catch.
 	// Previously the call site short-circuited on len(depResults) == 0,
 	// hiding this path from telemetry.
 	executor := NewSmartExecutor(&AgentCatalog{agents: map[string]*AgentInfo{}})
@@ -1134,11 +1134,11 @@ func TestInterpolateParameters_RunsWithEmptyDeps(t *testing.T) {
 		t.Errorf("literal value should pass through, got %q", got)
 	}
 	if got, _ := out["origin"].(string); got != "{{step-1.response.data.iata_code}}" {
-		t.Errorf("unresolved template should survive empty-dep interpolation so RC6 can catch it, got %q", got)
+		t.Errorf("unresolved template should survive empty-dep interpolation so the pre-dispatch guard can catch it, got %q", got)
 	}
 }
 
-// ─── RC6: pre-dispatch guard ─────────────────────────────────────────────────
+// ─── Pre-dispatch unresolved-template guard ──────────────────────────────────
 
 func TestExecuteStep_GuardRejectsLiteralTemplateAtDispatch(t *testing.T) {
 	// End-to-end proof: an agent that IS in the catalog but whose step
@@ -1229,9 +1229,9 @@ func (c *recordingInterruptController) UpdateCheckpointProgress(context.Context,
 }
 
 func TestExecuteStep_HITLSeesUnresolvedParamsBeforeGuard(t *testing.T) {
-	// ORCH-020 RC6 is positioned AFTER the HITL pre-step approval so a human
+	// The unresolved-template guard runs after HITL pre-step approval so a human
 	// reviewer gets the chance to correct unresolved parameters manually. If
-	// RC6 ran before HITL (as in the first implementation), HITL-enabled
+	// If the guard ran before HITL, HITL-enabled
 	// workflows would hard-fail on exactly the parameters the human is
 	// supposed to approve/fix.
 	catalog := &AgentCatalog{
@@ -1274,9 +1274,9 @@ func TestExecuteStep_HITLSeesUnresolvedParamsBeforeGuard(t *testing.T) {
 	if got, _ := controller.observedParams["origin"].(string); got != "{{step-1.response.data.iata_code}}" {
 		t.Errorf("HITL must see unresolved params so the human can correct them, got origin=%q", got)
 	}
-	// The step returns as interrupted — not as the RC6 "unresolved framework template" error.
+	// The step returns as interrupted, not as an unresolved-framework-template error.
 	if strings.Contains(res.Error, "unresolved framework template") {
-		t.Errorf("RC6 must run AFTER HITL, not before — got RC6 error: %s", res.Error)
+		t.Errorf("the unresolved-template guard must run after HITL, not before: %s", res.Error)
 	}
 	// HTTP was not called either (the interrupt returned before dispatch).
 	if mockRT.GetCallCount() != 0 {
@@ -1286,7 +1286,7 @@ func TestExecuteStep_HITLSeesUnresolvedParamsBeforeGuard(t *testing.T) {
 
 func TestExecuteStep_GuardPassesThroughToolSpecificSyntax(t *testing.T) {
 	// Regression: tool-specific {{now}} / {{now-7d}} syntax used by
-	// examples/prometheus-query-tool MUST reach the tool. RC6 is scoped to
+	// examples/prometheus-query-tool must reach the tool. The guard is scoped to
 	// framework-form {{step-...}} tokens only — anything else passes through
 	// so the tool can handle its own template contract.
 	mockRT := NewMockRoundTripper()
@@ -1323,18 +1323,18 @@ func TestExecuteStep_GuardPassesThroughToolSpecificSyntax(t *testing.T) {
 
 	res := executor.executeStep(context.Background(), step)
 	if !res.Success {
-		t.Fatalf("tool-specific {{now}}/{{now-7d}} must pass RC6 and reach the tool, got error: %s", res.Error)
+		t.Fatalf("tool-specific {{now}}/{{now-7d}} must pass the guard and reach the tool, got error: %s", res.Error)
 	}
 	if mockRT.GetCallCount() != 1 {
 		t.Errorf("expected exactly 1 HTTP call to the tool, got %d", mockRT.GetCallCount())
 	}
 }
 
-// ─── RC8: Remediation on template-induced skips ─────────────────────────────
+// ─── Remediation on template-induced skips ───────────────────────────────────
 
 func TestCollectTemplateInducedSkips_MetadataPrimaryPath(t *testing.T) {
-	// Primary detection path: RC4 stamps structured metadata on the
-	// skipped StepResult (blocking_reason + failed_dependency). RC8 reads
+	// Primary detection path: the skip sweep stamps structured metadata on the
+	// skipped StepResult (blocking_reason + failed_dependency). Remediation reads
 	// those directly — no error-string parsing. This is what production
 	// traffic exercises.
 	phaseSteps := []StepResult{
@@ -1432,7 +1432,7 @@ func TestCollectTemplateInducedSkips_EmptyWhenNoSkips(t *testing.T) {
 		{StepID: "step-2", Success: false, Error: "boom"}, // non-skip failure
 	}
 	if got := collectTemplateInducedSkips(phaseSteps, nil); len(got) != 0 {
-		t.Errorf("expected zero skips for non-RC4 failures, got %+v", got)
+		t.Errorf("expected zero skips for failures not produced by the skip sweep, got %+v", got)
 	}
 }
 
@@ -1661,10 +1661,9 @@ func TestBuildRemediationContinuationNote_MultiFailedDepsWithoutErrors(t *testin
 	}
 }
 
-func TestBuildRemediationContinuationNote_LegacyFallbackFromFailedDep(t *testing.T) {
-	// Legacy: hand-built test fixtures (and replayed pre-RC9 StepResults) may
-	// set only FailedDep with no FailedDeps. The renderer must fall back so
-	// these still produce a usable note.
+func TestBuildRemediationContinuationNote_SingularFailedDepFallback(t *testing.T) {
+	// Hand-built or replayed StepResults may set only FailedDep with no
+	// FailedDeps. The renderer must still produce a usable note.
 	note := buildRemediationContinuationNote([]TemplateInducedSkip{{
 		StepID:         "step-3",
 		FailedDep:      "step-1",
@@ -1838,7 +1837,7 @@ func TestSkipErrorString_MultiDepTemplateIncludedRetainsPrefix(t *testing.T) {
 }
 
 func TestDecideRemediation_GateMatrix(t *testing.T) {
-	// Single place that exercises every decision path of RC8's gate. Each
+	// This table exercises every decision path of the remediation gate. Each
 	// case declares inputs and the exact reason/trigger pair expected. Keeps
 	// the gate logic regression-proof without having to stand up the full
 	// executePhaseLoop harness.
@@ -1945,11 +1944,11 @@ func TestDecideRemediation_GateMatrix(t *testing.T) {
 }
 
 // mockAIClientRemediationFlow returns a hand-crafted 3-call sequence that
-// reproduces the ORCH-020 remediation scenario end-to-end:
+// reproduces template-induced-skip remediation end-to-end:
 //   - call 1 (phase-1 plan): one step that will fail upstream
 //   - call 2 (phase-2 plan): a step that template-references the phase-1 step,
-//     declared via implicit_deps (passes RC1/RC2/RC3 at plan time)
-//   - call 3 (phase-3 plan = RC8 remediation replan): captured by the mock so
+//     declared via implicit_deps (passes all plan validators)
+//   - call 3 (phase-3 remediation replan): captured by the mock so
 //     the test can assert the continuation prompt carries the remediation note
 //   - synthesis call: returns a canned user-facing string
 //
@@ -2014,7 +2013,7 @@ func (m *mockAIClientRemediationFlow) GenerateResponse(ctx context.Context, prom
 			}]
 		}`}, nil
 	case 3:
-		// RC8 remediation: capture the prompt so the test can assert the
+		// Capture the remediation prompt so the test can assert the
 		// note was actually fed through. Return an empty-steps terminal
 		// plan per the remediation note's option (b) — the synthesizer
 		// will then tell the user the service is unavailable.
@@ -2031,8 +2030,8 @@ func (m *mockAIClientRemediationFlow) GenerateResponse(ctx context.Context, prom
 	return &core.AIResponse{Content: `{"plan_id":"noop","terminal":true,"steps":[]}`}, nil
 }
 
-func TestRC8_WiringFeedsRemediationNoteIntoContinuationPrompt(t *testing.T) {
-	// End-to-end verification of the RC8 wiring. The unit tests prove the
+func TestRemediation_WiringFeedsNoteIntoContinuationPrompt(t *testing.T) {
+	// End-to-end verification of remediation wiring. The unit tests prove the
 	// gate (decideRemediation) and the helpers; this test proves the
 	// PLUMBING — that the remediation note from a Trigger==true decision
 	// actually reaches the next-phase planning prompt via continuationNote
@@ -2085,9 +2084,9 @@ func TestRC8_WiringFeedsRemediationNoteIntoContinuationPrompt(t *testing.T) {
 		t.Fatalf("ProcessRequest returned error: %v", err)
 	}
 
-	// Planning must have happened at least 3 times — phase 1, phase 2, RC8 remediation.
+	// Planning must have happened at least 3 times: phase 1, phase 2, and remediation.
 	if mockAI.planningCalls < 3 {
-		t.Fatalf("expected ≥3 planning calls (phase 1 + phase 2 + RC8 remediation), got %d", mockAI.planningCalls)
+		t.Fatalf("expected ≥3 planning calls (phase 1 + phase 2 + remediation), got %d", mockAI.planningCalls)
 	}
 	// The remediation prompt must carry the skip summary and the positive directive.
 	if mockAI.phase3PlanningPrompt == "" {
@@ -2110,18 +2109,18 @@ func TestRC8_WiringFeedsRemediationNoteIntoContinuationPrompt(t *testing.T) {
 	}
 }
 
-// mockAIClientRC9PatternFlow is the 2-failure variant used by the RC9
-// end-to-end observability test. Phase 1 dispatches TWO airport lookups,
-// both fail; phase 2 templates reference both; RC4 skips; RC8 triggers; RC9
+// mockAIClientFailurePatternFlow is the two-failure variant used by the
+// end-to-end observability test. Phase 1 dispatches two airport lookups,
+// both fail; phase 2 templates reference both; remediation triggers and
 // emits a pattern summary (same error, same agent/capability for both
 // failures). Phase 3 captures the remediation prompt.
-type mockAIClientRC9PatternFlow struct {
+type mockAIClientFailurePatternFlow struct {
 	planningCalls        int
 	phase3PlanningPrompt string
 	synthCalls           int
 }
 
-func (m *mockAIClientRC9PatternFlow) GenerateResponse(ctx context.Context, prompt string, opts *core.AIOptions) (*core.AIResponse, error) {
+func (m *mockAIClientFailurePatternFlow) GenerateResponse(ctx context.Context, prompt string, opts *core.AIOptions) (*core.AIResponse, error) {
 	isSynthesis := strings.Contains(prompt, "<agent_responses>") ||
 		strings.Contains(prompt, "Synthesize the above") ||
 		strings.Contains(prompt, "synthesize")
@@ -2166,9 +2165,9 @@ func (m *mockAIClientRC9PatternFlow) GenerateResponse(ctx context.Context, promp
 		}`}, nil
 	case 2:
 		// Phase 2: ONE step that template-references BOTH failed upstreams
-		// — the production topology from orch-1776802262936110748. RC4
-		// records ONE skip, but stamps the full causal set
-		// {step-1, step-2} on Metadata[all_failed_dependencies]. RC9's
+		// to reproduce the single-skip, multiple-upstream topology. The skip
+		// sweep records one skip but stamps the full causal set
+		// {step-1, step-2} on Metadata[all_failed_dependencies]. The
 		// summarizer reads the plural list to build its causal window,
 		// so the pattern fires despite there being only one skip. If this
 		// test were refactored to two separate phase-2 steps, the pattern
@@ -2194,7 +2193,7 @@ func (m *mockAIClientRC9PatternFlow) GenerateResponse(ctx context.Context, promp
 			}]
 		}`}, nil
 	case 3:
-		// RC8 remediation — capture the prompt so the test can assert
+		// Capture the remediation prompt so the test can assert
 		// the pattern line made it into the continuation prompt.
 		m.phase3PlanningPrompt = prompt
 		return &core.AIResponse{Content: `{
@@ -2208,26 +2207,25 @@ func (m *mockAIClientRC9PatternFlow) GenerateResponse(ctx context.Context, promp
 	return &core.AIResponse{Content: `{"plan_id":"noop","terminal":true,"steps":[]}`}, nil
 }
 
-// rc9CapturingLogger records the "remediation_failure_pattern" DEBUG log
-// fields so M4's observability assertion can verify the RC9 path actually
-// fires. Only captures the fields map for the operation we care about.
-type rc9CapturingLogger struct {
+// failurePatternCapturingLogger records the remediation_failure_pattern DEBUG
+// fields so the observability assertion can verify that analysis ran.
+type failurePatternCapturingLogger struct {
 	mu              sync.Mutex
 	patternLogFired bool
 	patternFields   map[string]interface{}
 }
 
-func (l *rc9CapturingLogger) Debug(string, map[string]interface{}) {}
-func (l *rc9CapturingLogger) Info(string, map[string]interface{})  {}
-func (l *rc9CapturingLogger) Warn(string, map[string]interface{})  {}
-func (l *rc9CapturingLogger) Error(string, map[string]interface{}) {}
-func (l *rc9CapturingLogger) InfoWithContext(context.Context, string, map[string]interface{}) {
+func (l *failurePatternCapturingLogger) Debug(string, map[string]interface{}) {}
+func (l *failurePatternCapturingLogger) Info(string, map[string]interface{})  {}
+func (l *failurePatternCapturingLogger) Warn(string, map[string]interface{})  {}
+func (l *failurePatternCapturingLogger) Error(string, map[string]interface{}) {}
+func (l *failurePatternCapturingLogger) InfoWithContext(context.Context, string, map[string]interface{}) {
 }
-func (l *rc9CapturingLogger) WarnWithContext(context.Context, string, map[string]interface{}) {
+func (l *failurePatternCapturingLogger) WarnWithContext(context.Context, string, map[string]interface{}) {
 }
-func (l *rc9CapturingLogger) ErrorWithContext(context.Context, string, map[string]interface{}) {
+func (l *failurePatternCapturingLogger) ErrorWithContext(context.Context, string, map[string]interface{}) {
 }
-func (l *rc9CapturingLogger) DebugWithContext(_ context.Context, _ string, fields map[string]interface{}) {
+func (l *failurePatternCapturingLogger) DebugWithContext(_ context.Context, _ string, fields map[string]interface{}) {
 	if op, _ := fields["operation"].(string); op == "remediation_failure_pattern" {
 		l.mu.Lock()
 		defer l.mu.Unlock()
@@ -2241,13 +2239,13 @@ func (l *rc9CapturingLogger) DebugWithContext(_ context.Context, _ string, field
 	}
 }
 
-func TestRC9_WiringEmitsPatternAndObservability(t *testing.T) {
-	// M4 regression + end-to-end coverage of RC9's pattern-emission path:
+func TestRemediation_WiringEmitsFailurePatternAndObservability(t *testing.T) {
+	// End-to-end coverage of the failure-pattern emission path:
 	//   - Phase 1 has 2 causal steps, both failing with the same Amadeus error
 	//     → pattern analyzer produces a strong single-attribution pattern.
 	//   - Phase 2 plan has 2 steps each template-referencing one failure
-	//     → RC4 skips both (2 skips with 2 distinct FailedDeps) → RC8 triggers.
-	//   - RC9 emits a DEBUG log with operation="remediation_failure_pattern",
+	//     → the skip sweep skips both → remediation triggers.
+	//   - A DEBUG log is emitted with operation="remediation_failure_pattern",
 	//     emitted=true, total_failed=2, dominant_count=2.
 	//   - Phase 3 prompt contains the pattern line with single-attribution
 	//     (flight-tool/search_airports) rendering.
@@ -2258,7 +2256,7 @@ func TestRC9_WiringEmitsPatternAndObservability(t *testing.T) {
 	// test o.telemetry is nil so the phase span is a no-op and the event
 	// doesn't record. The stamp itself is line-level visible in the
 	// production code; the DEBUG-log assertion below serves as the
-	// regression guard for the RC9 observability surface in this harness.
+	// regression guard for the failure-pattern observability surface.
 
 	discovery := NewMockDiscovery()
 	_ = discovery.Register(context.Background(), &core.ServiceRegistration{
@@ -2268,9 +2266,9 @@ func TestRC9_WiringEmitsPatternAndObservability(t *testing.T) {
 		},
 	})
 
-	mockAI := &mockAIClientRC9PatternFlow{}
+	mockAI := &mockAIClientFailurePatternFlow{}
 	o := NewAIOrchestrator(DefaultConfig(), discovery, mockAI)
-	logger := &rc9CapturingLogger{}
+	logger := &failurePatternCapturingLogger{}
 	o.logger = logger
 	o.catalog.agents = map[string]*AgentInfo{
 		"flight-1": {
@@ -2327,29 +2325,27 @@ func TestRC9_WiringEmitsPatternAndObservability(t *testing.T) {
 	}
 }
 
-// ─── RC9: summarizeUpstreamFailurePattern ───────────────────────────────────
+// ─── summarizeUpstreamFailurePattern ─────────────────────────────────────────
 
-// Threshold defaults used across RC9 tests, matching DefaultConfig().
+// Threshold defaults used across failure-pattern tests, matching DefaultConfig().
 const (
-	rc9DefaultMinFailures  = 2
-	rc9DefaultSignatureLen = 120
-	rc9DefaultDisplayLen   = 80
+	failurePatternDefaultMinFailures  = 2
+	failurePatternDefaultSignatureLen = 120
 )
 
 func TestSummarizeUpstreamFailurePattern_NilAndEmptyInput(t *testing.T) {
 	// Defensive contract: nil skips, empty skips, and nil priorResults all
 	// return nil with "insufficient_failures" — no crash.
-	if p, r := summarizeUpstreamFailurePattern(nil, nil, rc9DefaultMinFailures, rc9DefaultSignatureLen); p != nil || r != "insufficient_failures" {
+	if p, r := summarizeUpstreamFailurePattern(nil, nil, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen); p != nil || r != "insufficient_failures" {
 		t.Errorf("nil input: got (%v, %q), want (nil, insufficient_failures)", p, r)
 	}
-	if p, r := summarizeUpstreamFailurePattern([]TemplateInducedSkip{}, map[string]*StepResult{}, rc9DefaultMinFailures, rc9DefaultSignatureLen); p != nil || r != "insufficient_failures" {
+	if p, r := summarizeUpstreamFailurePattern([]TemplateInducedSkip{}, map[string]*StepResult{}, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen); p != nil || r != "insufficient_failures" {
 		t.Errorf("empty input: got (%v, %q), want (nil, insufficient_failures)", p, r)
 	}
 }
 
 func TestSummarizeUpstreamFailurePattern_SingleSkipWithTwoFailedUpstreams(t *testing.T) {
-	// Production-topology regression (orch-1776802262936110748, 2026-04-21):
-	// ONE skipped step templates TWO failed upstreams. The skip's FailedDeps
+	// One skipped step templates two failed upstreams. The skip's FailedDeps
 	// field carries the full causal set {step-1, step-2}; the analyzer
 	// expands its window from that slice so the pattern fires despite there
 	// being only one skip. Pre-fix behaviour: analyzer used skip.FailedDep
@@ -2365,7 +2361,7 @@ func TestSummarizeUpstreamFailurePattern_SingleSkipWithTwoFailedUpstreams(t *tes
 		"step-1": {StepID: "step-1", AgentName: "flight-tool", Capability: "search_airports", Success: false, Error: "Amadeus API error 500", RetryExhausted: true},
 		"step-2": {StepID: "step-2", AgentName: "flight-tool", Capability: "search_airports", Success: false, Error: "Amadeus API error 500", RetryExhausted: true},
 	}
-	p, r := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, r := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p == nil {
 		t.Fatalf("expected pattern from 1 skip with FailedDeps=[step-1, step-2], got nil (reject=%q)", r)
 	}
@@ -2394,7 +2390,7 @@ func TestSummarizeUpstreamFailurePattern_FallsBackToSingularFailedDep(t *testing
 	prior := map[string]*StepResult{
 		"step-1": {StepID: "step-1", Success: false, Error: "e"},
 	}
-	p, r := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, r := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p != nil {
 		t.Errorf("legacy skip with 1 FailedDep must stay below MinFailures, got %+v", p)
 	}
@@ -2409,7 +2405,7 @@ func TestSummarizeUpstreamFailurePattern_SingleCausalFailure_BelowThreshold(t *t
 	prior := map[string]*StepResult{
 		"step-1": {StepID: "step-1", AgentName: "flight-tool", Success: false, Error: "boom"},
 	}
-	p, r := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, r := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p != nil {
 		t.Errorf("expected nil pattern for single failure, got %+v", p)
 	}
@@ -2428,7 +2424,7 @@ func TestSummarizeUpstreamFailurePattern_OutOfWindowFailureIgnored(t *testing.T)
 		// Out-of-window: not referenced by any skip. Must be ignored.
 		"step-99": {StepID: "step-99", AgentName: "other-tool", Success: false, Error: "Amadeus error"},
 	}
-	p, r := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, r := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p != nil {
 		t.Fatalf("expected nil pattern — out-of-window failure must not count toward MinFailures, got %+v", p)
 	}
@@ -2452,7 +2448,7 @@ func TestSummarizeUpstreamFailurePattern_FiftyFiftySplit_ReturnsNil(t *testing.T
 		"step-3": {StepID: "step-3", Success: false, Error: "Redis connection timeout"},
 		"step-4": {StepID: "step-4", Success: false, Error: "Redis connection timeout"},
 	}
-	p, r := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, r := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p != nil {
 		t.Errorf("50/50 split must not produce a pattern, got %+v", p)
 	}
@@ -2474,7 +2470,7 @@ func TestSummarizeUpstreamFailurePattern_MultiFailureDifferentErrors_ReturnsNil(
 		"step-2": {StepID: "step-2", Success: false, Error: "err beta"},
 		"step-3": {StepID: "step-3", Success: false, Error: "err gamma"},
 	}
-	p, r := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, r := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p != nil {
 		t.Errorf("no dominant error — pattern must be nil, got %+v", p)
 	}
@@ -2500,7 +2496,7 @@ func TestSummarizeUpstreamFailurePattern_HappyPathSingleAttribution(t *testing.T
 			Success: false, Error: "Amadeus API error 500", RetryExhausted: true,
 		},
 	}
-	p, r := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, r := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p == nil {
 		t.Fatalf("expected a pattern, got nil (reason=%q)", r)
 	}
@@ -2533,7 +2529,7 @@ func TestSummarizeUpstreamFailurePattern_MultiAttribution_EmptyDominant(t *testi
 		"step-1": {StepID: "step-1", AgentName: "flight-tool", Capability: "search_airports", Success: false, Error: "Amadeus API error 500"},
 		"step-2": {StepID: "step-2", AgentName: "hotel-tool", Capability: "search_hotels", Success: false, Error: "Amadeus API error 500"},
 	}
-	p, _ := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, _ := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p == nil {
 		t.Fatalf("expected a pattern, got nil")
 	}
@@ -2559,7 +2555,7 @@ func TestSummarizeUpstreamFailurePattern_PartialRetriesExhausted(t *testing.T) {
 		"step-1": {StepID: "step-1", AgentName: "flight-tool", Capability: "x", Success: false, Error: "e", RetryExhausted: true},
 		"step-2": {StepID: "step-2", AgentName: "flight-tool", Capability: "x", Success: false, Error: "e", RetryExhausted: false},
 	}
-	p, _ := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, _ := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p == nil {
 		t.Fatalf("expected a pattern, got nil")
 	}
@@ -2581,7 +2577,7 @@ func TestSummarizeUpstreamFailurePattern_F2Regression_OrchestratorCapability(t *
 		"orch-1": {StepID: "orch-1", AgentName: "a", Capability: "c", Success: false, Error: "e", Attempts: 1, RetryExhausted: true},
 		"orch-2": {StepID: "orch-2", AgentName: "a", Capability: "c", Success: false, Error: "e", Attempts: 1, RetryExhausted: true},
 	}
-	p, _ := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, _ := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p == nil {
 		t.Fatalf("expected a pattern, got nil")
 	}
@@ -2604,7 +2600,7 @@ func TestSummarizeUpstreamFailurePattern_EmptyAgentName_SkippedFromAttribution(t
 		"step-1": {StepID: "step-1", AgentName: "", Success: false, Error: "e"},
 		"step-2": {StepID: "step-2", AgentName: "", Success: false, Error: "e"},
 	}
-	p, _ := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, _ := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p == nil {
 		t.Fatalf("expected a pattern despite empty AgentName, got nil")
 	}
@@ -2656,7 +2652,7 @@ func TestSummarizeUpstreamFailurePattern_CapabilityFallbackToAgent(t *testing.T)
 		"step-1": {StepID: "step-1", AgentName: "flight-tool", Capability: "", Success: false, Error: "e"},
 		"step-2": {StepID: "step-2", AgentName: "flight-tool", Capability: "", Success: false, Error: "e"},
 	}
-	p, _ := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, _ := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p == nil {
 		t.Fatalf("expected a pattern, got nil")
 	}
@@ -2680,7 +2676,7 @@ func TestSummarizeUpstreamFailurePattern_NilPriorEntryIgnored(t *testing.T) {
 		"step-3": nil,
 		"step-4": {StepID: "step-4", AgentName: "a", Capability: "c", Success: true},
 	}
-	p, _ := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, _ := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p == nil {
 		t.Fatalf("expected a pattern from the 2 valid failures, got nil")
 	}
@@ -2699,7 +2695,7 @@ func TestSummarizeUpstreamFailurePattern_DeduplicatesRepeatedFailedDep(t *testin
 	prior := map[string]*StepResult{
 		"step-1": {StepID: "step-1", AgentName: "a", Capability: "c", Success: false, Error: "e"},
 	}
-	p, r := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, rc9DefaultSignatureLen)
+	p, r := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, failurePatternDefaultSignatureLen)
 	if p != nil {
 		t.Errorf("dedup must drop the duplicate FailedDep → only 1 failure → insufficient. Got %+v", p)
 	}
@@ -2721,7 +2717,7 @@ func TestSummarizeUpstreamFailurePattern_SignatureLenCapsClassification(t *testi
 		"step-2": {StepID: "step-2", AgentName: "a", Capability: "c", Success: false, Error: longPrefix + "_UNIQUE_2"},
 	}
 	// signatureLen=50 → both get truncated to the first 50 xs, same bucket.
-	p, _ := summarizeUpstreamFailurePattern(skips, prior, rc9DefaultMinFailures, 50)
+	p, _ := summarizeUpstreamFailurePattern(skips, prior, failurePatternDefaultMinFailures, 50)
 	if p == nil {
 		t.Fatalf("narrow signatureLen should collapse divergent-tail errors, got nil")
 	}
@@ -2730,7 +2726,7 @@ func TestSummarizeUpstreamFailurePattern_SignatureLenCapsClassification(t *testi
 	}
 }
 
-// ─── RC9: buildRemediationContinuationNote pattern renders ──────────────────
+// ─── buildRemediationContinuationNote pattern rendering ─────────────────────
 
 func TestBuildRemediationContinuationNote_PatternSingleAttribution(t *testing.T) {
 	pattern := &FailurePattern{
@@ -2801,7 +2797,7 @@ func TestBuildRemediationContinuationNote_PatternDisplayLenTruncation(t *testing
 	}
 }
 
-// ─── RC9: DefaultConfig RemediationFailurePattern* tunables ─────────────────
+// ─── DefaultConfig RemediationFailurePattern tunables ────────────────────────
 
 func TestDefaultConfig_RemediationFailurePattern_Defaults(t *testing.T) {
 	for _, v := range []string{
@@ -2881,11 +2877,11 @@ func TestDefaultConfig_RemediationFailurePattern_InvalidEnvKeepsDefault(t *testi
 	}
 }
 
-// ─── RC9: executor stamps RetryExhausted on retry-budget exhaustion ─────────
+// ─── Executor stamps RetryExhausted on retry-budget exhaustion ───────────────
 
 func TestExecuteStep_StampsRetryExhaustedOnBudgetExhaustion(t *testing.T) {
 	// Executor retry loop must stamp StepResult.RetryExhausted=true when
-	// maxAttempts is consumed without a successful attempt. RC9's pattern
+	// maxAttempts is consumed without a successful attempt. The failure-pattern
 	// analyzer reads this authoritative bit.
 	catalog := &AgentCatalog{
 		agents: map[string]*AgentInfo{
@@ -2962,24 +2958,18 @@ func TestExecuteStep_DoesNotStampRetryExhaustedOnSuccess(t *testing.T) {
 	}
 }
 
-// ─── Regression golden: the ORCH-020 incident plan ───────────────────────────
+// ─── Regression golden: malformed cross-phase template plan ──────────────────
 
-func TestRegression_ORCH020_IncidentPlan_AllValidatorsFlag(t *testing.T) {
-	// Reconstructs the Phase-2 defects from the incident (orch-1776708595788303964)
-	// in a form that exercises each new validator:
-	//   - RC2: the plan contains a malformed framework template ({{step-1}}, no
-	//     field path) — exactly the shape RC2 targets under its narrowed scope.
-	//   - RC3: the {{step-1...}} ref is cross-phase with neither depends_on nor
-	//     implicit_deps declared.
-	//   - RC1: step-1 is not in executedStepCaps either (nil here), so the
-	//     cross-phase existence check must fail.
+func TestTemplateSafety_MalformedCrossPhasePlan_AllValidatorsFlag(t *testing.T) {
+	// This plan exercises each validator:
+	//   - it contains a malformed framework template ({{step-1}}, no field path);
+	//   - the {{step-1...}} reference is cross-phase with neither depends_on nor
+	//     implicit_deps declared; and
+	//   - step-1 is absent from executedStepCaps, so existence validation fails.
 	//
-	// {{today_plus_1}}-style hallucinations no longer fall under RC2 (tool-
-	// specific tokens pass through so tools like Prometheus retain their
-	// contract). In real incidents that class is caught earlier by RC7's
-	// <runtime_context> date injection (the planner has no reason to invent
-	// date macros) or by the tool returning an error that feeds back to
-	// error_analyzer.
+	// Tool-specific tokens such as {{today_plus_1}} pass through so tools like
+	// Prometheus retain their contract. Runtime date context discourages the
+	// planner from inventing date macros; any tool error feeds the analyzer.
 	o := newOrchestratorWithCatalog(t, nil)
 
 	plan := &RoutingPlan{
@@ -3000,19 +2990,19 @@ func TestRegression_ORCH020_IncidentPlan_AllValidatorsFlag(t *testing.T) {
 	}
 
 	if err := validateNoUnknownMacros(plan); err == nil {
-		t.Error("RC2 must flag {{step-1}} as a malformed framework template")
+		t.Error("macro validation must flag {{step-1}} as malformed")
 	}
 	if err := o.validateDependencyConsistency(plan); err == nil {
-		t.Error("RC3 must flag missing implicit_deps for cross-phase step-1 reference")
+		t.Error("dependency validation must flag missing implicit_deps for cross-phase step-1 reference")
 	}
 	if err := o.validateTemplatePaths(plan, nil); err == nil {
-		t.Error("RC1 must flag step-1 as absent from current plan and executedStepCaps")
+		t.Error("template-path validation must flag step-1 as absent from current plan and executedStepCaps")
 	}
 }
 
 // ─── Test wiring helpers ─────────────────────────────────────────────────────
 
-// newSkipTestExecutor builds a SmartExecutor usable by the RC4 sweep tests
+// newSkipTestExecutor builds a SmartExecutor usable by the skip-sweep tests
 // without needing real networking. All we need is a valid catalog and the
 // defaults from NewSmartExecutor (semaphore, logger, etc.).
 func newSkipTestExecutor() *SmartExecutor {

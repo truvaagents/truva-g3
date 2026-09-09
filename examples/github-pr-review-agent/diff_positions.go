@@ -32,9 +32,8 @@ var hunkHeaderRe = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 // Lines outside any hunk (the "diff --git ..." headers, "+++ b/path" lines,
 // etc.) are not commentable and are excluded by the in-hunk gate.
 //
-// This is the agent-side equivalent of the MapToGitHubDiffPosition helper
-// originally sketched in AGENT_PLAN.md but never implemented in earlier
-// passes — flagged by the developer review.
+// This is the agent-side equivalent of the tool's
+// MapToGitHubDiffPosition helper.
 func parseValidPositions(patch string) map[validPosition]bool {
 	out := map[validPosition]bool{}
 	if patch == "" {

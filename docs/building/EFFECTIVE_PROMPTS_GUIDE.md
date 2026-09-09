@@ -1033,7 +1033,7 @@ Three standalone LLM calls, each with its own prompt. All tags use the `user_mem
 | `<user_request>` | User msg | The user's request |
 | `<output_format>` | User msg | JSON array format specification with example |
 | `<phase_context>` | User msg | Prior tools used (continuation phases only) |
-| `<custom_instructions>` | User msg | Domain-specific workflow rules from CustomInstructions, numbered (ORCH-014) |
+| `<custom_instructions>` | User msg | Numbered domain-specific workflow rules from `CustomInstructions` |
 
 #### Synthesis (`synthesizer.go`)
 

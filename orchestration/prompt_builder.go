@@ -39,7 +39,6 @@ type PromptBuilder interface {
 // uses it to construct the system-level message for LLM providers that support
 // separate system/user message roles (e.g., Anthropic, OpenAI).
 // If not implemented, the orchestrator falls back to SystemInstructions + default role.
-// See BUG_PHASE3_SKIPPED_EXECUTION.md Issue 5 P10.
 type SystemPromptBuilder interface {
 	BuildSystemPrompt(ctx context.Context, input PromptInput) string
 }
@@ -147,7 +146,6 @@ type PromptConfig struct {
 	// to prompt builders so they can embed budget-aware iterative planning
 	// instructions. Populated automatically by NewAIOrchestrator when
 	// iterative planning is enabled.
-	// See BUG_PHASE3_SKIPPED_EXECUTION.md Issue 3.
 	IterativePlanConfig *IterativePlanConfig `json:"iterative_plan_config,omitempty"`
 }
 
@@ -186,7 +184,6 @@ When to use "terminal": true (default):
 // budget limits (MaxPhases, MaxTotalSteps) into the instructions so the LLM can make
 // informed terminal/non-terminal decisions.
 // Returns empty string if config is nil or iterative planning is disabled.
-// See BUG_PHASE3_SKIPPED_EXECUTION.md Issue 3 (budget visibility) and Issue 4 (phase splits).
 func BuildIterativePlanningInstructions(config *IterativePlanConfig) string {
 	if config == nil || !config.Enabled {
 		return ""

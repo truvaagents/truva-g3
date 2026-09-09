@@ -45,7 +45,8 @@ func planWith(agent, capability string, params map[string]interface{}) *RoutingP
 }
 
 // TestRunPlanValidationGauntlet exercises the relocated validator helper directly: a valid plan
-// passes; an unknown agent is caught by validatePlan; a malformed macro is caught by RC2 only
+// passes; an unknown agent is caught by validatePlan; a malformed macro is caught by
+// validateNoUnknownMacros only
 // after validatePlan passes (confirms ordering).
 func TestRunPlanValidationGauntlet(t *testing.T) {
 	o := gauntletOrchestrator(t)
@@ -59,10 +60,11 @@ func TestRunPlanValidationGauntlet(t *testing.T) {
 		t.Fatal("plan with an unregistered agent should fail the gauntlet (validatePlan)")
 	}
 
-	// Valid agent but a malformed framework macro → validatePlan passes, RC2 (validateNoUnknownMacros) fails.
+	// Valid agent but a malformed framework macro: validatePlan passes and
+	// validateNoUnknownMacros fails.
 	macroBad := planWith("good-agent", "do", map[string]interface{}{"x": "{{step-1}}"})
 	if err := o.runPlanValidationGauntlet(ctx, macroBad, nil, nil, 1, "t"); err == nil {
-		t.Fatal("plan with a malformed {{step-1}} macro should fail the gauntlet (RC2)")
+		t.Fatal("plan with a malformed {{step-1}} macro should fail validateNoUnknownMacros")
 	}
 }
 
@@ -104,21 +106,21 @@ func TestRunPlanValidationGauntlet_FailurePaths(t *testing.T) {
 			wantOperation: "phase_validation_regeneration_trigger",
 		},
 		{
-			name:          "RC2: malformed framework macro",
+			name:          "malformed framework macro",
 			plan:          plan(step("good-agent", map[string]interface{}{"x": "{{step-1}}"}, nil)),
 			phaseCount:    1,
 			wantOperation: "unknown_macro_validation",
 			wantErrorType: "unknown_macro",
 		},
 		{
-			name:          "RC3: prior-phase ref not declared in implicit_deps",
+			name:          "prior-phase ref not declared in implicit_deps",
 			plan:          plan(step("good-agent", map[string]interface{}{"x": "{{step-2.response.data.f}}"}, nil)),
 			phaseCount:    2,
 			wantOperation: "missing_dependency_validation",
 			wantErrorType: "missing_dependency",
 		},
 		{
-			name:          "RC1: declared but non-existent prior step",
+			name:          "declared but non-existent prior step",
 			plan:          plan(step("good-agent", map[string]interface{}{"x": "{{step-2.response.data.f}}"}, []string{"step-2"})),
 			phaseCount:    2,
 			wantOperation: "cross_phase_missing_step_validation",

@@ -1,28 +1,5 @@
-// ORCH-018: Unit tests for the clarification-checkpoint feature
-// (BUG_TIERED_SELECTION_EMPTY_ON_CONTINUATION.md).
-//
-// This file centralises unit tests for the Layer 1 + Layer 2 + Layer 3 fix
-// so each piece of the implementation has focused coverage. Integration-style
-// tests that exercise the full phase loop end-to-end live alongside the
-// existing tests in orchestrator_test.go and context_aware_selection_test.go.
-//
-// Test layout mirrors the Implementation Plan in the bug doc:
-//
-//	Layer 1 unit tests:
-//	  - TestExtractUniqueToolIDs_ORCH018                    (Step 1e helper)
-//	  - TestValidatePlan_AllowsEmptyStepsWithNeedsUserInput  (Step 1f gate)
-//	  - TestBuildIterativePlanningInstructions_ClarificationEscapeValve (Step 2 prompt)
-//	  - TestExecutePhaseLoop_ClarificationShortCircuit       (Step 3 short-circuit)
-//	  - TestSynthesisSystemPromptFor_ORCH018                 (Step 5a helper)
-//	  - TestBuildSynthesisPrompt_ClarificationSection        (Step 5b, non-streaming)
-//	  - TestOrchestratorBuildSynthesisPrompt_ClarificationSection (Step 5e, streaming)
-//	  - TestAISynthesizer_SynthesizeWithLLM_ClarificationModeSystemPrompt (Step 5b integration)
-//
-//	Layer 3 unit tests:
-//	  - TestParseToolSelection_SentinelError_ORCH018         (Step 6 sentinel)
-//	  - TestSelectRelevantTools_Layer3Recovery_ORCH018       (Step 6c case (a))
-//	  - TestSelectRelevantTools_Layer3_Phase1ShortCircuitsOnSemanticEmpty   (Step 6c case (b))
-//	  - TestSelectRelevantTools_Layer3_EmptyPriorToolIDs_ShortCircuitsLikePhase1 (Step 6c case (b) gate)
+// Unit and integration-style tests for clarification checkpoints, synthesis,
+// phase-loop short-circuiting, and empty tiered-selection recovery.
 
 package orchestration
 
@@ -38,10 +15,10 @@ import (
 )
 
 // =============================================================================
-// Step 1e — extractUniqueToolIDs helper (pure function)
+// extractUniqueToolIDs helper (pure function)
 // =============================================================================
 
-func TestExtractUniqueToolIDs_ORCH018(t *testing.T) {
+func TestExtractUniqueToolIDs(t *testing.T) {
 	tests := []struct {
 		name    string
 		results map[string]*StepResult
@@ -134,7 +111,7 @@ func TestExtractUniqueToolIDs_ORCH018(t *testing.T) {
 }
 
 // =============================================================================
-// Step 1f — validatePlan allows empty steps when NeedsUserInput is set
+// validatePlan allows empty steps when NeedsUserInput is set
 // =============================================================================
 
 // minimalValidPlanForValidation returns a plan with one minimal step that
@@ -204,7 +181,7 @@ func TestValidatePlan_AllowsEmptyStepsWithNeedsUserInput(t *testing.T) {
 		// mean "I have all the data I need from prior phases, just synthesize
 		// from completed_steps". validatePlan must accept this — rejecting it
 		// triggers a regeneration loop that hallucinates filler steps (the
-		// same pattern ORCH-018 was meant to eliminate, in a different shape).
+		// same class of filler-step failure in a different shape).
 		//
 		// Note: Terminal == nil → IsTerminal() returns true (backward compat
 		// default per orchestrator.go:50), so this test exercises both the
@@ -275,7 +252,7 @@ func TestValidatePlan_AllowsEmptyStepsWithNeedsUserInput(t *testing.T) {
 }
 
 // =============================================================================
-// Step 2 — BuildIterativePlanningInstructions clarification escape valve
+// BuildIterativePlanningInstructions clarification escape valve
 // =============================================================================
 
 func TestBuildIterativePlanningInstructions_ClarificationEscapeValve(t *testing.T) {
@@ -407,10 +384,10 @@ func TestBuildIterativePlanningInstructions_ClarificationEscapeValve(t *testing.
 }
 
 // =============================================================================
-// Step 5a — synthesisSystemPromptFor helper (pure function)
+// synthesisSystemPromptFor helper (pure function)
 // =============================================================================
 
-func TestSynthesisSystemPromptFor_ORCH018(t *testing.T) {
+func TestSynthesisSystemPromptFor(t *testing.T) {
 	t.Run("nil results returns base prompt", func(t *testing.T) {
 		got := synthesisSystemPromptFor(nil)
 		if got != synthesisSystemPrompt {
@@ -467,7 +444,7 @@ func TestSynthesisSystemPromptFor_ORCH018(t *testing.T) {
 }
 
 // =============================================================================
-// Step 5b — buildSynthesisPrompt <clarification_needed> section (non-streaming)
+// buildSynthesisPrompt <clarification_needed> section (non-streaming)
 // =============================================================================
 
 func TestBuildSynthesisPrompt_ClarificationSection(t *testing.T) {
@@ -552,7 +529,7 @@ func TestBuildSynthesisPrompt_ClarificationSection_OptionalFieldsOmitted(t *test
 }
 
 // =============================================================================
-// Step 5b — synthesisSystemPromptFor integration into synthesizeWithLLM
+// synthesisSystemPromptFor integration into synthesizeWithLLM
 // (verifies the system prompt actually reaches the AI client)
 // =============================================================================
 
@@ -610,7 +587,7 @@ func TestAISynthesizer_SynthesizeWithLLM_ClarificationModeSystemPrompt(t *testin
 }
 
 // =============================================================================
-// Step 5e — streaming buildSynthesisPrompt <clarification_needed> section
+// streaming buildSynthesisPrompt <clarification_needed> section
 // =============================================================================
 
 func TestOrchestratorBuildSynthesisPrompt_ClarificationSection(t *testing.T) {
@@ -665,10 +642,10 @@ func TestOrchestratorBuildSynthesisPrompt_NoClarificationSection_WhenNil(t *test
 }
 
 // =============================================================================
-// Step 6 — parseToolSelection sentinel error identity
+// parseToolSelection sentinel error identity
 // =============================================================================
 
-func TestParseToolSelection_SentinelError_ORCH018(t *testing.T) {
+func TestParseToolSelection_SentinelError(t *testing.T) {
 	provider := &TieredCapabilityProvider{}
 
 	t.Run("empty array returns errNoToolsSelected sentinel", func(t *testing.T) {
@@ -710,19 +687,19 @@ func TestParseToolSelection_SentinelError_ORCH018(t *testing.T) {
 }
 
 // =============================================================================
-// Step 6c — Layer 3 defensive recovery in selectRelevantTools
+// Prior-tool defensive recovery in selectRelevantTools
 // =============================================================================
 
-// TestSelectRelevantTools_Layer3Recovery_ORCH018 verifies that when the
+// TestSelectRelevantTools_PriorToolRecovery verifies that when the
 // tiered selector LLM returns an empty array on a continuation phase AND
 // PhaseContextKeyPriorToolIDs is populated, the defensive recovery fires:
 // selectedTools is replaced with the prior tool IDs, no retries fire, and
 // the call completes successfully. Preserves tiered selection's token-saving
 // purpose by avoiding all-agents fallback.
-func TestSelectRelevantTools_Layer3Recovery_ORCH018(t *testing.T) {
+func TestSelectRelevantTools_PriorToolRecovery(t *testing.T) {
 	catalog := setupTestCatalog(25) // 25 tools → triggers tiered selection
 	aiClient := NewTieredTestAIClient()
-	// Simulate LLM disobeying Layer 2's "return prior tools" instruction
+	// Simulate the LLM ignoring the instruction to return prior tools.
 	aiClient.SetResponse(`[]`)
 
 	provider := NewTieredCapabilityProvider(catalog, aiClient, &TieredCapabilityConfig{
@@ -768,17 +745,17 @@ func TestSelectRelevantTools_Layer3Recovery_ORCH018(t *testing.T) {
 	}
 }
 
-// TestSelectRelevantTools_Layer3_Phase1ShortCircuitsOnSemanticEmpty verifies
+// TestSelectRelevantTools_Phase1ShortCircuitsOnSemanticEmpty verifies
 // that on Phase 1 (no phaseContext / no prior tools), a semantic-empty
 // selector response short-circuits retries and immediately falls back to
 // all-agents — the prior-tools recovery is gated on PriorToolIDs being
-// non-empty, but case (b) of Layer 3 still surfaces the sentinel after one
+// non-empty, but the defensive recovery still surfaces the sentinel after one
 // LLM call to avoid wasting retries on a deterministic empty answer.
 //
 // This guards against the regression observed in trace
 // orch-1775528657240968209 where Phase 1 empty selector responses caused 6
 // wasted LLM calls (2 trips × 3 attempts) before the orchestrator gave up.
-func TestSelectRelevantTools_Layer3_Phase1ShortCircuitsOnSemanticEmpty(t *testing.T) {
+func TestSelectRelevantTools_Phase1ShortCircuitsOnSemanticEmpty(t *testing.T) {
 	catalog := setupTestCatalog(25)
 	aiClient := NewTieredTestAIClient()
 	aiClient.SetResponse(`[]`)
@@ -811,11 +788,11 @@ func TestSelectRelevantTools_Layer3_Phase1ShortCircuitsOnSemanticEmpty(t *testin
 	}
 }
 
-// TestSelectRelevantTools_Layer3_EmptyPriorToolIDs_ShortCircuitsLikePhase1
+// TestSelectRelevantTools_EmptyPriorToolIDs_ShortCircuitsLikePhase1
 // verifies that a continuation phase with PhaseContextKeyPriorToolIDs present
 // but empty is treated like Phase 1: case (a) recovery is gated out, case (b)
 // short-circuits after one call. Same anti-regression as the Phase 1 test.
-func TestSelectRelevantTools_Layer3_EmptyPriorToolIDs_ShortCircuitsLikePhase1(t *testing.T) {
+func TestSelectRelevantTools_EmptyPriorToolIDs_ShortCircuitsLikePhase1(t *testing.T) {
 	catalog := setupTestCatalog(25)
 	aiClient := NewTieredTestAIClient()
 	aiClient.SetResponse(`[]`)
@@ -845,7 +822,7 @@ func TestSelectRelevantTools_Layer3_EmptyPriorToolIDs_ShortCircuitsLikePhase1(t 
 }
 
 // =============================================================================
-// Step 3 — executePhaseLoop clarification short-circuit (integration-style)
+// executePhaseLoop clarification short-circuit (integration-style)
 // =============================================================================
 
 // mockAIClientReturnsClarification is a mock AI client that returns a plan
@@ -919,7 +896,7 @@ func TestExecutePhaseLoop_ClarificationShortCircuit(t *testing.T) {
 	}
 
 	// Clarification field MUST be populated on the response — this is the
-	// key user-visible behaviour of Layer 1 Step 4.
+	// key user-visible behavior of the clarification path.
 	if response.Clarification == nil {
 		t.Fatal("response.Clarification must be set when planner emits NeedsUserInput")
 	}

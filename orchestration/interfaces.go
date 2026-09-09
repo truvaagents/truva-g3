@@ -29,7 +29,7 @@ type RoutingStep struct {
 	// need a separate declaration channel. The field is advisory: the scheduler
 	// does not use it (prior-phase steps are already complete), and existence
 	// validation is performed against actual completed-step results, not this
-	// list (see ORCH-020 RC1/RC7).
+	// list.
 	ImplicitDeps []string               `json:"implicit_deps,omitempty"`
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 }
@@ -47,7 +47,7 @@ type RoutingPlan struct {
 	ContinuationNote string `json:"continuation_note,omitempty"` // LLM explains why continuation is needed
 	PhaseNumber      int    `json:"phase_number,omitempty"`      // Set by orchestrator, not LLM (1-indexed)
 
-	// Clarification escape valve (ORCH-018). When set, the planner is signaling
+	// Clarification escape valve. When set, the planner is signaling
 	// that it cannot make further progress without information from the user.
 	// The orchestrator terminates the phase loop and routes the question through
 	// the synthesizer instead of starting another phase. When this field is set,
@@ -58,7 +58,6 @@ type RoutingPlan struct {
 // ClarificationRequest is the planner's structured request for user input.
 // Populated when the next planning step depends on information that no
 // available tool can produce — only the user can.
-// (ORCH-018)
 type ClarificationRequest struct {
 	// Question is the natural-language question to surface to the user.
 	// Required when ClarificationRequest is non-nil.
@@ -133,7 +132,6 @@ type OrchestratorResponse struct {
 	// The natural-language question is also woven into the Response field by
 	// the synthesizer; this structured field is provided for sophisticated
 	// UI consumers that want to render quick-reply chips or form prompts.
-	// (ORCH-018)
 	Clarification *ClarificationRequest `json:"clarification,omitempty"`
 }
 
@@ -177,7 +175,7 @@ type ExecutionResult struct {
 
 	// ClarificationNeeded is populated by executePhaseLoop when the planner
 	// emits NeedsUserInput. Consumed by the synthesizer to produce a
-	// clarification-aware response (ORCH-018). Nil for normal completions.
+	// clarification-aware response. Nil for normal completions.
 	ClarificationNeeded *ClarificationRequest `json:"clarification_needed,omitempty"`
 }
 
@@ -202,7 +200,7 @@ const (
 	PhaseContextKeyPhaseNumber      = "phase_number"      // int (1-indexed, always >= 2 for Phase 2+)
 	PhaseContextKeyContinuationNote = "continuation_note" // string (LLM's reason for continuation)
 	PhaseContextKeyPriorToolsUsed   = "prior_tools_used"  // []string (sorted, deduplicated agent names)
-	PhaseContextKeyPriorToolIDs     = "prior_tool_ids"    // []string (sorted "agent/capability" IDs from completed steps) — ORCH-018 Layer 2
+	PhaseContextKeyPriorToolIDs     = "prior_tool_ids"    // []string (sorted "agent/capability" IDs from completed steps)
 	PhaseContextKeyCompletedSummary = "completed_summary" // string (compact result summary, max 500 chars)
 )
 
@@ -223,7 +221,7 @@ type StepResult struct {
 	EndTime     time.Time              `json:"end_time"`
 	// Metadata holds optional step-level data (e.g., HITL checkpoint info, resolution metadata)
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
-	// Skipped indicates the step was skipped by post-orchestrator plan refinement (ORCH-015).
+	// Skipped indicates the step was skipped by post-orchestrator plan refinement.
 	// When true, the orchestrator step already performed the equivalent action internally.
 	Skipped    bool   `json:"skipped,omitempty"`
 	SkipReason string `json:"skip_reason,omitempty"`
@@ -233,7 +231,7 @@ type StepResult struct {
 	// binary "we stopped retrying because budget ran out" signal, which
 	// correctly accounts for per-step variable budgets (orchestrator
 	// capabilities are forced to maxAttempts=1, so a single unsuccessful
-	// attempt IS exhausted for them). Consumed by RC9's
+	// attempt IS exhausted for them). Consumed by
 	// summarizeUpstreamFailurePattern to decide whether an upstream failure
 	// looks persistent vs transient.
 	RetryExhausted bool `json:"retry_exhausted,omitempty"`
@@ -532,8 +530,6 @@ type OrchestratorConfig struct {
 	// When HallucinationValidationEnabled is true, validates that LLM-generated plans
 	// only reference agents that were included in the prompt's capability info.
 	// This catches cases where the LLM invents agent names not in the allowed list.
-	// See orchestration/bugs/BUG_LLM_HALLUCINATED_TOOL.md for detailed analysis.
-	//
 	// Set HallucinationValidationEnabled to false to disable validation entirely.
 	// Default: true | Env: TRUVAG3_HALLUCINATION_VALIDATION_ENABLED
 	HallucinationValidationEnabled bool `json:"hallucination_validation_enabled"` // Default: true
@@ -617,7 +613,7 @@ type OrchestratorConfig struct {
 	// Env: TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS (default: 50)
 	ContinuationDigestMaxKeys int `json:"continuation_digest_max_keys,omitempty"`
 
-	// ORCH-020 RC9: Upstream-failure-pattern tunables. When RC8 triggers
+	// Upstream-failure-pattern tunables. When a template-induced skip triggers
 	// a remediation replan, the pattern analyzer decides whether to embed
 	// an "upstream appears persistently unavailable" summary in the
 	// continuation note. Three fields govern the summary's emission and

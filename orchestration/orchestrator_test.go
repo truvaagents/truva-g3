@@ -678,7 +678,7 @@ func TestAIOrchestrator_BuildPlanningPromptWithParseError(t *testing.T) {
 		t.Error("Expected trailing comma warning in prompt")
 	}
 
-	// Verify template quoting hint is included (ORCH-004)
+	// Verify the template-quoting hint is included.
 	if !strings.Contains(promptResult.Prompt, "quoted strings") {
 		t.Error("Expected template quoting hint in prompt")
 	}
@@ -1222,7 +1222,7 @@ func TestGetAgentName(t *testing.T) {
 }
 
 // =============================================================================
-// ORCH-004: Template Quoting, JSON Repair, and Parse Recovery Tests
+// Template quoting, JSON repair, and parse recovery tests
 // =============================================================================
 
 func TestQuoteUnquotedTemplates(t *testing.T) {
@@ -1334,7 +1334,7 @@ func TestAttemptJSONRepair(t *testing.T) {
 func TestParsePlan_UnquotedTemplateRecovery(t *testing.T) {
 	orchestrator := &AIOrchestrator{}
 
-	// JSON with unquoted templates (the exact bug from ORCH-004)
+	// JSON with unquoted templates, matching the production failure shape.
 	jsonWithUnquotedTemplates := `{
 		"plan_id": "test-recovery",
 		"original_request": "weather in Tokyo",

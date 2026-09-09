@@ -2607,7 +2607,7 @@ func TestWithSynthesisMaxTokens_OptionOverridesEnv(t *testing.T) {
 	}
 }
 
-// --- RC5: MicroResolutionMaxTokens tests ---
+// --- MicroResolutionMaxTokens tests ---
 
 func TestDefaultConfig_MicroResolutionMaxTokens_Default(t *testing.T) {
 	_ = os.Unsetenv("TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS")
@@ -2720,7 +2720,7 @@ func TestWithMicroResolutionMaxTokens_OptionOverridesEnv(t *testing.T) {
 }
 
 // ============================================================================
-// ORCH-014: Factory wiring of CustomInstructions to TieredCapabilityProvider
+// Factory wiring of CustomInstructions to TieredCapabilityProvider
 // ============================================================================
 
 func TestCreateOrchestrator_TieredProvider_CustomInstructionsWired(t *testing.T) {
