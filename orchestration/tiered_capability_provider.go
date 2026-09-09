@@ -19,8 +19,8 @@ import (
 
 // errNoToolsSelected is the sentinel error returned by parseToolSelection when
 // the LLM response parses as a well-formed but empty JSON array. Using a
-// sentinel (rather than a string comparison on fmt.Errorf) makes the ORCH-018
-// Layer 3 defensive recovery robust to error wrapping in future refactors:
+// sentinel (rather than a string comparison on fmt.Errorf) makes defensive
+// empty-selection recovery robust to error wrapping in future refactors:
 // callers use errors.Is(err, errNoToolsSelected) to detect this specific case.
 var errNoToolsSelected = errors.New("no tools selected")
 
@@ -60,7 +60,7 @@ type TieredCapabilityProvider struct {
 	// Injected into selection prompts so the LLM selector knows about
 	// tools that are always required regardless of user query.
 	// Example: "Always check for reusable test scripts" → includes lookup_scripts
-	customInstructions []string // ORCH-014
+	customInstructions []string
 
 	// Logger for observability
 	logger core.Logger
@@ -68,7 +68,7 @@ type TieredCapabilityProvider struct {
 	// Telemetry for metrics
 	telemetry core.Telemetry
 
-	// LLM Debug Store integration (per LLM_DEBUG_PAYLOAD_DESIGN.md)
+	// LLM debug-store integration.
 	debugStore LLMDebugStore  // For recording LLM interactions
 	debugWg    sync.WaitGroup // Tracks in-flight debug recordings for graceful shutdown
 	debugSeqID atomic.Uint64  // For generating unique fallback IDs when TraceID is empty
@@ -171,8 +171,7 @@ func (t *TieredCapabilityProvider) SetAIOptionsOverride(opts *AIOptionsOverride)
 	t.aiOptionsOverride = opts
 }
 
-// SetLLMDebugStore sets the debug store for recording LLM interactions.
-// Per LLM_DEBUG_PAYLOAD_DESIGN.md, this enables recording of tiered_selection calls.
+// SetLLMDebugStore sets the debug store for recording tiered-selection interactions.
 func (t *TieredCapabilityProvider) SetLLMDebugStore(store LLMDebugStore) {
 	t.debugStore = store
 }
@@ -245,14 +244,14 @@ func (t *TieredCapabilityProvider) logWarnWithContext(ctx context.Context, msg s
 
 // SetCustomInstructions configures domain-specific workflow rules for tiered selection.
 // These are injected into selection prompts so the LLM selector knows about tools
-// that are always required regardless of user query. ORCH-014 fix.
+// that are always required regardless of user query.
 func (t *TieredCapabilityProvider) SetCustomInstructions(instructions []string) {
 	t.customInstructions = instructions
 }
 
 // writeCustomInstructions appends the <custom_instructions> XML section to sb
 // if instructions are non-empty. Shared by TieredCapabilityProvider (selection prompts)
-// and AIOrchestrator (continuation planning prompts). ORCH-012/ORCH-014.
+// and AIOrchestrator (continuation planning prompts).
 func writeCustomInstructions(sb *strings.Builder, instructions []string) {
 	if len(instructions) == 0 {
 		return
@@ -264,9 +263,8 @@ func writeCustomInstructions(sb *strings.Builder, instructions []string) {
 	sb.WriteString("</custom_instructions>\n\n")
 }
 
-// recordDebugInteraction stores an LLM interaction for debugging.
-// Uses WaitGroup to ensure graceful shutdown waits for pending recordings.
-// Per LLM_DEBUG_PAYLOAD_DESIGN.md section 4.6 Lifecycle Management.
+// recordDebugInteraction stores an LLM interaction for debugging. Its WaitGroup
+// ensures graceful shutdown waits for pending recordings.
 func (t *TieredCapabilityProvider) recordDebugInteraction(ctx context.Context, interaction LLMInteraction) {
 	if t.debugStore == nil {
 		return
@@ -447,7 +445,7 @@ func extractAgentNamesFromToolIDs(toolIDs []string) []string {
 // selectRelevantTools uses an LLM call to identify which tools are needed.
 // Uses structured prompting (Guided-Structured Templates, Sept 2025) and validates
 // results to filter hallucinated tools (RAG-MCP, May 2025).
-// Records LLM interaction to debug store per LLM_DEBUG_PAYLOAD_DESIGN.md.
+// Records the LLM interaction to the configured debug store.
 // Uses AI client's default model - cost savings come from reduced token counts.
 func (t *TieredCapabilityProvider) selectRelevantTools(
 	ctx context.Context,
@@ -571,8 +569,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 		}
 		llmDuration := time.Since(llmStartTime)
 
-		// LLM Debug: Record interaction (success or failure)
-		// Per LLM_DEBUG_PAYLOAD_DESIGN.md - this is the 7th recording site: "tiered_selection"
+		// Record the tiered-selection interaction on success or failure.
 		if err != nil {
 			// LLM API error — not retryable at this level (circuit breaker handles transport retries)
 			telemetry.AddSpanEvent(ctx, "llm.tiered_selection.error",
@@ -662,7 +659,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 		// Parse BEFORE recording success — Success field must reflect actual usability
 		selectedTools, parseErr := t.parseToolSelection(response.Content)
 
-		// ORCH-018 Layer 3: Defensive empty-response handling.
+		// Defensively handle a well-formed but empty response.
 		// The selector returned a well-formed empty array []. parseErr will be
 		// errNoToolsSelected (the sentinel from parseToolSelection). We use
 		// errors.Is so the check remains robust if parseToolSelection is ever
@@ -968,7 +965,7 @@ C. COMPLETENESS CHECK: Review each part of the request
 
 `)
 
-	// ORCH-014 fix: Inject CustomInstructions so selection LLM knows about
+	// Inject CustomInstructions so the selection LLM knows about
 	// domain-specific tool requirements not implied by the user query.
 	writeCustomInstructions(&sb, t.customInstructions)
 
@@ -1097,7 +1094,7 @@ Reason silently. Output raw JSON only — no reasoning text, no markdown, no cod
 	// Phase context — the key differentiator from buildSelectionPrompt.
 	// Dynamic content placed after identity per P2 (Identity → Instructions → Context).
 	//
-	// ORCH-018 Layer 2: continuation_note DROPPED — it was mixed-purpose narrative
+	// Drop continuation_note because it was mixed-purpose narrative
 	// that pushed the selector toward reasoning about WHETHER to proceed (a planner
 	// concern) instead of filtering tools. discoveries_so_far is also dropped
 	// because the bug-causing pattern was "continuation_note says X + discoveries
@@ -1113,7 +1110,7 @@ Reason silently. Output raw JSON only — no reasoning text, no markdown, no cod
 	}
 	sb.WriteString("</phase_context>\n\n")
 
-	// ORCH-014 fix: Same pattern as buildSelectionPrompt — inject domain rules before tool list.
+	// As in buildSelectionPrompt, inject domain rules before the tool list.
 	writeCustomInstructions(&sb, t.customInstructions)
 
 	// Available tools — same compact format as buildSelectionPrompt
@@ -1191,8 +1188,8 @@ func (t *TieredCapabilityProvider) parseToolSelection(response string) ([]string
 
 	if len(tools) == 0 {
 		// Return the sentinel directly so callers can detect this specific
-		// case via errors.Is(err, errNoToolsSelected) — used by the ORCH-018
-		// Layer 3 defensive recovery in selectRelevantTools.
+		// case via errors.Is(err, errNoToolsSelected), enabling defensive
+		// empty-selection recovery in selectRelevantTools.
 		return nil, errNoToolsSelected
 	}
 

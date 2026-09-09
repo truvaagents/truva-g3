@@ -312,7 +312,6 @@ func isReservedPropagationHeader(name string) bool {
 // PlanningPromptResult contains the prompt and metadata for hallucination validation.
 // When buildPlanningPrompt returns this, the caller can validate that LLM-generated
 // plans only reference agents that were included in the prompt.
-// See orchestration/bugs/BUG_LLM_HALLUCINATED_TOOL.md for detailed analysis.
 type PlanningPromptResult struct {
 	// Prompt is the complete prompt to send to the LLM
 	Prompt string
@@ -322,13 +321,11 @@ type PlanningPromptResult struct {
 	// SystemPrompt is the system-level message for LLM providers that support
 	// separate system/user message roles (e.g., Anthropic, OpenAI).
 	// When empty, the prompt is sent as a single user message.
-	// See BUG_PHASE3_SKIPPED_EXECUTION.md Issue 5 P10.
 	SystemPrompt string
 }
 
 // HallucinationContext captures context about a hallucinated agent for enhanced retry.
 // This is a GENERIC structure - no domain-specific knowledge required.
-// See orchestration/bugs/BUG_LLM_HALLUCINATED_TOOL.md Fix 3 for detailed design.
 type HallucinationContext struct {
 	// AgentName is the hallucinated agent name (e.g., "calculator")
 	AgentName string
@@ -785,7 +782,7 @@ func NewAIOrchestrator(config *OrchestratorConfig, discovery core.Discovery, aiC
 		}
 	}
 
-	// Post-orchestrator plan refinement (ORCH-015).
+	// Post-orchestrator plan refinement.
 	// Independent of hybrid resolution — works with any parameter resolution strategy.
 	// Opt-in for initial rollout. Environment is resolved into typed config at
 	// construction; request execution never reads process-global state.
@@ -1177,10 +1174,10 @@ func (o *AIOrchestrator) getAgentName() string {
 //   - intermediate store:     nil — allStepsList already contains the just-completed phase
 //
 // phasePlans is shallow-copied (slice-header) to close the slice-header race
-// with the phase loop's continued appends. Plan pointers are shared — see
-// BUG_HITL_INTERRUPTED_EXECUTION_MISSING_PRIOR_PHASE_STEPS.md "Known narrow
-// race window" for the remediation-override mutation on plan.Terminal and
-// the follow-up mitigation options.
+// with the phase loop's continued appends. Plan pointers remain shared, so a
+// concurrent mutation of plan.Terminal during remediation can still race with
+// asynchronous record construction; callers must finish plan mutation before
+// invoking this helper.
 func buildNonSuccessResult(
 	currentPhaseSteps []StepResult,
 	phasePlans []*RoutingPlan,
@@ -1310,7 +1307,7 @@ func rebuildCheckpointCompletedSteps(checkpoint *ExecutionCheckpoint) {
 // storeExecutionAsync stores execution data asynchronously for DAG visualization.
 // This helper is used by both success and non-success paths.
 //
-// Contract (post ORCH-022):
+// Contract:
 //   - For executions that have reached model execution, result is non-nil.
 //   - A successful BeforePlanning short-circuit also stores a non-nil,
 //     zero-step result so list consumers can distinguish it from a failure.
@@ -1615,7 +1612,7 @@ func (o *AIOrchestrator) SetPropagatedHeaders(headers map[string]string) {
 // Runs asynchronously to avoid blocking orchestration. Errors are logged, not propagated.
 // extractErrorProviderInfo extracts model and provider from a core.ProviderError if present.
 // Used by error-path recordDebugInteraction calls to populate LLMInteraction model/provider
-// when the LLM response is nil (ORCH-008 Fix 4).
+// when the LLM response is nil.
 func extractErrorProviderInfo(err error) (model, provider string) {
 	var pe core.ProviderError
 	if errors.As(err, &pe) {
@@ -1969,9 +1966,9 @@ func (o *AIOrchestrator) executePhaseLoop(
 		lastPlan            *RoutingPlan
 		forcedTerminal      bool
 		regenEvents         []map[string]interface{} // plan regeneration events for DAG observability
-		clarificationNeeded *ClarificationRequest    // ORCH-018: set when planner emits NeedsUserInput
-		// ORCH-020 RC8: one-shot guard for template-induced-skip remediation.
-		// Flipped to true the first time RC4 skips produce a remediation
+		clarificationNeeded *ClarificationRequest    // set when planner emits NeedsUserInput
+		// One-shot guard for template-induced-skip remediation. Flipped to true
+		// the first time failed-dependency skips produce a remediation
 		// replan; prevents infinite loops if the remediation attempt also
 		// produces skips (the second skip round falls through to normal
 		// termination, and the synthesizer tells the user the service is
@@ -2179,17 +2176,15 @@ func (o *AIOrchestrator) executePhaseLoop(
 		// the exact checkpoint plan restored from the DB-0 HITL keyspace. Re-validating against the current
 		// agent registry could reject the plan for transient agent availability changes
 		// between interrupt and resume, discarding the user-approved plan.
-		// See Issue 5 in BUG_CONTINUATION_PROMPT_MISSING_CUSTOM_INSTRUCTIONS_AND_RESUME_REPLAY.md.
-		//
 		// The validators run as a FIXPOINT loop (not a single pass): any regeneration restarts
 		// validation from the top, so a regeneration triggered by a later validator cannot slip a
 		// defect past an earlier one (e.g. a hallucinated agent past validatePlan). The per-step
 		// telemetry lives in runPlanValidationGauntlet; A2 (normalizeTerminalSynthesisPlan) runs at
 		// the top of each round.
 		if planSource != "hitl_resume" {
-			// Build executedStepCaps from prior-phase completed results so RC1
+			// Build executedStepCaps from prior-phase completed results so
 			// (validateTemplatePaths) can validate cross-phase references. Sourced from actual
-			// StepResult data, NOT from LLM-declared implicit_deps (per RC7 tightening:
+			// StepResult data, NOT from LLM-declared implicit_deps:
 			// implicit_deps is advisory, not authoritative). Stable across the loop.
 			var executedStepCaps map[string]stepCapability
 			if len(allStepResults) > 0 {
@@ -2309,7 +2304,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 		phasePlans = append(phasePlans, plan)
 		lastPlan = plan
 
-		// --- ORCH-018: Clarification short-circuit ---
+		// --- Clarification short-circuit ---
 		// If the planner emitted needs_user_input, terminate the phase loop
 		// without running HITL, the executor, or the next continuation planner.
 		// The synthesizer will produce a clarification-aware user-facing response
@@ -2423,7 +2418,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 					return nil, saveErr
 				}
 
-				// ORCH-022: route through buildNonSuccessResult so the interrupted
+				// Route through buildNonSuccessResult so the interrupted
 				// record carries full PhasePlans/PhaseCount metadata and a cross-phase
 				// Result.Steps slice. Plan-level HITL fires BEFORE executor runs for
 				// this phase, so currentPhaseSteps is nil.
@@ -2483,7 +2478,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 						return nil, saveErr
 					}
 				}
-				// ORCH-022: route through buildNonSuccessResult so the interrupted
+				// Route through buildNonSuccessResult so the interrupted
 				// record carries full PhasePlans/PhaseCount metadata and a cross-phase
 				// Result.Steps slice. Executor returns (nil, ErrInterrupted) at
 				// step-level HITL — phaseResult is nil. Current-phase siblings that
@@ -2514,7 +2509,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 					"duration_ms": time.Since(startTime).Milliseconds(),
 				})
 			}
-			// ORCH-022: route through buildNonSuccessResult so the errored record
+			// Route through buildNonSuccessResult so the errored record
 			// carries full PhasePlans/PhaseCount metadata and a cross-phase
 			// Result.Steps slice. For non-interrupt errors, phaseResult may or may
 			// not be nil; surface any partial steps the executor returned.
@@ -2541,7 +2536,6 @@ func (o *AIOrchestrator) executePhaseLoop(
 		// the HITL resume path pre-populates allStepsList before the phase loop
 		// (lines 1316-1318), so duplicates could still occur if the executor returns a
 		// step that was already accumulated. This guard prevents double-counting.
-		// See BUG_PHASE3_SKIPPED_EXECUTION.md Change 2A.
 		duplicateCount := 0
 		for i := range phaseResult.Steps {
 			step := &phaseResult.Steps[i]
@@ -2621,7 +2615,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 					"total_steps": totalSteps,
 				})
 			}
-			// ORCH-022: route through buildNonSuccessResult for schema parity with
+			// Route through buildNonSuccessResult for schema parity with
 			// other records. Inter-phase intermediate store fires AFTER the
 			// accumulator has appended the just-completed phase's steps to
 			// allStepsList, so currentPhaseSteps is nil.
@@ -2638,8 +2632,8 @@ func (o *AIOrchestrator) executePhaseLoop(
 			phaseCancel()
 		}
 
-		// --- ORCH-020 RC8: Remediation on template-induced skips ---
-		// When RC4 skipped one or more steps in this phase because their
+		// --- Remediation on template-induced skips ---
+		// When one or more steps in this phase were skipped because their
 		// upstream template-referenced dependencies failed, detection alone
 		// is abrupt termination — the user gets no useful answer. Trigger a
 		// remediation continuation so the planner sees the failure context
@@ -2649,7 +2643,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 		// orchestration to prevent infinite loops. The gate decision is
 		// extracted into decideRemediation so it can be unit-tested in
 		// isolation from the phase-loop scaffolding.
-		// ORCH-020 RC9: copy the three failure-pattern tunables into a small
+		// Copy the three failure-pattern tunables into a small
 		// value object so decideRemediation stays free of the full
 		// *OrchestratorConfig. Values are env-overridable via
 		// TRUVAG3_FAILURE_PATTERN_* per FRAMEWORK_DESIGN_PRINCIPLES §5.
@@ -2690,7 +2684,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 			// Edge case note: if the current plan had `len(Steps) == 0`
 			// the forced-terminal guard below (line ~2456) would preempt
 			// this override. That cannot actually occur in practice
-			// because RC4's skip sweep requires non-empty steps to fire,
+			// because the skip sweep requires non-empty steps to fire,
 			// but the invariant is worth noting for future edits.
 			falseVal := false
 			plan.Terminal = &falseVal
@@ -2699,8 +2693,8 @@ func (o *AIOrchestrator) executePhaseLoop(
 			// Trigger-specific span event + WARN log with skip-id details.
 			// The counter above already recorded the trigger via
 			// reason="triggered"; no separate trigger-only counter needed.
-			// ORCH-020 RC9: stamp has_failure_pattern on the existing span
-			// event so operators can answer "did RC9 fire on this trace?"
+			// Stamp has_failure_pattern on the existing span event so operators
+			// can see whether pattern analysis produced a signal on this trace.
 			// without reading prompt text. Zero cardinality cost — bool.
 			telemetry.AddSpanEvent(ctx, "orchestrator.remediation.triggered",
 				attribute.String("request_id", requestID),
@@ -2721,7 +2715,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 					"error_type":       "template_induced_skip",
 				})
 
-				// ORCH-020 RC9: one DEBUG log diagnosing the pattern
+				// Emit one DEBUG log diagnosing the pattern
 				// analyzer — mirrors decideRemediation's Reason prior art.
 				// Lets operators answer "why didn't the pattern fire?"
 				// without re-running the computation. Fields are
@@ -2834,7 +2828,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 		span.SetAttribute("total_steps", totalSteps)
 		span.SetAttribute("forced_terminal", forcedTerminal)
 
-		// ORCH-018: classified termination reason for dashboard filtering.
+		// Record a classified termination reason for dashboard filtering.
 		// Filterable in trace search (e.g. termination_reason=clarification)
 		// and usable as a dimension in OTLP metric queries.
 		switch {
@@ -2873,7 +2867,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 		Success:             true,
 		TotalDuration:       time.Since(startTime),
 		PhaseCount:          phaseCount,
-		ClarificationNeeded: clarificationNeeded, // ORCH-018: propagate to synthesizer
+		ClarificationNeeded: clarificationNeeded, // propagate to the synthesizer
 	}
 	for _, step := range allStepsList {
 		if !step.Success {
@@ -3008,7 +3002,7 @@ func (o *AIOrchestrator) synthesizeBuffered(state *executionRunState) (*Orchestr
 		Steps:           loopResult.CombinedResult.Steps, // Include step-level details for API consumers (Change 2)
 		Usage:           &totalUsage,
 		UsageByPhase:    usageByPhase,
-		Clarification:   loopResult.CombinedResult.ClarificationNeeded, // ORCH-018: surface to UI consumers
+		Clarification:   loopResult.CombinedResult.ClarificationNeeded, // surface to UI consumers
 	}
 
 	return response, nil
@@ -3077,9 +3071,9 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 	// Stream the synthesis response
 	// Capture start time for LLM debug recording
 	synthesisStart := time.Now()
-	systemPrompt := synthesisSystemPromptFor(loopResult.CombinedResult) // ORCH-018: clarification-aware
+	systemPrompt := synthesisSystemPromptFor(loopResult.CombinedResult)
 
-	// ORCH-018: annotate synthesis span + emit telemetry when clarification
+	// Annotate the synthesis span and emit telemetry when clarification
 	// mode is active (parity with the non-streaming path in synthesizer.go).
 	// Consistent with the surrounding code's assumption that
 	// loopResult.CombinedResult is non-nil (see Steps iteration above).
@@ -3269,7 +3263,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 			Steps:           loopResult.CombinedResult.Steps,
 			Usage:           &totalUsage,
 			UsageByPhase:    usageByPhase,
-			Clarification:   loopResult.CombinedResult.ClarificationNeeded, // ORCH-018: surface to UI consumers
+			Clarification:   loopResult.CombinedResult.ClarificationNeeded, // surface to UI consumers
 		},
 		ChunksDelivered: chunkIndex,
 		StreamCompleted: true,
@@ -3562,7 +3556,7 @@ func (o *AIOrchestrator) buildPreparedSynthesisPrompt(
 
 	sb.WriteString("</agent_responses>\n\n")
 
-	// ORCH-018: clarification-aware section (parity with synthesizer.go).
+	// Clarification-aware section (parity with synthesizer.go).
 	// Only present when the planner emitted needs_user_input and the phase
 	// loop short-circuited. Consistent with the surrounding code's assumption
 	// that `result` is non-nil (see result.Steps iteration above).
@@ -3938,8 +3932,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 						})
 					}
 
-					// Enhanced Hallucination Retry Strategy (Fix 3 from BUG_LLM_HALLUCINATED_TOOL.md)
-					// Instead of retrying with the same tool list, we:
+					// On a hallucinated tool, retry with refreshed selection context:
 					// 1. Extract context about what the LLM was trying to do
 					// 2. Build an enhanced request with capability hints
 					// 3. Re-run tiered selection (may find different/better tools)
@@ -4950,9 +4943,8 @@ type planningContext struct {
 }
 
 // buildDefaultFormatRules generates the shared format rules text used by both initial
-// and continuation prompts. Unlike the previous const, this embeds budget-aware
-// iterative planning instructions via BuildIterativePlanningInstructions.
-// See BUG_PHASE3_SKIPPED_EXECUTION.md Change 2D.
+// and continuation prompts. It embeds budget-aware iterative planning
+// instructions via BuildIterativePlanningInstructions.
 func buildDefaultFormatRules(iterConfig *IterativePlanConfig) string {
 	iterativeInstructions := BuildIterativePlanningInstructions(iterConfig)
 	if iterativeInstructions != "" {
@@ -5171,10 +5163,9 @@ func (o *AIOrchestrator) buildPlanningPrompt(ctx context.Context, request string
 // it delegates to that; otherwise it falls back through SystemInstructions and
 // finally a built-in default persona.
 //
-// ORCH-020 RC7: every fallback path that produces a persona without going through
-// a SystemPromptBuilder is wrapped with appendRuntimeContext so the planner
+// Every fallback path that produces a persona without going through a
+// SystemPromptBuilder is wrapped with appendRuntimeContext so the planner
 // receives today's date regardless of which constructor wired the orchestrator.
-// See BUG_PHASE3_SKIPPED_EXECUTION.md Issue 5 P10.
 func (o *AIOrchestrator) buildSystemPrompt(ctx context.Context, request string) string {
 	return o.buildSystemPromptFromInput(ctx, PromptInput{
 		Request: request, Metadata: clonePromptMetadata(core.GetPipelineEnrichments(ctx)),
@@ -5307,7 +5298,7 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	}
 
 	// 1. Build phase context for context-aware tool re-selection.
-	// ORCH-018 Layer 2: PhaseContextKeyPriorToolIDs carries tool IDs in
+	// PhaseContextKeyPriorToolIDs carries prior tool IDs in
 	// "agent/capability" format — the same format the selector LLM must
 	// return — so the selector can copy them verbatim as its prior-tools
 	// fallback selection, and the Go-side defensive recovery in
@@ -5461,7 +5452,7 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 			}
 		}
 
-		// ORCH-015: surface orchestrator delegation sub-steps so the planner doesn't re-issue them.
+		// Surface orchestrator delegation sub-steps so the planner does not reissue them.
 		childSummary := extractOrchestratorChildSummary(result)
 		preparedStepID, err := preparePromptValue(
 			ctx, promptContinuationPlan, promptValuePriorResult,
@@ -5684,7 +5675,7 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	// Include custom instructions in continuation prompts (same as initial plan).
 	// Without this, domain-specific rules (e.g., "use project_key TRUV for JIRA")
 	// are invisible to Phase 2+ plans, causing the LLM to hallucinate values.
-	// Uses shared helper (ORCH-012 fix, extracted in ORCH-014).
+	// Use the shared helper so initial and continuation prompts stay consistent.
 	writeCustomInstructions(&sb, o.config.PromptConfig.CustomInstructions)
 
 	sb.WriteString("<planning_instructions>\n")
@@ -5697,8 +5688,8 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	sb.WriteString("- Set \"terminal\": false only if you need to discover new entities from results\n")
 	sb.WriteString("</planning_instructions>\n\n")
 
-	// Concrete example demonstrating implicit_deps for prior-phase references
-	// (ORCH-020 RC7 Change #3). Schema-by-example is preferred over prose per
+	// Concrete example demonstrating implicit_deps for prior-phase references.
+	// Schema-by-example is preferred over prose per
 	// EFFECTIVE_PROMPTS_GUIDE §4.1. The example is only emitted when there are
 	// at least two completed prior steps to reference — otherwise the example
 	// would teach self-reference or point at non-existent step IDs, both of
@@ -5808,7 +5799,6 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 // continuation planner to see what a delegated agent already did (e.g., JIRA
 // ticket creation, Slack notification) and avoid duplicating those actions.
 // Returns "" if the step is not an orchestrator or has no parseable steps[].
-// See ORCH-015 §9 for design details.
 func extractOrchestratorChildSummary(result *StepResult) string {
 	if result == nil {
 		return ""
@@ -5860,7 +5850,7 @@ func extractUniqueAgentNames(results map[string]*StepResult) []string {
 
 // extractUniqueToolIDs returns a deterministically sorted, deduplicated list
 // of "agent/capability" tool IDs from successfully completed step results.
-// Used by ORCH-018 Layer 2 to populate PhaseContextKeyPriorToolIDs in
+// Used to populate PhaseContextKeyPriorToolIDs in
 // continuation phase context, so the selector LLM and the Go-side defensive
 // fallback both see prior tool IDs in the format the selector must return.
 // Steps with missing AgentName or Capability, or with Success=false, are skipped.
@@ -6218,8 +6208,8 @@ func (o *AIOrchestrator) normalizeTerminalSynthesisPlan(ctx context.Context, pla
 }
 
 // runPlanValidationGauntlet runs the plan validators in order and returns the FIRST failure,
-// emitting that validator's WARN log + span event (and a rejection counter for the RC1/RC2/RC3
-// validators; validatePlan and the step-ID-conflict check emit no counter). Telemetry strings
+// emitting that validator's WARN log + span event (and a rejection counter for the macro,
+// dependency, and template-path validators; validatePlan and the step-ID-conflict check emit no counter). Telemetry strings
 // (log messages, operation values, span-event names, counter names) are preserved VERBATIM from
 // the former inline blocks in executePhaseLoop — Loki/Jaeger/Grafana key off them. It does NOT
 // regenerate: the caller's fixpoint loop owns regeneration, so every validator re-runs after a
@@ -6255,7 +6245,7 @@ func (o *AIOrchestrator) runPlanValidationGauntlet(
 		return valErr
 	}
 
-	// RC2 — reject plans containing {{...}} tokens that don't match the supported
+	// Reject plans containing {{...}} tokens that don't match the supported
 	// {{stepId.fieldPath}} shape (e.g. hallucinated {{today_plus_1}}).
 	if macroErr := validateNoUnknownMacros(plan); macroErr != nil {
 		if o.logger != nil {
@@ -6281,7 +6271,7 @@ func (o *AIOrchestrator) runPlanValidationGauntlet(
 		return macroErr
 	}
 
-	// RC3 — enforce templates ⊆ depends_on (same-phase) ∪ implicit_deps (cross-phase).
+	// Enforce templates ⊆ depends_on (same-phase) ∪ implicit_deps (cross-phase).
 	if depErr := o.validateDependencyConsistency(plan); depErr != nil {
 		if o.logger != nil {
 			o.logger.WarnWithContext(ctx, "Missing depends_on/implicit_deps for templated step — triggering regeneration", map[string]interface{}{
@@ -6306,7 +6296,7 @@ func (o *AIOrchestrator) runPlanValidationGauntlet(
 		return depErr
 	}
 
-	// RC1 — cross-phase-aware validateTemplatePaths: rejects references to steps absent from both
+	// Cross-phase-aware validateTemplatePaths rejects references to steps absent from both
 	// the current plan AND executedStepCaps, and verifies the requested field exists in the
 	// referenced capability's declared output schema (when available).
 	if templateErr := o.validateTemplatePaths(plan, executedStepCaps); templateErr != nil {
@@ -6379,7 +6369,7 @@ func (o *AIOrchestrator) validatePlan(plan *RoutingPlan) error {
 	// An empty plan cannot fulfill any user request UNLESS the plan is signaling
 	// one of two valid "no execution needed" states:
 	//
-	//   1. ORCH-018 Layer 1: NeedsUserInput is set — the planner is asking the
+	//   1. NeedsUserInput is set — the planner is asking the
 	//      user for clarification. The phase loop short-circuits and routes the
 	//      question through the synthesizer.
 	//
@@ -6387,8 +6377,7 @@ func (o *AIOrchestrator) validatePlan(plan *RoutingPlan) error {
 	//      necessary work is already complete (e.g., a continuation phase that
 	//      decides "I have all the data I need from prior phases, just synthesize
 	//      from completed_steps"). This is a legitimate continuation pattern
-	//      observed in real traces (see BUG_TIERED_SELECTION_EMPTY_ON_CONTINUATION.md
-	//      Phase 2 trace evidence). The phase loop's existing termination check
+	//      observed in real traces. The phase loop's existing termination check
 	//      at line 2184 handles this naturally: plan.IsTerminal() → break.
 	//
 	// The pathological case (terminal: false, steps: [], NeedsUserInput == nil)
@@ -6494,8 +6483,8 @@ var templatePathRegex = regexp.MustCompile(`\{\{(step-\d+)\.response\.data\.([^.
 // those are the tool's input contract, not the framework's to arbitrate
 // (FRAMEWORK_DESIGN_PRINCIPLES.md §"Framework is domain-agnostic").
 //
-// ORCH-020 RC2 (Issue 11): walks parameters recursively via collectTemplateStrings
-// so nested JSON objects and arrays are validated the same way the runtime
+// Parameters are walked recursively via collectTemplateStrings so nested JSON
+// objects and arrays are validated the same way the runtime
 // interpolator traverses them.
 func validateNoUnknownMacros(plan *RoutingPlan) error {
 	if plan == nil {
@@ -6527,15 +6516,15 @@ func validateNoUnknownMacros(plan *RoutingPlan) error {
 //     implicit_deps is not consulted by findReadySteps)
 //   - for refs to PRIOR phases (not in plan.Steps), the ref must appear in
 //     implicit_deps (plan self-documentation; existence is checked separately
-//     by RC1 against executedStepCaps)
+//     by validateTemplatePaths against executedStepCaps)
 //   - self-references are always rejected: a step cannot consume its own output
 //
-// ORCH-020 RC3: rejection triggers regeneration so the LLM fixes its own
+// Rejection triggers regeneration so the LLM fixes its own
 // plan without the orchestration wasting retries on a broken dispatch.
-// ORCH-020 RC3 (Issue 11): walks parameters recursively.
+// Parameters are walked recursively.
 //
 // This is a declaration-consistency check (does the LLM acknowledge its own
-// cross-step dependencies?), not an existence check. RC1 does existence
+// cross-step dependencies?), not an existence check. validateTemplatePaths does existence
 // validation against executedStepCaps separately.
 func (o *AIOrchestrator) validateDependencyConsistency(plan *RoutingPlan) error {
 	if plan == nil {
@@ -6544,7 +6533,7 @@ func (o *AIOrchestrator) validateDependencyConsistency(plan *RoutingPlan) error 
 
 	// Steps declared in the current plan — used to distinguish in-plan refs
 	// (must be in depends_on) from cross-phase refs (must be in implicit_deps
-	// OR validated by RC1 against executedStepCaps).
+	// or validated against executedStepCaps by validateTemplatePaths).
 	planStepSet := make(map[string]struct{}, len(plan.Steps))
 	for _, step := range plan.Steps {
 		planStepSet[step.StepID] = struct{}{}
@@ -6589,7 +6578,7 @@ func (o *AIOrchestrator) validateDependencyConsistency(plan *RoutingPlan) error 
 			}
 
 			// Cross-phase reference: must be declared in implicit_deps so the
-			// plan is self-describing. RC1 separately verifies the referenced
+			// plan is self-describing. validateTemplatePaths separately verifies the referenced
 			// step actually exists in completed results.
 			if _, ok := declaredImplicit[refID]; !ok {
 				return fmt.Errorf(
@@ -6615,14 +6604,14 @@ type stepCapability struct {
 // referenced step actually exists either in the current plan or in the set of
 // prior-phase completed steps (executedStepCaps).
 //
-// ORCH-020 RC1: executedStepCaps is the authoritative source for existence
+// executedStepCaps is the authoritative source for existence
 // validation of cross-phase references. Passing nil is valid for
 // non-iterative plans or the first phase; references to steps outside the
 // current plan are then reported as hard errors so the orchestrator can
 // regenerate.
 //
-// ORCH-020 RC1 (Issue 11): parameter scanning uses collectTemplateStrings so
-// nested JSON objects and arrays are walked the same way the runtime
+// Parameter scanning uses collectTemplateStrings so nested JSON objects and
+// arrays are walked the same way the runtime
 // interpolator traverses them.
 //
 // Returns nil when every {{step-X.response.data.*}} reference points at a
@@ -6637,7 +6626,7 @@ func (o *AIOrchestrator) validateTemplatePaths(plan *RoutingPlan, executedStepCa
 	// Union current-plan steps with prior-phase completed steps. The
 	// continuation-phase step-ID-conflict check (see the block that follows
 	// this validator call in executePhaseLoop) rejects duplicate IDs across
-	// phases before RC1 runs, so the "current plan overwrites" behaviour is
+	// phases before this validator runs, so the "current plan overwrites" behaviour is
 	// defense-in-depth — it does not actually trigger in production flows.
 	stepCaps := make(map[string]stepCapability)
 	for id, cap := range executedStepCaps {
@@ -6677,7 +6666,7 @@ func (o *AIOrchestrator) validateTemplatePaths(plan *RoutingPlan, executedStepCa
 				// StepResult fields were set), we can't check its output
 				// schema here. Existence was already verified above. Any
 				// still-unresolved {{…}} that survives runtime interpolation
-				// is caught by RC6's pre-dispatch guard.
+				// is caught by the pre-dispatch unresolved-token guard.
 				agentInfo := agentsByName[refCap.agent]
 				if agentInfo == nil {
 					continue

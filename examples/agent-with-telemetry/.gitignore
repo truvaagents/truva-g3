@@ -47,9 +47,6 @@ Thumbs.db
 /grafana-data/
 /jaeger-data/
 
-# Implementation plans (internal documentation)
-IMPLEMENTATION_PLAN.md
-
 # Logs
 *.log
 logs/

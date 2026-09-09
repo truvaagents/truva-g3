@@ -484,7 +484,7 @@ func TestAutoWireResult_UnmappedNotInResolved(t *testing.T) {
 
 // TestAutoWireParameters_ObjectTypeParam verifies that auto-wiring a parameter of type "object"
 // where the source data contains a matching map field does NOT panic.
-// Regression test for ORCH-005: comparing uncomparable type map[string]interface{}.
+// Regression test for comparing an uncomparable map[string]interface{} value.
 func TestAutoWireParameters_ObjectTypeParam(t *testing.T) {
 	sourceData := map[string]interface{}{
 		"data": map[string]interface{}{
@@ -526,7 +526,7 @@ func TestAutoWireParameters_ObjectTypeParam(t *testing.T) {
 
 // TestAutoWireParameters_SliceTypeParam verifies that auto-wiring a parameter of type "array"
 // where the source data contains a matching slice does NOT panic.
-// Part of ORCH-005 fix: slices are also uncomparable in Go.
+// Slices are also uncomparable in Go.
 func TestAutoWireParameters_SliceTypeParam(t *testing.T) {
 	sourceData := map[string]interface{}{
 		"items": []interface{}{"item1", "item2", "item3"},
@@ -552,8 +552,8 @@ func TestAutoWireParameters_SliceTypeParam(t *testing.T) {
 	}
 }
 
-// TestAutoWireParameters_NestedExtractionStillWorks verifies that the ORCH-005 fix
-// preserves the nested_extraction matchType for map→string extraction.
+// TestAutoWireParameters_NestedExtractionStillWorks verifies that safe value
+// comparison preserves the nested_extraction matchType for map→string extraction.
 func TestAutoWireParameters_NestedExtractionStillWorks(t *testing.T) {
 	sourceData := map[string]interface{}{
 		"currency": map[string]interface{}{

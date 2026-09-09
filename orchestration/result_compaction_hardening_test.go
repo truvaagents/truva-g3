@@ -14,9 +14,9 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
-// Phase 17 — result-compaction hardening and routing: number-preserving JSON decode (P17.5),
-// wrapper-preserving map-reduce chunking (P17.6), reduce-gate overhead accounting (P17.7), and
-// the dedicated MapReduceThresholdBytes routing threshold (P17.1–P17.4, default 0 = disabled).
+// Result-compaction hardening and routing tests cover number-preserving JSON
+// decoding, wrapper-preserving map-reduce chunking, reduce-gate overhead
+// accounting, and the dedicated MapReduceThresholdBytes routing threshold.
 
 // bigSnowflakeID is > 2^53, so a float64 round-trip mangles it to scientific notation. Every trim
 // hop must preserve it verbatim via unmarshalPreservingNumbers (UseNumber).
@@ -63,7 +63,7 @@ func (l *warnCapturingLogger) advisoryWarnings() int {
 	return n
 }
 
-// --- P17.5: number-preserving decode ---
+// --- Number-preserving decode ---
 
 func TestUnmarshalPreservingNumbers_LargeIDVerbatim(t *testing.T) {
 	cases := []string{
@@ -127,8 +127,9 @@ func TestIsScalar_JSONNumber(t *testing.T) {
 	}
 }
 
-// TestLargeID_SurvivesChunker proves the map-reduce object chunker (P17.6) keeps large IDs exact
-// (P17.5): every chunk re-marshals the wrapper+records, and the IDs must not be float64-mangled.
+// TestLargeID_SurvivesChunker proves the map-reduce object chunker keeps large
+// IDs exact: every chunk re-marshals the wrapper+records, and the IDs must not
+// be float64-mangled.
 func TestLargeID_SurvivesChunker(t *testing.T) {
 	records := make([]interface{}, 20)
 	for i := range records {
@@ -178,7 +179,7 @@ func TestLargeID_SurvivesSynthesisFormatting(t *testing.T) {
 	}
 }
 
-// --- P17.1/P17.3: dedicated map-reduce routing threshold ---
+// --- Dedicated map-reduce routing threshold ---
 
 // TestMapReduceThreshold_RoutesMidBandVsDisabled verifies the byte threshold routes an in-context
 // result to map-reduce when set, and leaves it single-call when disabled (0) — independent of
@@ -234,7 +235,7 @@ func TestMapReduceThreshold_BelowThresholdStaysSingleCall(t *testing.T) {
 	}
 }
 
-// --- P17.2: single-chunk-footgun normalization ---
+// --- Single-chunk-footgun normalization ---
 
 func TestNormalizeThreshold_BelowPreFilterDisabledWithWarning(t *testing.T) {
 	// Direct NewLLMDistiller construction path.
@@ -279,7 +280,7 @@ func TestNormalizeThreshold_UnsetPreFilterResolvedBeforeCompare(t *testing.T) {
 	}
 }
 
-// --- P17.4: cache salt keys the routing knobs ---
+// --- Cache salt keys the routing knobs ---
 
 func TestDistillKeySalt_KeysRoutingKnobs(t *testing.T) {
 	base := ResultDistillConfig{Model: "fast", TargetSize: 4096, PreFilterBudget: 131072, ModelContextTokens: 150000, MapReduceThresholdBytes: 0}
@@ -301,7 +302,7 @@ func TestDistillKeySalt_KeysRoutingKnobs(t *testing.T) {
 	}
 }
 
-// --- Phase 17 review fixes (post-implementation code review, 2026-07-17) ---
+// --- Additional result-compaction edge cases ---
 
 // TestChunker_OversizedElementSplitBounded: an element larger than the per-chunk budget is
 // recursively split into standalone chunks so no chunk exceeds ~chunkBytes (review finding: it
@@ -403,7 +404,7 @@ func TestMapReduce_ZeroChunksFloorsWithoutLLM(t *testing.T) {
 	_ = out // floor output shape is the StructuralTrimmer's concern; the guard is the LLM count
 }
 
-// TestToBool_JSONNumber: numeric truthy flags decoded as json.Number (P17.5 UseNumber) must
+// TestToBool_JSONNumber: numeric truthy flags decoded with UseNumber must
 // coerce like float64 (review finding: the missing case silently flipped enabled:1 to false in
 // auto-wired boolean tool parameters).
 func TestToBool_JSONNumber(t *testing.T) {
@@ -618,7 +619,7 @@ func TestSingleChunk_FailureFullObservability(t *testing.T) {
 	}
 	d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), logger)
 
-	tracer := otel.Tracer("phase17-test")
+	tracer := otel.Tracer("result-compaction-test")
 	ctx, span := tracer.Start(context.Background(), "single-chunk-failure")
 	d.ProcessForPrompt(ctx, prettyMapReduceArray(4), 2000,
 		ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "list"})
@@ -711,7 +712,7 @@ func TestMapreduceRoute_ReasonAttribute(t *testing.T) {
 			}
 			d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
 
-			tracer := otel.Tracer("phase17-test")
+			tracer := otel.Tracer("result-compaction-test")
 			ctx, span := tracer.Start(context.Background(), "route")
 			d.ProcessForPrompt(ctx, mapReduceTestArray(80), 2000,
 				ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "x"})
@@ -1126,7 +1127,7 @@ func TestCombineTruncatedReason_SpanAttribute(t *testing.T) {
 			}
 			d := NewLLMDistiller(mockAI, config, NewStructuralTrimmer(nil, nil), nil)
 
-			tracer := otel.Tracer("phase17-test")
+			tracer := otel.Tracer("result-compaction-test")
 			ctx, span := tracer.Start(context.Background(), "combine-reason")
 			d.ProcessForPrompt(ctx, payload, 2000,
 				ResultProcessorContext{StepID: "s1", AgentName: "a", Instruction: "find"})

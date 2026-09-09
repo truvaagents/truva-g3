@@ -11,7 +11,7 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-// Tests for ORCH-022: HITL-interrupted execution records carry prior-phase steps.
+// Tests that HITL-interrupted execution records carry prior-phase steps.
 //
 // Covers:
 //   - buildNonSuccessResult (Layer 1 helper)
@@ -744,9 +744,9 @@ func TestStoreExecutionAsync_InterruptedFlag(t *testing.T) {
 // planner/executor/interruptController — per-package convention, the phase
 // loop is not tested end-to-end in unit tests). Instead, each test asserts
 // "if the call site passes these arguments, the stored record is correct."
-// Together with the helper unit tests, this covers every code path added
-// by ORCH-022 at the orchestrator.go level except the in-loop plumbing
-// itself (which is a thin dispatcher over already-tested helpers).
+// Together with the helper unit tests, this covers every record-construction
+// path at the orchestrator.go level except the in-loop plumbing itself, which
+// is a thin dispatcher over already-tested helpers.
 // ---------------------------------------------------------------------------
 
 // TestCallSite_PlanLevelHITL matches orchestrator.go line ~2336:

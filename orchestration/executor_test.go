@@ -3939,7 +3939,7 @@ func TestSmartExecutor_ExecuteStep_StepSpanOnFailure(t *testing.T) {
 	}
 }
 
-// --- RC4: extractFieldValue array indexing tests ---
+// --- extractFieldValue array indexing tests ---
 
 func TestExtractFieldValue_MapTraversal(t *testing.T) {
 	data := map[string]interface{}{
@@ -4060,7 +4060,7 @@ func TestExtractFieldValue_ArrayOfScalars(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ORCH-015: requiresOrchestratorSplit tests
+// requiresOrchestratorSplit tests
 // ---------------------------------------------------------------------------
 
 func TestRequiresOrchestratorSplit(t *testing.T) {
@@ -4255,7 +4255,7 @@ func TestRequiresOrchestratorSplit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ORCH-015: applyRefinementDecisions tests
+// applyRefinementDecisions tests
 // ---------------------------------------------------------------------------
 
 func TestApplyRefinementDecisions(t *testing.T) {
@@ -4475,7 +4475,7 @@ func TestApplyRefinementDecisions(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ORCH-015: boolMapKeys helper test
+// boolMapKeys helper test
 // ---------------------------------------------------------------------------
 
 func TestBoolMapKeys(t *testing.T) {

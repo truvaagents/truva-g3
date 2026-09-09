@@ -40,7 +40,6 @@ type RefinementResponse struct {
 // When an orchestrator step completes, the refiner checks whether dependent steps
 // should still execute, be modified, or be skipped — based on what the orchestrator
 // actually did internally (e.g., already created a JIRA ticket).
-// See ORCH-015 for design details.
 type PlanRefiner struct {
 	aiClient          core.AIClient
 	logger            core.Logger

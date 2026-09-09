@@ -830,7 +830,7 @@ func TestProcessRequestStreaming_UsesConfiguredSynthesisParameters(t *testing.T)
 
 // TestBuildSynthesisPrompt_Parity verifies that both buildSynthesisPrompt implementations
 // (AISynthesizer and AIOrchestrator) produce structurally identical output when given
-// the same ExecutionResult. This is the D.5.3 parity test from BUG_STREAMING_SYNTHESIS_PROMPT_PARITY.md.
+// the same ExecutionResult.
 func TestBuildSynthesisPrompt_Parity(t *testing.T) {
 	request := "Tell me about Apple stock and recent news"
 

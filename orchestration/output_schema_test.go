@@ -7,7 +7,7 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-// --- RC1: OutputSummary → ReturnType.Fields conversion tests ---
+// --- OutputSummary → ReturnType.Fields conversion tests ---
 
 func TestConvertBasicCapabilities_OutputSummary(t *testing.T) {
 	discovery := NewMockDiscovery()
@@ -152,7 +152,7 @@ func TestEnrichCapabilitiesWithInputSummary_NoOverwrite(t *testing.T) {
 	}
 }
 
-// --- RC2: FormatForLLM Return Fields rendering tests ---
+// --- FormatForLLM Return Fields rendering tests ---
 
 func TestFormatForLLM_ReturnFields(t *testing.T) {
 	discovery := NewMockDiscovery()
@@ -231,7 +231,7 @@ func TestFormatForLLM_NoReturnFields(t *testing.T) {
 	}
 }
 
-// --- RC3: validateTemplatePaths tests ---
+// --- validateTemplatePaths tests ---
 
 func TestValidateTemplatePaths_ValidPath(t *testing.T) {
 	discovery := NewMockDiscovery()
@@ -512,7 +512,7 @@ func TestValidateTemplatePaths_MultipleTemplatesInOneParam(t *testing.T) {
 }
 
 func TestValidateTemplatePaths_UnknownReferencedStep_Rejects(t *testing.T) {
-	// ORCH-020 RC1: an unknown referenced step is a plan error because no prior
+	// An unknown referenced step is a plan error because no prior
 	// phase can supply it. The validator must reject for replan rather than
 	// silently continuing (the previous behavior was a correctness defect —
 	// the executor then dispatched with a literal {{step-99.response.data.field}}).

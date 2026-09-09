@@ -136,7 +136,7 @@ type SmartExecutor struct {
 	// or overridden via SetOrchestratorStepTimeout.
 	orchestratorStepTimeout time.Duration
 
-	// Post-orchestrator plan refinement (ORCH-015).
+	// Post-orchestrator plan refinement.
 	// When set, triggers a focused LLM call after orchestrator steps complete
 	// to decide whether dependent steps should be skipped/modified.
 	planRefiner *PlanRefiner
@@ -310,7 +310,7 @@ func (e *SmartExecutor) SetLogger(logger core.Logger) {
 	if e.contextualReResolver != nil {
 		e.contextualReResolver.SetLogger(logger)
 	}
-	// Propagate logger to plan refiner if configured (ORCH-015)
+	// Propagate the logger to the plan refiner when configured.
 	if e.planRefiner != nil {
 		e.planRefiner.SetLogger(logger)
 	}
@@ -535,7 +535,7 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 	}
 
 	// Sub-phase detection: check if this phase has orchestrator steps with
-	// dependent non-orchestrator steps (ORCH-015).
+	// dependent non-orchestrator steps.
 	orchStepIDs, heldStepIDs, splitNeeded := e.requiresOrchestratorSplit(ctx, plan)
 	refinementApplied := false
 
@@ -561,7 +561,7 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 	}
 
 	for len(executed) < len(plan.Steps) {
-		// ORCH-020 RC4: Sweep for steps whose dependencies (explicit +
+		// Sweep for steps whose dependencies (explicit +
 		// template-induced) failed in PRIOR iterations of this loop. Runs
 		// sequentially before wg.Add — wg.Wait from the previous iteration
 		// has already returned, so no goroutine is writing stepResults /
@@ -569,10 +569,9 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 		//
 		// Scope: this sweep catches cross-batch failures only. In-phase
 		// races (step-A and step-B dispatched in the SAME readySteps batch,
-		// step-B referencing step-A via template) are closed by RC3 at plan
-		// time (templates ⊆ depends_on for in-plan refs forces serialization)
-		// and by RC6 as a last line of defense (refuses to dispatch any
-		// literal {{…}} that somehow got past everything else).
+		// step-B referencing step-A via template) are closed by dependency
+		// validation at plan time (templates ⊆ depends_on for in-plan refs
+		// forces serialization) and by the pre-dispatch unresolved-token guard.
 		if skipped := e.skipStepsWithFailedDeps(ctx, plan, executed, stepResults, result, requestID); skipped > 0 {
 			continue
 		}
@@ -620,7 +619,7 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 		}
 
 		if len(readySteps) == 0 {
-			// ORCH-020 RC4: the top-of-iteration sweep (skipStepsWithFailedDeps)
+			// The top-of-iteration sweep (skipStepsWithFailedDeps)
 			// has already marked any step with a failed explicit or
 			// template-induced dependency as skipped. If we still reach here
 			// with no ready steps and no remaining pending work, it's a real
@@ -1017,7 +1016,7 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 // failed (explicit depends_on OR template-induced via {{step-X...}} refs in
 // parameters) as skipped. Returns the number of steps skipped in this sweep.
 //
-// ORCH-020 RC4: a step with depends_on: [] but parameters like
+// A step with depends_on: [] but parameters like
 // {"origin": "{{step-1.response.data.iata_code}}"} was previously treated as
 // ready by findReadySteps and dispatched with a literal template if step-1
 // had failed. This sweep catches that case and skips the step before
@@ -1067,10 +1066,10 @@ func (e *SmartExecutor) skipStepsWithFailedDeps(
 		}
 
 		// Collect ALL failed deps — not just the first. A single step can
-		// template-reference many failed upstreams; RC9's pattern analyzer
+		// template-reference many failed upstreams; the failure-pattern analyzer
 		// needs every one to build an accurate causal window. failedDep (the
 		// first we see) is retained for the operator-facing error message
-		// and the blocking_reason classification; allFailedDeps feeds RC9.
+		// and the blocking_reason classification; allFailedDeps feeds the analyzer.
 		//
 		// Seen-set dedupes across explicit + template sources so a dep that
 		// happens to be in both DependsOn and a template ref doesn't get
@@ -1149,10 +1148,10 @@ func (e *SmartExecutor) skipStepsWithFailedDeps(
 			})
 		}
 
-		// Cause 2c (Layer 3 optional): enumerate every failed upstream when
-		// more than one fired. Operator/log readability only — RC8/RC9 read
+		// Cause 2c (optional detail): enumerate every failed upstream when
+		// more than one fired. Operator/log readability only — remediation reads
 		// the structured allFailedDeps from Metadata, not this string. The
-		// first dep stays at its original position so the legacy
+		// first dependency stays at its original position so existing operator
 		// templateInducedSkipErrorPrefix parser (used only when Metadata is
 		// absent on replayed/legacy StepResults) keeps working unchanged.
 		errMsg := "skipped due to failed dependency: " + failedDep
@@ -1161,9 +1160,9 @@ func (e *SmartExecutor) skipStepsWithFailedDeps(
 		}
 		if blockingReason == blockingReasonTemplate {
 			// Error string is for user/operator-facing readability. The
-			// structured signal consumed by RC8 is on Metadata below —
+			// structured signal consumed by remediation is on Metadata below —
 			// keeping both in lock-step avoids string-coupling (prefix
-			// remains for backward-compat / debugging only).
+			// remains useful for operator diagnostics only).
 			errMsg = templateInducedSkipErrorPrefix + " " + failedDep +
 				" (parameter references {{" + failedDep + "...}} but that step failed)"
 			if len(allFailedDeps) > 1 {
@@ -1182,13 +1181,13 @@ func (e *SmartExecutor) skipStepsWithFailedDeps(
 					strings.Join(others, ", ") + ")"
 			}
 		}
-		// RC8 reads StepResult.Metadata["blocking_reason"] and
+		// decideRemediation reads StepResult.Metadata["blocking_reason"] and
 		// ["failed_dependency"] to decide whether to trigger remediation.
-		// Stamping structured metadata here (instead of having RC8
+		// Stamping structured metadata here (instead of having remediation
 		// reverse-parse the error string) keeps the detection stable across
 		// future error-message edits.
 		//
-		// RC9 additionally reads all_failed_dependencies — the full set of
+		// The failure-pattern analyzer additionally reads all_failed_dependencies — the full set of
 		// failed upstreams referenced by this step's templates. Needed so
 		// one skipped step carrying N template-referenced failures
 		// contributes N causal data points to the pattern analyzer (not
@@ -1518,7 +1517,7 @@ func collectTemplateStrings(v interface{}) []string {
 // {{step-N.response.data.FIELD}} template syntax — specifically any {{step-...}}
 // token. Tool-specific syntaxes (Prometheus's {{now}} / {{now-7d}}, Go-template
 // payloads, JIRA wiki macros, Helm values) deliberately do NOT start with
-// "step-" and pass through RC2/RC6 untouched.
+// "step-" and pass through both macro validation and the pre-dispatch guard.
 //
 // Rationale: the framework must not arbitrate tool-specific template syntax it
 // does not understand (framework-is-domain-agnostic, FRAMEWORK_DESIGN_PRINCIPLES).
@@ -1531,8 +1530,8 @@ var frameworkMacroPattern = regexp.MustCompile(`\{\{step-[^{}]*\}\}`)
 // collectReferencedStepIDs walks the parameter tree via collectTemplateStrings
 // and returns the unique set of step IDs referenced by {{stepId.fieldPath}}
 // templates. Single shared implementation used by:
-//   - RC3 (validateDependencyConsistency) to verify templates ⊆ depends_on ∪ implicit_deps
-//   - RC4 (skipStepsWithFailedDeps) to treat template-induced deps with the same
+//   - validateDependencyConsistency to verify templates ⊆ depends_on ∪ implicit_deps
+//   - skipStepsWithFailedDeps to treat template-induced deps with the same
 //     weight as explicit ones
 //
 // Keeping one implementation means validation and runtime see the same set of
@@ -1561,7 +1560,7 @@ func collectReferencedStepIDs(v interface{}) map[string]struct{} {
 // syntaxes like Prometheus's {{now}} / {{now-7d}} or Helm values travel through
 // untouched — they are the tool's contract, not the framework's.
 //
-// Used by RC5 to decide whether to fire the semantic-fallback resolver.
+// Used to decide whether to invoke the semantic-fallback resolver.
 func paramsContainUnresolvedFrameworkMacro(v interface{}) bool {
 	for _, s := range collectTemplateStrings(v) {
 		if frameworkMacroPattern.MatchString(s) {
@@ -1572,7 +1571,7 @@ func paramsContainUnresolvedFrameworkMacro(v interface{}) bool {
 }
 
 // findUnresolvedFrameworkMacros returns the list of framework-form {{step-...}}
-// tokens remaining in the parameter tree. Used by RC6's pre-dispatch guard to
+// tokens remaining in the parameter tree. Used by the pre-dispatch guard to
 // produce an actionable error message listing exactly which framework templates
 // failed to resolve. Tool-specific {{...}} syntax (e.g. {{now}}) is excluded.
 func findUnresolvedFrameworkMacros(v interface{}) []string {
@@ -1583,15 +1582,15 @@ func findUnresolvedFrameworkMacros(v interface{}) []string {
 	return out
 }
 
-// templateInducedSkipErrorPrefix is the prefix RC4 writes on StepResult.Error
+// templateInducedSkipErrorPrefix is written on StepResult.Error
 // when it skips a step because a template-referenced step failed. Retained for
-// operator-facing readability and legacy consumers; RC8's detection path does
+// operator-facing readability; remediation detection does
 // NOT depend on this string (see meta keys below) — string edits here do not
 // break the remediation pipeline.
 const templateInducedSkipErrorPrefix = "skipped due to failed template dependency:"
 
-// Metadata keys stamped on StepResult.Metadata by RC4 when it skips a step.
-// RC8 reads these for remediation decisions so the detection is structured,
+// Metadata keys stamped on StepResult.Metadata when a step is skipped.
+// Remediation reads these keys so detection is structured,
 // not string-parsed.
 //
 // Value invariants:
@@ -1604,7 +1603,7 @@ const templateInducedSkipErrorPrefix = "skipped due to failed template dependenc
 //   - all_failed_dependencies is the COMPLETE set of failed upstream steps
 //     referenced by the skipped step's templates or ImplicitDeps. Required
 //     because a single skipped step can reference N failed upstreams, and
-//     RC9's pattern analyzer must see all N to build an accurate causal
+//     the failure-pattern analyzer must see all N to build an accurate causal
 //     window. Stored as []string so JSON round-trips cleanly.
 const (
 	metaKeyBlockingReason        = "blocking_reason"
@@ -1614,8 +1613,8 @@ const (
 	blockingReasonExplicit       = "explicit_dep"
 )
 
-// TemplateInducedSkip describes one step that RC4 skipped because an upstream
-// template-referenced dependency failed. Used by RC8 to build the remediation
+// TemplateInducedSkip describes one step skipped because an upstream
+// template-referenced dependency failed. Used to build the remediation
 // continuation note fed back to the planner.
 type TemplateInducedSkip struct {
 	StepID     string
@@ -1631,7 +1630,7 @@ type TemplateInducedSkip struct {
 	// FailedDeps is the COMPLETE set of failed upstream step ids referenced
 	// by this skipped step's templates or ImplicitDeps. When a single step
 	// templates N failed upstreams, FailedDep captures one of them;
-	// FailedDeps captures all N. RC9's summarizeUpstreamFailurePattern
+	// FailedDeps captures all N. summarizeUpstreamFailurePattern
 	// reads this slice to build an accurate causal window. Populated from
 	// StepResult.Metadata["all_failed_dependencies"]; falls back to a
 	// single-element slice containing FailedDep for legacy StepResults
@@ -1647,11 +1646,11 @@ type TemplateInducedSkip struct {
 }
 
 // collectTemplateInducedSkips scans a phase's StepResult list and returns one
-// entry per step that RC4 skipped because of a template-induced failed
-// dependency. Used by RC8 to decide whether remediation should be triggered
+// entry per step skipped because of a template-induced failed dependency. Used
+// to decide whether remediation should be triggered
 // and to build the planner-facing note.
 //
-// Detection is structured, not string-coupled: RC4 stamps
+// Detection is structured, not string-coupled: the skip sweep stamps
 // metaKeyBlockingReason + metaKeyFailedDependency on StepResult.Metadata; this
 // function reads those directly. The legacy string-prefix fallback exists so
 // StepResults produced by older framework versions (or hand-constructed in
@@ -1715,8 +1714,7 @@ func collectTemplateInducedSkips(
 			continue
 		}
 
-		// Back-compat: if the plural list is empty (legacy StepResult OR
-		// metadata produced pre-RC9), synthesize it from the singular
+		// If the plural list is absent, synthesize it from the singular
 		// failedDep so downstream consumers can always treat FailedDeps as
 		// the authoritative set.
 		if len(allFailedDeps) == 0 && failedDep != "" {
@@ -1754,12 +1752,12 @@ func collectTemplateInducedSkips(
 	return out
 }
 
-// ─── ORCH-020 RC9: upstream-failure-pattern analyzer ────────────────────────
+// ─── Upstream-failure-pattern analyzer ──────────────────────────────────────
 
 // FailurePattern describes recurring characteristics across the set of failed
-// upstream steps that caused the current phase's template-induced skips. Used
-// by RC9 to surface "upstream is persistently unavailable" evidence to the
-// planner during RC8 remediation. A nil pattern means no strong signal —
+// upstream steps that caused the current phase's template-induced skips. It
+// surfaces "upstream is persistently unavailable" evidence to the planner
+// during remediation. A nil pattern means no strong signal —
 // remediation note omits the summary (§4.5 slim).
 type FailurePattern struct {
 	// TotalFailed is the number of distinct failed upstream steps considered
@@ -1820,8 +1818,8 @@ type FailurePatternConfig struct {
 //
 // Scoping: the analyzer considers ONLY the prior-phase steps named by the
 // current skips' FailedDeps set — the FULL set of failed upstreams that
-// caused the RC8 remediation to fire. A single skipped step can reference N
-// failed upstreams via templates; RC4 records all N on
+// caused remediation to fire. A single skipped step can reference N failed
+// upstreams via templates; the skip sweep records all N on
 // StepResult.Metadata[all_failed_dependencies] and collectTemplateInducedSkips
 // surfaces them on TemplateInducedSkip.FailedDeps. Deduplicating the union
 // across all skips gives the accurate causal window — what unrelated older
@@ -1968,9 +1966,7 @@ func truncateRunes(s string, maxBytes int) string {
 	return s[:cut] + "…"
 }
 
-// ─── End RC9 analyzer ───────────────────────────────────────────────────────
-
-// RemediationReason is a bounded-enum telemetry label describing why RC8's
+// RemediationReason is a bounded-enum telemetry label describing why the
 // gate did or didn't fire. Typed so tests and dashboards can reference named
 // constants instead of stringly-typed matches.
 type RemediationReason string
@@ -1984,7 +1980,7 @@ const (
 	RemediationNoTemplateSkips   RemediationReason = "no_template_skips"
 )
 
-// RemediationDecision is the outcome of RC8's gate evaluation, returned by
+// RemediationDecision is the outcome of the remediation gate, returned by
 // decideRemediation so executePhaseLoop can apply the decision in one place
 // and tests can exercise the gate without spinning up the full phase loop.
 type RemediationDecision struct {
@@ -2001,7 +1997,7 @@ type RemediationDecision struct {
 	SkipIDs []string
 	// Reason describes why the gate did or did not fire. Bounded enum.
 	Reason RemediationReason
-	// Pattern carries RC9's upstream-failure-pattern analysis when the gate
+	// Pattern carries upstream-failure-pattern analysis when the gate
 	// fires. Nil when the analyzer didn't find a strong signal (insufficient
 	// failures, mixed errors, 50/50 split). Exposed on the decision struct
 	// so executePhaseLoop can stamp telemetry without recomputing.
@@ -2018,7 +2014,7 @@ type RemediationDecision struct {
 // decision. Small convenience to avoid `len(d.SkipIDs)` at emit sites.
 func (d RemediationDecision) SkipCount() int { return len(d.SkipIDs) }
 
-// decideRemediation evaluates RC8's gate. Separating decision from application
+// decideRemediation evaluates the remediation gate. Separating decision from application
 // keeps the gate testable in isolation (no AI client, HTTP mocks, or phase-loop
 // state required) and makes the reason the gate did-or-didn't fire observable
 // via Reason for telemetry.
@@ -2030,7 +2026,7 @@ func (d RemediationDecision) SkipCount() int { return len(d.SkipIDs) }
 //   - Requires phase and step budget remaining.
 //   - Requires at least one template-induced skip in the current phase.
 //
-// When the gate fires, the ORCH-020 RC9 failure-pattern analyzer runs against
+// When the gate fires, the failure-pattern analyzer runs against
 // the causal failed upstream steps and its result is carried on
 // RemediationDecision.Pattern / .PatternRejectReason for the caller's
 // telemetry + continuation-note rendering.
@@ -2075,7 +2071,7 @@ func decideRemediation(
 	}
 }
 
-// buildRemediationContinuationNote renders the continuation note RC8 feeds back
+// buildRemediationContinuationNote renders the continuation note fed back
 // to the planner when one or more steps were skipped because their upstream
 // template-referenced dependencies failed. The note is intentionally slim per
 // EFFECTIVE_PROMPTS_GUIDE §4.5 (continuations should get shorter, not longer),
@@ -2089,10 +2085,10 @@ func decideRemediation(
 //  2. Return a plan with terminal:true and steps:[] so the synthesizer tells
 //     the user the upstream service is unavailable.
 //
-// Without this, RC4's skip would be a dead-end termination — the user would
+// Without this, a template-induced skip would be a dead-end termination — the user would
 // never get an adaptive response to an upstream outage.
 //
-// When a non-nil pattern is supplied, RC9 embeds a one-line upstream-failure
+// When a non-nil pattern is supplied, the note embeds a one-line upstream-failure
 // summary between the skip list and the (a)/(b) options so the LLM has
 // concrete evidence to decide whether the outage is persistent (bias toward
 // option b) vs transient (option a still worth trying).
@@ -2168,7 +2164,7 @@ func buildRemediationContinuationNote(
 		}
 	}
 
-	// RC9 — pattern summary. One line between the skip list and the (a)/(b)
+	// Pattern summary. One line between the skip list and the (a)/(b)
 	// options so the planner reads it right before deciding. Omitted when
 	// pattern is nil so the note stays slim on the common case (single
 	// failure, mixed errors, 50/50 split).
@@ -2959,14 +2955,14 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		// Legacy: Template interpolation (fallback when hybrid resolution is disabled or unavailable)
 		// This enables templates like {{geocode.latitude}} to be replaced with actual values.
 		//
-		// ORCH-020 RC5: interpolation is ALWAYS attempted, even with empty
+		// Interpolation is always attempted, even with empty
 		// depResults. This matters for step with {{step-X.*}} references and
 		// depends_on: [] — previously the whole code path was gated off, hiding
 		// the unresolved template from observability and letting the literal
 		// string reach HTTP dispatch. With the gate removed, interpolation is a
 		// no-op when there are no deps (leaves the template intact), the
 		// semantic-fallback resolver gets a chance to run, and any remaining
-		// {{...}} tokens will be caught by RC6's pre-dispatch guard.
+		// {{...}} tokens will be caught by the pre-dispatch guard.
 		depResults, _ := ctx.Value(dependencyResultsKey).(map[string]map[string]interface{})
 		if depResults == nil {
 			depResults = map[string]map[string]interface{}{}
@@ -2985,12 +2981,11 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			parameters = interpolated
 		}
 
-		// Semantic Fallback: run whenever framework-form {{step-...}} tokens
-		// remain, even with empty deps. NOTE: effective only when sourceData is
-		// expanded beyond depResults (see BUG_UNRESOLVED_TEMPLATE_PASSTHROUGH_TO_TOOL.md
-		// RC5 limitation). For now this completes the code path so telemetry
-		// reflects the true zero-dep outcome; RC6 is the real safety net for
-		// zero-dep cases. Tool-specific syntaxes ({{now}}, {{now-7d}}, Helm
+		// Semantic fallback runs whenever framework-form {{step-...}} tokens
+		// remain, even with empty deps. It is effective only when sourceData can
+		// be derived from dependency results; the pre-dispatch guard remains the
+		// safety net for zero-dependency cases. Tool-specific syntaxes ({{now}},
+		// {{now-7d}}, Helm
 		// values, etc.) are intentionally skipped here — they aren't the
 		// framework's to resolve.
 		if e.hybridResolver != nil && e.useHybridResolution && paramsContainUnresolvedFrameworkMacro(parameters) {
@@ -3168,7 +3163,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 	}
 
 	// =========================================================================
-	// PHASE 6a: ORCH-020 RC6 — Fail-fast pre-dispatch guard
+	// Fail-fast pre-dispatch guard
 	// =========================================================================
 	// Last-mile check that refuses to dispatch a step whose parameters still
 	// contain framework-form {{step-...}} tokens. Positioned AFTER HITL so a
@@ -3180,8 +3175,8 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 	// syntaxes ({{now}} in Prometheus, Helm values, etc.) pass through — the
 	// framework doesn't arbitrate tool input contracts it doesn't understand.
 	//
-	// Any firing is a defect — either a validator (RC1/RC2/RC3) has a bug,
-	// RC4's skip sweep failed to catch a template-induced failure, or the
+	// Any firing is a defect — either plan validation has a bug, the failed-
+	// dependency skip sweep missed a template-induced failure, or the
 	// regeneration budget was exhausted on a genuinely difficult plan.
 	if unresolved := findUnresolvedFrameworkMacros(parameters); len(unresolved) > 0 {
 		requestID := ""
@@ -3835,8 +3830,8 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 	result.EndTime = time.Now()
 	result.Duration = time.Since(startTime)
 
-	// ORCH-020 RC9: stamp RetryExhausted when the retry loop exited without
-	// a successful attempt. This is the authoritative signal RC9's
+	// Stamp RetryExhausted when the retry loop exits without a successful
+	// attempt. This is the authoritative signal the failure-pattern
 	// failure-pattern analyzer reads — distinct from Attempts because
 	// maxAttempts varies per step (orchestrator capabilities cap at 1;
 	// tools default to 3).
@@ -3976,7 +3971,7 @@ func (e *SmartExecutor) findCapabilitySchema(agentInfo *AgentInfo, capabilityNam
 // requiresOrchestratorSplit scans plan steps for orchestrator-type capabilities
 // with dependent non-orchestrator steps. When detected, the executor must split
 // execution into sub-phases: orchestrator steps first, then a refinement LLM call,
-// then remaining steps (modified/skipped per refinement). See ORCH-015.
+// then remaining steps (modified/skipped per refinement).
 func (e *SmartExecutor) requiresOrchestratorSplit(ctx context.Context, plan *RoutingPlan) (orchStepIDs map[string]bool, heldStepIDs map[string]bool, needed bool) {
 	orchStepIDs = make(map[string]bool)
 	heldStepIDs = make(map[string]bool)
@@ -4497,7 +4492,6 @@ func (e *SmartExecutor) callComponentWithBody(ctx context.Context, url string, b
 	// When a parent orchestrator delegates to a child orchestrator agent,
 	// the child's MemoryEnrichmentHook uses this header to skip claiming
 	// the same entity (the parent already holds the investigation claim).
-	// See UNIFIED_AGENT_MEMORY_IMPL_PLAN.md §0.2.3.
 	if baggage := telemetry.GetBaggage(ctx); baggage != nil {
 		if owner := baggage["investigation_owner"]; owner != "" {
 			req.Header.Set("X-TruvaG3-Investigation-Owner", owner)
@@ -4644,7 +4638,7 @@ func (e *SmartExecutor) SetOrchestratorStepTimeout(timeout time.Duration) {
 	}
 }
 
-// SetPlanRefiner configures post-orchestrator plan refinement (ORCH-015).
+// SetPlanRefiner configures post-orchestrator plan refinement.
 // When set, the executor detects orchestrator steps with dependent non-orchestrator
 // steps and triggers a refinement LLM call after orchestrator steps complete.
 // Pass nil to disable.

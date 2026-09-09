@@ -810,7 +810,7 @@ func TestBuildReResolutionPrompt_WithPreviousErrors(t *testing.T) {
 }
 
 // TestBuildReResolutionPrompt_ArgumentOrdering guards the fmt.Sprintf argument
-// ordering in buildReResolutionPrompt. After ORCH-007 Change 2, the argument order is:
+// ordering in buildReResolutionPrompt. The required argument order is:
 //
 //	UserQuery, sourceJSON, Name, HTTPStatus, failedJSON, ErrorResponse, previousContext, paramDescs
 //
@@ -914,7 +914,7 @@ func TestBuildReResolutionPrompt_ArgumentOrdering(t *testing.T) {
 		}
 	}
 
-	// 3d. Within FAILED ATTEMPT: Capability < Status < Params < Error (ORCH-007 Change 2 layout)
+	// 3d. Within FAILED ATTEMPT: Capability < Status < Params < Error.
 	if capIdx >= statusIdx || statusIdx >= paramsIdx || paramsIdx >= errorIdx {
 		t.Errorf("Within FAILED ATTEMPT section, expected ordering: Capability < Status < Params < Error\n"+
 			"  Capability@%d, Status@%d, Params@%d, Error@%d",

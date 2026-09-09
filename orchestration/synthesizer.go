@@ -69,7 +69,7 @@ agents into a single coherent answer for the user.
 // clarificationModeAddendum is appended to synthesisSystemPrompt when the
 // planner has emitted needs_user_input. The synthesizer produces a
 // conversational response that summarizes partial progress and asks the
-// user the clarification question naturally. (ORCH-018)
+// user the clarification question naturally.
 //
 // All instructions are positive directives per docs/building/EFFECTIVE_PROMPTS_GUIDE.md §2.4.
 const clarificationModeAddendum = `
@@ -86,7 +86,6 @@ Produce a conversational response that:
 // synthesisSystemPromptFor returns the appropriate system prompt for the
 // given execution result. Returns the default for normal completions and
 // the clarification-augmented variant when ClarificationNeeded is set.
-// (ORCH-018)
 func synthesisSystemPromptFor(results *ExecutionResult) string {
 	if results != nil && results.ClarificationNeeded != nil {
 		return synthesisSystemPrompt + clarificationModeAddendum
@@ -125,7 +124,7 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 	if err != nil {
 		return "", fmt.Errorf("prepare synthesis prompt input: %w", err)
 	}
-	systemPrompt := synthesisSystemPromptFor(results) // ORCH-018: clarification-aware
+	systemPrompt := synthesisSystemPromptFor(results) // Clarification-aware prompt selection.
 
 	// Extract request_id once for all telemetry in this method (LOGGING_IMPLEMENTATION_GUIDE.md Pattern 3)
 	requestID := ""
@@ -136,7 +135,7 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 		requestID = s.generateFallbackRequestID()
 	}
 
-	// ORCH-018: annotate synthesis span when clarification mode is active.
+	// Annotate the synthesis span when clarification mode is active.
 	// Follows docs/observability/DISTRIBUTED_TRACING_GUIDE.md §11 and
 	//         docs/observability/LOGGING_IMPLEMENTATION_GUIDE.md §11 patterns.
 	if results != nil && results.ClarificationNeeded != nil {
@@ -542,7 +541,7 @@ func (s *AISynthesizer) buildPreparedSynthesisPrompt(
 
 	builder.WriteString("</agent_responses>\n\n")
 
-	// ORCH-018: clarification-aware section. Only present when the planner
+	// Clarification-aware section. Only present when the planner
 	// emitted needs_user_input and the phase loop short-circuited. The
 	// synthesisSystemPromptFor() helper has already added <clarification_mode>
 	// to the system prompt, so this section just supplies the structured data.

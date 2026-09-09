@@ -370,7 +370,7 @@ func createOrchestrator(
 		}
 		tieredProvider.SetAIOptionsOverride(config.TieredSelectionAIOptions)
 
-		// ORCH-014 fix: Inject CustomInstructions so tiered selection is aware of
+		// Inject CustomInstructions so tiered selection is aware of
 		// domain-specific tool requirements not implied by the user query.
 		if len(config.PromptConfig.CustomInstructions) > 0 {
 			tieredProvider.SetCustomInstructions(config.PromptConfig.CustomInstructions)
@@ -419,7 +419,6 @@ func createOrchestrator(
 			} else {
 				// Compatibility constructors retain the historical Redis default.
 				store, err := NewRedisLLMDebugStore(
-					WithDebugRedisDB(config.LLMDebug.RedisDB),
 					WithDebugLogger(deps.Logger),
 					WithDebugTTL(config.LLMDebug.TTL),
 					WithDebugErrorTTL(config.LLMDebug.ErrorTTL),
@@ -438,7 +437,7 @@ func createOrchestrator(
 					config.LLMDebugStore = store
 					factoryLogger.Info("Redis LLM debug store initialized", map[string]interface{}{
 						"operation": "llm_debug_store_initialization",
-						"redis_db":  config.LLMDebug.RedisDB,
+						"redis_db":  0,
 						"ttl":       config.LLMDebug.TTL.String(),
 						"error_ttl": config.LLMDebug.ErrorTTL.String(),
 					})
@@ -481,7 +480,6 @@ func createOrchestrator(
 				// Compatibility constructors retain the historical Redis default.
 				store, err := NewRedisExecutionDebugStoreWithConfig(
 					config.ExecutionStore,
-					WithExecutionDebugRedisDB(0),
 					WithExecutionDebugLogger(deps.Logger),
 				)
 				if err != nil {
@@ -992,8 +990,6 @@ func WithExecutionStoreWriteTimeout(timeout time.Duration) OrchestratorOption {
 // WithHallucinationRetry creates an option for configuring hallucination retry behavior.
 // When enabled, the orchestrator will retry LLM plan generation if the LLM hallucinates
 // agent names that were not in the allowed list provided in the prompt.
-// See orchestration/bugs/BUG_LLM_HALLUCINATED_TOOL.md for detailed analysis.
-//
 // Parameters:
 //   - enabled: whether to retry on hallucination detection
 //   - maxRetries: maximum number of retry attempts (0 = no retries, default: 1)

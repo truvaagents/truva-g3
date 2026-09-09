@@ -190,7 +190,7 @@ func TestPhase3_ErrorClassification(t *testing.T) {
 			isClientErr: true,
 			description: "Malformed input would fail on any provider",
 		},
-		// Transient proxy errors (ORCH-008): IsTransient=true should allow failover
+		// Transient proxy errors with IsTransient=true should allow failover.
 		{
 			name:        "Transient proxy 400 allows failover",
 			err:         &testProviderError{statusCode: 400, message: "Cloudflare HTML rejection", provider: "anthropic", transient: true},

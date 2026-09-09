@@ -35,11 +35,8 @@ type TemplatePromptBuilder struct {
 	telemetry core.Telemetry
 }
 
-// TemplateData contains all data available to the template.
-// Updated per BUG_PHASE3_SKIPPED_EXECUTION.md Changes 5A:
-//   - ConcreteExample replaces JSONStructure (Issue 5 P4)
-//   - PhaseBudget provides budget-aware info (Issue 3)
-//   - SystemInstructions for template-level persona access
+// TemplateData contains all data available to the template, including a
+// concrete plan example, phase-budget context, and system instructions.
 type TemplateData struct {
 	CapabilityInfo                string
 	Request                       string
@@ -52,10 +49,6 @@ type TemplateData struct {
 	PhaseBudget                   string
 	SystemInstructions            string
 }
-
-// defaultJSONStructure removed per BUG_PHASE3_SKIPPED_EXECUTION.md Change 5C.
-// Replaced by buildConcreteExample() which provides a realistic few-shot example
-// instead of a generic template with placeholder values (Issue 5 P4).
 
 // NewTemplatePromptBuilder creates a template-based builder.
 // It loads the template from file or inline string.
@@ -143,7 +136,7 @@ func (t *TemplatePromptBuilder) BuildPlanningPrompt(ctx context.Context, input P
 		span.SetAttribute("template_file", t.config.TemplateFile)
 	}
 
-	// Prepare template data (updated per BUG_PHASE3_SKIPPED_EXECUTION.md Change 5B)
+	// Prepare the complete template data contract.
 	data := TemplateData{
 		CapabilityInfo:                input.CapabilityInfo,
 		Request:                       input.Request,
@@ -226,9 +219,9 @@ func (t *TemplatePromptBuilder) BuildPlanningPrompt(ctx context.Context, input P
 }
 
 // BuildSystemPrompt implements SystemPromptBuilder by delegating to the fallback
-// DefaultPromptBuilder. Per BUG_PHASE3_SKIPPED_EXECUTION.md Change 5D.
+// DefaultPromptBuilder.
 //
-// ORCH-020 RC7: when no fallback is wired, the nil-safe default still emits the
+// When no fallback is wired, the nil-safe default still emits the
 // <runtime_context> block via appendRuntimeContext so the planner receives
 // today's date along this path too.
 func (t *TemplatePromptBuilder) BuildSystemPrompt(ctx context.Context, input PromptInput) string {

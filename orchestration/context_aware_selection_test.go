@@ -269,7 +269,7 @@ func TestBuildContinuationSelectionPrompt_XMLStructure(t *testing.T) {
 }
 
 // TestBuildContinuationSelectionPrompt_ContainsPhaseContext verifies the
-// Layer 2 (ORCH-018) phase_context format:
+// continuation-selection phase_context format:
 //   - prior_tool_ids rendered in agent/capability format as a bullet list
 //   - continuation_note and completed_summary are dropped from the selector
 //     prompt (they were the structural cause of the selector hallucinating
@@ -415,7 +415,7 @@ func TestBuildContinuationSelectionPrompt_OutputFormatExample(t *testing.T) {
 }
 
 // TestBuildContinuationSelectionPrompt_EmptyPriorToolIDs verifies that when
-// PhaseContextKeyPriorToolIDs is empty or missing, the Layer 2 (ORCH-018)
+// PhaseContextKeyPriorToolIDs is empty or missing, the continuation-selection
 // prior-tools header is omitted from the selector prompt.
 func TestBuildContinuationSelectionPrompt_EmptyPriorToolIDs(t *testing.T) {
 	catalog := setupTestCatalog(5)
@@ -438,7 +438,7 @@ func TestBuildContinuationSelectionPrompt_EmptyPriorToolIDs(t *testing.T) {
 }
 
 // TestBuildContinuationSelectionPrompt_Layer2_DroppedNarrative verifies the
-// Layer 2 (ORCH-018) invariant: continuation_note and completed_summary are
+// continuation-selection invariant: continuation_note and completed_summary are
 // NEVER rendered in the selector prompt, even when they are populated in
 // phaseContext. This was the structural cause of the selector hallucinating
 // empty responses in clarification-pending continuations — Layer 2
@@ -595,7 +595,7 @@ func TestSelectRelevantTools_PhaseContextNilPhaseNumber(t *testing.T) {
 }
 
 // TestSelectRelevantTools_Phase2ContextAwareWithPriorTools verifies that the
-// Layer 2 (ORCH-018) selector prompt contains prior tools in agent/capability
+// continuation selector prompt contains prior tools in agent/capability
 // format and does NOT contain the dropped continuation_note narrative.
 func TestSelectRelevantTools_Phase2ContextAwareWithPriorTools(t *testing.T) {
 	catalog := setupTestCatalog(25)

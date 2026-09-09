@@ -395,8 +395,7 @@ func TestDefaultPromptBuilder_IncludesDependencyExample(t *testing.T) {
 }
 
 func TestDefaultPromptBuilder_NoAntiPatternsInPrompt(t *testing.T) {
-	// Per BUG_PHASE3_SKIPPED_EXECUTION.md Issue 5 P3: anti-patterns removed
-	// from prompt to avoid Pink Elephant effect.
+	// Anti-patterns stay out of the prompt so they are not inadvertently reinforced.
 	builder, err := NewDefaultPromptBuilder(&PromptConfig{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -867,7 +866,7 @@ func TestBuildSystemPrompt_DefaultWhenEmpty(t *testing.T) {
 	if !strings.Contains(result, persona) {
 		t.Errorf("expected result to contain default persona %q, got %q", persona, result)
 	}
-	// ORCH-020 RC7: the system prompt now carries a <runtime_context> block
+	// The system prompt carries a <runtime_context> block
 	// with today's date so the planner resolves relative dates without
 	// inventing {{today_plus_1}}-style macros.
 	if !strings.Contains(result, "<runtime_context>") {
@@ -1059,7 +1058,7 @@ func TestSystemInstructions_CombinedWithCustomInstructions(t *testing.T) {
 }
 
 // =============================================================================
-// ORCH-004: Template Quoting Instructions Tests
+// Template Quoting Instructions Tests
 // =============================================================================
 
 func TestDefaultPromptBuilder_IncludesTemplateQuotingInstructions(t *testing.T) {
@@ -1078,7 +1077,7 @@ func TestDefaultPromptBuilder_IncludesTemplateQuotingInstructions(t *testing.T) 
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// ORCH-004 regression guard: template quoting is now conveyed via concrete example
+	// Regression guard: template quoting is conveyed via a concrete example
 	// and instruction #4, rather than verbose reference instructions
 	requiredElements := []string{
 		`"{{step-1.response.data.lat}}"`,                            // Quoted template in concrete example
