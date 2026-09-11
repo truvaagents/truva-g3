@@ -761,16 +761,31 @@ The header strip above the canvas shows a comprehensive metadata line:
 Below the header, if the plan was regenerated mid-flight, a warning strip shows each regeneration event: which phase regenerated, what validation error caused it, and the old → new plan ID transition. This is the single biggest debugging shortcut for "why did the orchestrator change its mind halfway through?"
 
 A **Steps Only / Full Flow toggle** at the top switches between two modes:
+
 - **Steps Only** — just the tool-invocation steps, clean and compact
 - **Full Flow** — steps + orchestration/agent LLM calls + HITL checkpoints +
   stored deterministic pipeline-hook outcomes, interleaved by lifecycle,
   phase-local order, and timing evidence. The execution record is the source of
   truth; the optional trace link is navigation only.
 
+Full Flow also works when a hook stops the request before a plan is admitted.
+Later-phase failures keep earlier completed steps. Hook popups show the stored
+**Pipeline consequence** separately from invocation status and reported effects.
+An optional hook failure may say **Request continued**; a required rejection says
+**Request stopped**. **Decision details** exposes policy, action, and reason.
+Older records without these fields say **not recorded**. A hook without usable
+phase placement stays visible as a labeled, non-directional evidence branch.
+
+A hook panic says **Panic propagated · request stopped**; an optional error
+policy does not suppress a panic. The graph retains completed earlier work.
+A successful native synthesis call can remain visible in LLM Calls alongside
+a failed AfterSynthesis hook and failed request, with no final application
+response. These are separate outcomes, not conflicting status labels.
+
 #### Tab 2: Pre-Execution
 
-Visible when trace or debug evidence contains `BeforePlanning` or
-`AfterPlanning` activity. It shows context preparation before planning and
+Visible when `BeforePlanning` or `AfterPlanning` activity appears in stored hook
+records or LLM-debug evidence. It shows context preparation before planning and
 deterministic/LLM-backed plan governance around the planner:
 
 - **User Memory Enrichment** — which recall calls ran (`user_memory_recall_identity`, `user_memory_recall_summary`, `user_memory_recall_query`, `user_memory_recall_universal`), how long each took, and whether the `user_memory_enrichment_injected` step succeeded (meaning the `<user_profile>` XML fragment made it into the plan-generation prompt). Note: this tab shows that the enrichment ran, not the contents of the profile itself — see the privacy note in §7.
@@ -799,10 +814,18 @@ Debug view remains the place to inspect every stored interaction family.
 
 Each call shows its type, category, model, token counts, aggregate call duration,
 attempt number, generation settings, success state, prompt, and response. Click
-an interaction to expand long content. The synthesis card is labeled **Pre-hook
-LLM synthesis output**, and its response expander says **View Pre-hook Output**,
-because the model output precedes application `AfterSynthesis` hooks. This
-pre-hook output is never presented as proof of the final business response.
+an interaction to expand long content. Synthesis labels distinguish two paths:
+
+- Buffered synthesis (`synthesis`): **Pre-hook LLM synthesis output**, with
+  **View Pre-hook Output**.
+- Native streaming (`synthesis_streaming`): **LLM synthesis output streamed to
+  client**, with **View Streamed Output**.
+
+Both show model output produced before application `AfterSynthesis` hooks.
+Hooks can change the final application response, but cannot retract tokens
+already streamed. Neither card proves the final business outcome; a later hook
+can fail after the model call succeeded. A stored post-hook application response,
+when available, appears separately in Post-Execution.
 
 **When to open this tab vs. the LLM Debug view:** use this tab when you already have the request ID open and want to see the LLM calls in the context of the steps they produced. Use the LLM Debug view when you want to search across requests (e.g., "show me every synthesis call that errored yesterday").
 

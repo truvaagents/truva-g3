@@ -1,6 +1,6 @@
 # TruvaG3 Framework Design Principles & Architecture Guidelines
 
-**Version**: 1.10
+**Version**: 1.11
 
 **Purpose**: Ensure consistency and maintainability across all framework development
 
@@ -42,9 +42,9 @@ TruvaG3 enables **autonomous agent networks** in production environments through
 - **Configuration Split**: Numeric tuning (token budgets, TTLs, limits) uses environment variables — deployable without code changes. Behavioural plugs (custom interfaces, scoring functions) use `WithXXX()` option functions — domain-specific, requires code. If an option just sets a number, it should be an env var.
 
 #### 4. **Interface-First Design**
-- **Dependency Inversion**: All modules depend on `core` interfaces, not implementations
+- **Dependency Inversion**: Modules depend on narrow contracts rather than concrete sibling implementations. Foundational cross-module contracts belong in `core`; a feature-specific contract stays in the module that owns and consumes its lifecycle.
 - **Testability**: All external dependencies must be mockable through interfaces
-- **Modularity**: Each module implements well-defined interfaces from `core`
+- **Modularity**: Each module implements well-defined foundational or module-owned interfaces without creating an unlisted framework-module dependency
 - **Extensibility**: New implementations can be swapped without changing dependent code
 - **Composition over Bundling**: Cross-cutting concerns should be composable functions that return primitives the developer passes to the orchestrator — not monolithic constructors that bundle multiple concerns into a single call. Each module creates its own primitives; the application assembles them.
 
@@ -72,6 +72,12 @@ every value as an unrestricted replacement:
    component. A documented fallback must emit its documented diagnostic and
    still validate the fallback component. A genuinely absent optional
    dependency may retain documented no-op behavior.
+5. **Optional extensions may fail open; required lifecycle controls fail
+   closed.** A lifecycle extension is optional unless its owning stage exposes
+   a required contract and the adopter explicitly implements it. Required intent
+   must be validated at construction and a runtime failure must stop before the
+   protected downstream effect. The framework must not silently downgrade a
+   required declaration to optional behavior.
 
 Environment variables are best suited to bounded scalar values, closed modes,
 and references such as mounted-file paths. Large or multiline instructions and
@@ -214,10 +220,10 @@ The principles in §3 and §4 above are extracted from software systems that hav
 ## Module Architecture
 
 ### Core Module (Required Foundation)
-**Responsibility**: Define all interfaces and provide base implementations
+**Responsibility**: Define foundational cross-module interfaces and provide base implementations
 
 **Must Provide**:
-- All framework interfaces (`Component`, `Registry`, `Discovery`, `AIClient`, `Telemetry`, etc.)
+- Foundational cross-module interfaces (`Component`, `Registry`, `Discovery`, `AIClient`, `Telemetry`, etc.)
 - Base implementations (`BaseTool`, `BaseAgent`)
 - Configuration system with intelligent defaults
 - Service discovery primitives
@@ -724,8 +730,8 @@ func (t *BaseTool) processRequest() {
 ## Framework Evolution Guidelines
 
 ### Adding New Features
-1. **Design interfaces first** in `core` module
-2. **Implement in separate module** (avoid core bloat)
+1. **Design interfaces first** in the module that owns the lifecycle; use `core` only for a genuine foundational cross-module contract
+2. **Implement in the owning module** without adding an unlisted framework-module edge
 3. **Provide intelligent defaults** in configuration system
 4. **Add mandatory comprehensive unit tests** with focused mocks and in-memory
    fixtures; any integration tests remain optional, manual, and outside CI
@@ -761,6 +767,7 @@ func (t *BaseTool) processRequest() {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.11 | 2026-09-09 | Clarified lifecycle-contract ownership and established explicit fail-closed behavior for adopter-selected required controls while preserving fail-open optional extensions |
 | 1.10 | 2026-09-08 | Recorded the author-approved development-stage Redis API cleanup exception and the mandatory, complete unit-test CI gate without `-short`; integration tests remain optional, manual, and outside CI |
 | 1.9 | 2026-09-01 | Required real provider/topology integration gates for storage-routing claims, including routing transitions and failover beyond mock or computed-key coverage |
 | 1.8 | 2026-08-31 | Recorded the Redis/Valkey constructor-redaction retirement, bounded startup-error contract, and the exact Redis-provider legacy transformations retained for the later repository-wide audit |

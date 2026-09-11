@@ -232,114 +232,139 @@ func (o *AIOrchestrator) runBeforePlanningHooks(
 ) (*evaluatedPipelineShortCircuit, error) {
 	sequence := 0
 	for _, hook := range o.pipelineHooks {
-		decisionHook, hasDecisionHook := hook.(core.BeforePlanningDecisionHook)
-		legacyHook, hasLegacyHook := hook.(core.BeforePlanningHook)
-		if !hasDecisionHook && !hasLegacyHook {
+		_, decision := hook.(core.BeforePlanningDecisionHook)
+		_, legacy := hook.(core.BeforePlanningHook)
+		if !decision && !legacy {
 			continue
 		}
 		sequence++
-		startedAt := time.Now()
-		invocation := beginPipelineHookInvocation(
-			ctx, hook.Name(), PipelineHookPhaseBeforePlanning, sequence, 0, startedAt,
-		)
-
-		var hookSpan core.Span
-		hookCtx := ctx
-		if o.telemetry != nil {
-			hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.before_planning."+hook.Name())
+		result, err := o.runBeforePlanningHook(ctx, pctx, gate, hook, sequence, reservedDimensions...)
+		if result != nil || err != nil {
+			return result, err
 		}
-		hookCtx = invocation.Context(hookCtx)
-		var enrichmentsBefore map[string]pipelineEnrichmentValueSnapshot
-		if invocation != nil {
-			enrichmentsBefore = snapshotPipelineEnrichments(pctx)
-		}
-
-		var (
-			decision *core.PipelineShortCircuitDecision
-			err      error
-			legacy   bool
-		)
-		if hasDecisionHook {
-			// Supply a new defensive gate view to each hook. The gate itself also
-			// clones CacheVary on every call.
-			hookGate := newPipelineGate(gate.cacheVary, gate.cacheReadDisabled)
-			decision, err = decisionHook.BeforePlanningDecision(hookCtx, pctx, hookGate)
-		} else {
-			legacy = true
-			var shortCircuit *core.PipelineShortCircuit
-			shortCircuit, err = legacyHook.BeforePlanning(hookCtx, pctx)
-			if shortCircuit != nil {
-				decision = &core.PipelineShortCircuitDecision{
-					ShortCircuit: shortCircuit,
-					Kind:         core.PipelineShortCircuitAuthoritative,
-				}
-			}
-		}
-		if invocation != nil {
-			reportPipelineEnrichmentChanges(hookCtx, enrichmentsBefore, pctx)
-		}
-
-		if err != nil {
-			finishPipelineHookSpan(hookSpan, err)
-			invocation.Complete(PipelineHookFailed, err)
-			if o.logger != nil {
-				o.logger.WarnWithContext(ctx, "Pipeline hook failed, skipping", map[string]interface{}{
-					"operation":  "before_planning_hook",
-					"request_id": requestIDFromBaggage(ctx),
-					"hook":       hook.Name(),
-					"error":      err.Error(),
-					"error_type": "hook_error",
-				})
-			}
-			continue
-		}
-
-		if decision == nil {
-			finishPipelineHookSpan(hookSpan, nil)
-			invocation.Complete(PipelineHookSucceeded, nil)
-			continue
-		}
-
-		// Clone hook-owned provenance before evaluation so a caller cannot race
-		// enforcement by retaining and mutating its map.
-		decision = &core.PipelineShortCircuitDecision{
-			ShortCircuit:  decision.ShortCircuit,
-			Kind:          decision.Kind,
-			CachedAgainst: cloneStringMap(decision.CachedAgainst),
-		}
-		decisionStartedAt := time.Now()
-		accepted, reason, decisionErr := acceptShortCircuit(
-			gate.cacheVary,
-			gate.cacheReadDisabled,
-			decision,
-			reservedDimensions...,
-		)
-		if legacy && len(reservedDimensions) > 0 {
-			reason = "legacy_authoritative"
-		}
-		o.recordPipelineShortCircuitDecision(ctx, hook.Name(), decision.Kind, reason, accepted)
-		o.recordSkillResponseCacheDecision(
-			gate.cacheVary, decision.CachedAgainst, decision.Kind,
-			accepted, decisionErr, time.Since(decisionStartedAt),
-		)
-		if decisionErr != nil {
-			finishPipelineHookSpan(hookSpan, decisionErr)
-			invocation.Complete(PipelineHookFailed, decisionErr)
-			return nil, fmt.Errorf("before-planning hook %q: %w", hook.Name(), decisionErr)
-		}
-		finishPipelineHookSpan(hookSpan, nil)
-		invocation.Complete(PipelineHookSucceeded, nil)
-		if !accepted {
-			continue
-		}
-
-		return &evaluatedPipelineShortCircuit{
-			shortCircuit: decision.ShortCircuit,
-			kind:         decision.Kind,
-			diagnostic:   reason,
-		}, nil
 	}
 	return nil, nil
+}
+
+func (o *AIOrchestrator) runBeforePlanningHook(
+	ctx context.Context,
+	pctx *core.PipelineContext,
+	gate pipelineGate,
+	hook core.PipelineHook,
+	sequence int,
+	reservedDimensions ...string,
+) (*evaluatedPipelineShortCircuit, error) {
+	decisionHook, hasDecisionHook := hook.(core.BeforePlanningDecisionHook)
+	legacyHook, _ := hook.(core.BeforePlanningHook)
+	startedAt := time.Now()
+	invocation := beginPipelineHookInvocation(
+		ctx, hook.Name(), PipelineHookPhaseBeforePlanning, sequence, 0, startedAt,
+	)
+
+	var hookSpan core.Span
+	hookCtx := ctx
+	if o.telemetry != nil {
+		hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.before_planning."+hook.Name())
+	}
+	defer finishPanickingPipelineHook(invocation, hookSpan, PipelineHookFailOpen)
+	hookCtx = invocation.Context(hookCtx)
+	var enrichmentsBefore map[string]pipelineEnrichmentValueSnapshot
+	if invocation != nil {
+		enrichmentsBefore = snapshotPipelineEnrichments(pctx)
+	}
+
+	var (
+		decision *core.PipelineShortCircuitDecision
+		err      error
+		legacy   bool
+	)
+	if hasDecisionHook {
+		// Supply a new defensive gate view to each hook. The gate itself also
+		// clones CacheVary on every call.
+		hookGate := newPipelineGate(gate.cacheVary, gate.cacheReadDisabled)
+		decision, err = decisionHook.BeforePlanningDecision(hookCtx, pctx, hookGate)
+	} else {
+		legacy = true
+		var shortCircuit *core.PipelineShortCircuit
+		shortCircuit, err = legacyHook.BeforePlanning(hookCtx, pctx)
+		if shortCircuit != nil {
+			decision = &core.PipelineShortCircuitDecision{
+				ShortCircuit: shortCircuit,
+				Kind:         core.PipelineShortCircuitAuthoritative,
+			}
+		}
+	}
+	if invocation != nil {
+		reportPipelineEnrichmentChanges(hookCtx, enrichmentsBefore, pctx)
+	}
+
+	if err != nil {
+		completePipelineHookInvocation(invocation, hookSpan, PipelineHookFailed, err, PipelineHookDecision{
+			FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "hook_error",
+		})
+		if o.logger != nil {
+			o.logger.WarnWithContext(ctx, "Pipeline hook failed, skipping", map[string]interface{}{
+				"operation":  "before_planning_hook",
+				"request_id": requestIDFromBaggage(ctx),
+				"hook":       hook.Name(),
+				"error":      err.Error(),
+				"error_type": "hook_error",
+			})
+		}
+		return nil, nil
+	}
+
+	if decision == nil {
+		completePipelineHookInvocation(invocation, hookSpan, PipelineHookSucceeded, nil, PipelineHookDecision{
+			FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "no_decision",
+		})
+		return nil, nil
+	}
+
+	// Clone hook-owned provenance before evaluation so a caller cannot race
+	// enforcement by retaining and mutating its map.
+	decision = &core.PipelineShortCircuitDecision{
+		ShortCircuit:  decision.ShortCircuit,
+		Kind:          decision.Kind,
+		CachedAgainst: cloneStringMap(decision.CachedAgainst),
+	}
+	decisionStartedAt := time.Now()
+	accepted, reason, decisionErr := acceptShortCircuit(
+		gate.cacheVary,
+		gate.cacheReadDisabled,
+		decision,
+		reservedDimensions...,
+	)
+	if legacy && len(reservedDimensions) > 0 {
+		reason = "legacy_authoritative"
+	}
+	o.recordPipelineShortCircuitDecision(ctx, hook.Name(), decision.Kind, reason, accepted)
+	o.recordSkillResponseCacheDecision(
+		gate.cacheVary, decision.CachedAgainst, decision.Kind,
+		accepted, decisionErr, time.Since(decisionStartedAt),
+	)
+	if decisionErr != nil {
+		completePipelineHookInvocation(invocation, hookSpan, PipelineHookFailed, decisionErr, PipelineHookDecision{
+			FailurePolicy: PipelineHookFailClosed, Action: PipelineHookTerminate, Reason: reason,
+		})
+		return nil, fmt.Errorf("before-planning hook %q: %w", hook.Name(), decisionErr)
+	}
+	action := PipelineHookContinue
+	if accepted {
+		action = PipelineHookShortCircuit
+	}
+	completePipelineHookInvocation(invocation, hookSpan, PipelineHookSucceeded, nil, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailClosed, Action: action, Reason: reason,
+	})
+	if !accepted {
+		return nil, nil
+	}
+
+	return &evaluatedPipelineShortCircuit{
+		shortCircuit: decision.ShortCircuit,
+		kind:         decision.Kind,
+		diagnostic:   reason,
+	}, nil
 }
 
 func (o *AIOrchestrator) recordPipelineShortCircuitDecision(
@@ -408,8 +433,9 @@ func pipelineShortCircuitKindLabel(kind core.PipelineShortCircuitKind) string {
 }
 
 // runValidatedAfterPlanningHooks activates the documented AfterPlanning stage
-// with copy-on-write mutation and full plan validation. A bad hook cannot
-// corrupt the last valid plan or trigger an LLM regeneration.
+// with copy-on-write mutation and full plan validation. An ordinary rejected
+// mutation retains the last valid plan. A required rejection fails closed
+// before the plan can reach HITL, persistence, or execution.
 func (o *AIOrchestrator) runValidatedAfterPlanningHooks(
 	ctx context.Context,
 	pctx *core.PipelineContext,
@@ -418,69 +444,116 @@ func (o *AIOrchestrator) runValidatedAfterPlanningHooks(
 	executedStepIDs []string,
 	phaseCount int,
 	requestID string,
-) *RoutingPlan {
+) (*RoutingPlan, error) {
 	current := plan
 	sequence := 0
 	for _, hook := range o.pipelineHooks {
-		afterPlanning, ok := hook.(core.AfterPlanningHook)
-		if !ok {
+		afterPlanning, participates := hook.(core.AfterPlanningHook)
+		if !participates {
+			// Factory construction rejects this case for required markers.
 			continue
 		}
 		sequence++
-		startedAt := time.Now()
-		invocation := beginPipelineHookInvocation(
-			ctx, hook.Name(), PipelineHookPhaseAfterPlanning, sequence, phaseCount, startedAt,
-		)
-		var hookSpan core.Span
-		hookCtx := ctx
-		if o.telemetry != nil {
-			hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.after_planning."+hook.Name())
-		}
-
-		candidate, cloneErr := cloneRoutingPlanForHook(current)
-		if cloneErr != nil {
-			finishPipelineHookSpan(hookSpan, cloneErr)
-			invocation.Complete(PipelineHookSkipped, cloneErr)
-			o.recordAfterPlanningDecision(ctx, hook.Name(), "clone_failed", false)
-			continue
-		}
-
-		hookCtx = invocation.Context(hookCtx)
-		mutated, err := afterPlanning.AfterPlanning(hookCtx, pctx, candidate)
+		var err error
+		current, err = o.runValidatedAfterPlanningHook(ctx, pctx, current, completed, executedStepIDs, phaseCount, requestID, afterPlanning, sequence)
 		if err != nil {
-			finishPipelineHookSpan(hookSpan, err)
-			invocation.Complete(PipelineHookFailed, err)
-			o.recordAfterPlanningDecision(ctx, hook.Name(), "hook_error", false)
-			continue
+			return nil, err
 		}
-		mutatedPlan, ok := mutated.(*RoutingPlan)
-		if !ok || mutatedPlan == nil {
-			typeErr := fmt.Errorf("hook returned %T, want *RoutingPlan", mutated)
-			finishPipelineHookSpan(hookSpan, typeErr)
-			invocation.Complete(PipelineHookFailed, typeErr)
-			o.recordAfterPlanningDecision(ctx, hook.Name(), "invalid_type", false)
-			continue
-		}
-
-		o.normalizeTerminalSynthesisPlan(ctx, mutatedPlan, knownStepIDSet(executedStepIDs, mutatedPlan), requestID)
-		executedCaps := make(map[string]stepCapability, len(completed))
-		for id, result := range completed {
-			if result != nil {
-				executedCaps[id] = stepCapability{agent: result.AgentName, capability: result.Capability}
-			}
-		}
-		if validationErr := o.runPlanValidationGauntlet(ctx, mutatedPlan, executedCaps, executedStepIDs, phaseCount, requestID); validationErr != nil {
-			finishPipelineHookSpan(hookSpan, validationErr)
-			invocation.Complete(PipelineHookFailed, validationErr)
-			o.recordAfterPlanningDecision(ctx, hook.Name(), "invalid_plan", false)
-			continue
-		}
-		current = mutatedPlan
-		finishPipelineHookSpan(hookSpan, nil)
-		invocation.Complete(PipelineHookSucceeded, nil)
-		o.recordAfterPlanningDecision(ctx, hook.Name(), "accepted", true)
 	}
-	return current
+	return current, nil
+}
+
+func (o *AIOrchestrator) runValidatedAfterPlanningHook(
+	ctx context.Context,
+	pctx *core.PipelineContext,
+	current *RoutingPlan,
+	completed map[string]*StepResult,
+	executedStepIDs []string,
+	phaseCount int,
+	requestID string,
+	hook core.AfterPlanningHook,
+	sequence int,
+) (*RoutingPlan, error) {
+	_, required := hook.(core.RequiredAfterPlanningHook)
+	policy, rejectionAction := PipelineHookFailOpen, PipelineHookContinue
+	if required {
+		policy, rejectionAction = PipelineHookFailClosed, PipelineHookTerminate
+	}
+	startedAt := time.Now()
+	invocation := beginPipelineHookInvocation(
+		ctx, hook.Name(), PipelineHookPhaseAfterPlanning, sequence, phaseCount, startedAt,
+	)
+	var hookSpan core.Span
+	hookCtx := ctx
+	if o.telemetry != nil {
+		hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.after_planning."+hook.Name())
+	}
+
+	defer finishPanickingPipelineHook(invocation, hookSpan, policy)
+
+	candidate, cloneErr := cloneRoutingPlanForHook(current)
+	if cloneErr != nil {
+		completePipelineHookInvocation(invocation, hookSpan, PipelineHookSkipped, cloneErr, PipelineHookDecision{
+			FailurePolicy: policy, Action: rejectionAction, Reason: "clone_failed",
+		})
+		o.recordAfterPlanningDecision(ctx, hook.Name(), "clone_failed", false)
+		if required {
+			failure := fmt.Errorf("%w: %w", errAfterPlanningCloneFailed, cloneErr)
+			return nil, &RequiredAfterPlanningError{HookName: hook.Name(), Cause: failure}
+		}
+		return current, nil
+	}
+
+	hookCtx = invocation.Context(hookCtx)
+	mutated, err := hook.AfterPlanning(hookCtx, pctx, candidate)
+	if err != nil {
+		completePipelineHookInvocation(invocation, hookSpan, PipelineHookFailed, err, PipelineHookDecision{
+			FailurePolicy: policy, Action: rejectionAction, Reason: "hook_error",
+		})
+		o.recordAfterPlanningDecision(ctx, hook.Name(), "hook_error", false)
+		if required {
+			return nil, &RequiredAfterPlanningError{HookName: hook.Name(), Cause: err}
+		}
+		return current, nil
+	}
+	mutatedPlan, ok := mutated.(*RoutingPlan)
+	if !ok || mutatedPlan == nil {
+		typeErr := fmt.Errorf("hook returned %T, want *RoutingPlan", mutated)
+		completePipelineHookInvocation(invocation, hookSpan, PipelineHookFailed, typeErr, PipelineHookDecision{
+			FailurePolicy: policy, Action: rejectionAction, Reason: "invalid_type",
+		})
+		o.recordAfterPlanningDecision(ctx, hook.Name(), "invalid_type", false)
+		if required {
+			failure := fmt.Errorf("%w: %w", errAfterPlanningInvalidResultType, typeErr)
+			return nil, &RequiredAfterPlanningError{HookName: hook.Name(), Cause: failure}
+		}
+		return current, nil
+	}
+
+	o.normalizeTerminalSynthesisPlan(ctx, mutatedPlan, knownStepIDSet(executedStepIDs, mutatedPlan), requestID)
+	executedCaps := make(map[string]stepCapability, len(completed))
+	for id, result := range completed {
+		if result != nil {
+			executedCaps[id] = stepCapability{agent: result.AgentName, capability: result.Capability}
+		}
+	}
+	if validationErr := o.runPlanValidationGauntlet(ctx, mutatedPlan, executedCaps, executedStepIDs, phaseCount, requestID); validationErr != nil {
+		completePipelineHookInvocation(invocation, hookSpan, PipelineHookFailed, validationErr, PipelineHookDecision{
+			FailurePolicy: policy, Action: rejectionAction, Reason: "invalid_plan",
+		})
+		o.recordAfterPlanningDecision(ctx, hook.Name(), "invalid_plan", false)
+		if required {
+			failure := fmt.Errorf("%w: %w", errAfterPlanningInvalidPlan, validationErr)
+			return nil, &RequiredAfterPlanningError{HookName: hook.Name(), Cause: failure}
+		}
+		return current, nil
+	}
+	current = mutatedPlan
+	completePipelineHookInvocation(invocation, hookSpan, PipelineHookSucceeded, nil, PipelineHookDecision{
+		FailurePolicy: policy, Action: PipelineHookContinue, Reason: "accepted",
+	})
+	o.recordAfterPlanningDecision(ctx, hook.Name(), "accepted", true)
+	return current, nil
 }
 
 func cloneRoutingPlanForHook(plan *RoutingPlan) (*RoutingPlan, error) {
@@ -527,42 +600,44 @@ func (o *AIOrchestrator) runAfterExecutionHooks(ctx context.Context, pctx *core.
 			continue
 		}
 		sequence++
-		startedAt := time.Now()
-		invocation := beginPipelineHookInvocation(
-			ctx, hook.Name(), PipelineHookPhaseAfterExecution, sequence, 0, startedAt,
-		)
+		o.runAfterExecutionHook(ctx, pctx, results, h, sequence)
+	}
+}
 
-		var hookSpan core.Span
-		hookCtx := ctx
-		if o.telemetry != nil {
-			hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.after_execution."+hook.Name())
-		}
-		hookCtx = invocation.Context(hookCtx)
+func (o *AIOrchestrator) runAfterExecutionHook(ctx context.Context, pctx *core.PipelineContext, results interface{}, hook core.AfterExecutionHook, sequence int) {
+	startedAt := time.Now()
+	invocation := beginPipelineHookInvocation(
+		ctx, hook.Name(), PipelineHookPhaseAfterExecution, sequence, 0, startedAt,
+	)
 
-		err := h.AfterExecution(hookCtx, pctx, results)
-		status := PipelineHookSucceeded
-		if err != nil {
-			status = PipelineHookFailed
-		}
-		invocation.Complete(status, err)
+	var hookSpan core.Span
+	hookCtx := ctx
+	if o.telemetry != nil {
+		hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.after_execution."+hook.Name())
+	}
+	defer finishPanickingPipelineHook(invocation, hookSpan, PipelineHookFailOpen)
+	hookCtx = invocation.Context(hookCtx)
 
-		if hookSpan != nil {
-			if err != nil {
-				hookSpan.RecordError(err)
-			}
-			hookSpan.End()
-		}
+	err := hook.AfterExecution(hookCtx, pctx, results)
+	status := PipelineHookSucceeded
+	reason := "completed"
+	if err != nil {
+		status = PipelineHookFailed
+		reason = "hook_error"
+	}
+	completePipelineHookInvocation(invocation, hookSpan, status, err, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: reason,
+	})
 
-		if err != nil {
-			if o.logger != nil {
-				o.logger.WarnWithContext(ctx, "Pipeline hook failed, skipping", map[string]interface{}{
-					"operation":  "after_execution_hook",
-					"request_id": requestIDFromBaggage(ctx),
-					"hook":       hook.Name(),
-					"error":      err.Error(),
-					"error_type": "hook_error",
-				})
-			}
+	if err != nil {
+		if o.logger != nil {
+			o.logger.WarnWithContext(ctx, "Pipeline hook failed, skipping", map[string]interface{}{
+				"operation":  "after_execution_hook",
+				"request_id": requestIDFromBaggage(ctx),
+				"hook":       hook.Name(),
+				"error":      err.Error(),
+				"error_type": "hook_error",
+			})
 		}
 	}
 }
@@ -577,54 +652,80 @@ func (o *AIOrchestrator) runAfterSynthesisHooks(ctx context.Context, pctx *core.
 			continue
 		}
 		sequence++
-		startedAt := time.Now()
-		invocation := beginPipelineHookInvocation(
-			ctx, hook.Name(), PipelineHookPhaseAfterSynthesis, sequence, 0, startedAt,
-		)
-
-		var hookSpan core.Span
-		hookCtx := ctx
-		if o.telemetry != nil {
-			hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.after_synthesis."+hook.Name())
-		}
-		hookCtx = invocation.Context(hookCtx)
-
-		mutated, err := h.AfterSynthesis(hookCtx, pctx, response)
-		status := PipelineHookSucceeded
-		if err != nil {
-			status = PipelineHookFailed
-		}
-		invocation.Complete(status, err)
-
-		if hookSpan != nil {
-			if err != nil {
-				hookSpan.RecordError(err)
-			}
-			hookSpan.End()
-		}
-
-		if err != nil {
-			if o.logger != nil {
-				o.logger.WarnWithContext(ctx, "Pipeline hook failed, skipping", map[string]interface{}{
-					"operation":  "after_synthesis_hook",
-					"request_id": requestIDFromBaggage(ctx),
-					"hook":       hook.Name(),
-					"error":      err.Error(),
-					"error_type": "hook_error",
-				})
-			}
-			continue
-		}
-
-		response = mutated
+		response = o.runAfterSynthesisHook(ctx, pctx, response, h, sequence)
 	}
 	return response
 }
 
-func finishPipelineHookSpan(span core.Span, err error) {
+func (o *AIOrchestrator) runAfterSynthesisHook(ctx context.Context, pctx *core.PipelineContext, response string, hook core.AfterSynthesisHook, sequence int) string {
+	startedAt := time.Now()
+	invocation := beginPipelineHookInvocation(
+		ctx, hook.Name(), PipelineHookPhaseAfterSynthesis, sequence, 0, startedAt,
+	)
+
+	var hookSpan core.Span
+	hookCtx := ctx
+	if o.telemetry != nil {
+		hookCtx, hookSpan = o.telemetry.StartSpan(ctx, "pipeline.hook.after_synthesis."+hook.Name())
+	}
+	defer finishPanickingPipelineHook(invocation, hookSpan, PipelineHookFailOpen)
+	hookCtx = invocation.Context(hookCtx)
+
+	mutated, err := hook.AfterSynthesis(hookCtx, pctx, response)
+	status := PipelineHookSucceeded
+	reason := "completed"
+	if err != nil {
+		status = PipelineHookFailed
+		reason = "hook_error"
+	}
+	completePipelineHookInvocation(invocation, hookSpan, status, err, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: reason,
+	})
+
+	if err != nil {
+		if o.logger != nil {
+			o.logger.WarnWithContext(ctx, "Pipeline hook failed, skipping", map[string]interface{}{
+				"operation":  "after_synthesis_hook",
+				"request_id": requestIDFromBaggage(ctx),
+				"hook":       hook.Name(),
+				"error":      err.Error(),
+				"error_type": "hook_error",
+			})
+		}
+		return response
+	}
+
+	return mutated
+}
+
+// This defer belongs to one invocation, not the stage loop. Panic propagation
+// is independent of the ordinary error policy and preserves the original value.
+func finishPanickingPipelineHook(invocation *pipelineHookInvocation, span core.Span, policy PipelineHookFailurePolicy) {
+	if value := recover(); value != nil {
+		completePipelineHookInvocation(invocation, span, PipelineHookFailed,
+			fmt.Errorf("pipeline hook panic: %v", value), PipelineHookDecision{
+				FailurePolicy: policy, Action: PipelineHookPropagatePanic, Reason: "panic",
+			})
+		panic(value)
+	}
+}
+
+// Complete both evidence surfaces from the same framework decision. Tracing
+// remains available when execution-debug recording (and invocation) is absent.
+func completePipelineHookInvocation(
+	invocation *pipelineHookInvocation,
+	span core.Span,
+	status PipelineHookExecutionStatus,
+	err error,
+	decision PipelineHookDecision,
+) {
+	invocation.Complete(status, err, decision)
 	if span == nil {
 		return
 	}
+	span.SetAttribute("pipeline.hook.failure_policy", string(decision.FailurePolicy))
+	span.SetAttribute("pipeline.hook.action", string(decision.Action))
+	span.SetAttribute("pipeline.hook.reason", decision.Reason)
 	if err != nil {
 		span.RecordError(err)
 	}

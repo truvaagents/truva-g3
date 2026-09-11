@@ -177,7 +177,9 @@ func TestPhaseCoordinatorPersistsBoundaryFailureEvidenceWithoutPlannerRetry(t *t
 	}
 
 	result, err := (phaseCoordinator{orchestrator: orchestrator}).Run(ctx, runState, nil)
-	if result != nil || !errors.Is(err, ErrSkillUnavailable) || !errors.Is(err, ErrSkillIntegrity) {
+	if result == nil || result.CombinedResult == nil || result.CombinedResult.Success ||
+		result.LastPlan != nil || len(result.CombinedResult.Steps) != 0 ||
+		!errors.Is(err, ErrSkillUnavailable) || !errors.Is(err, ErrSkillIntegrity) {
 		t.Fatalf("phase result = %#v, error = %v", result, err)
 	}
 	if upstream.manifestCalls != 2 {
@@ -190,6 +192,7 @@ func TestPhaseCoordinatorPersistsBoundaryFailureEvidenceWithoutPlannerRetry(t *t
 	orchestrator.executionWg.Wait()
 	records, _ := store.snapshot()
 	if len(records) != 1 || records[0].Skills == nil || len(records[0].Skills.ContentLoads) != 1 ||
+		records[0].Result == nil || records[0].Result.Success || records[0].Result.TotalDuration <= 0 ||
 		records[0].Skills.ContentLoads[0].DiagnosticCode != "skill_manifest_hash_mismatch" {
 		t.Fatalf("stored boundary failure evidence = %#v", records)
 	}

@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.23
+**Version**: 1.27
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -511,7 +511,27 @@ Request → [PrepareKnownEnrichments] → [BeforePlanningHooks] → Understandin
 
 #### Pipeline Hooks
 
-Pipeline hooks (`core.PipelineHook`) provide per-stage middleware for context engineering. Hooks are registered via `OrchestratorDependencies.PipelineHooks` in the factory and run sequentially at each stage. Errors are logged and skipped — they never abort the pipeline.
+Pipeline hooks (`core.PipelineHook`) provide per-stage middleware for context
+engineering. Hooks are registered via
+`OrchestratorDependencies.PipelineHooks` in the factory and run sequentially at
+each stage. Ordinary hooks retain their documented fail-open fallback. An
+`AfterPlanningHook` that also implements `RequiredAfterPlanningHook` is a
+fail-closed execution invariant: a callback error, wrong return type, clone
+failure, or invalid mutation aborts before phase persistence, HITL, or tool
+execution. Required intent is independent of the stage interface, so factory
+construction rejects a required marker that no longer implements
+`AfterPlanningHook`. At most one required after-planning hook may be registered,
+and it must be the final hook participating in that stage; applications compose
+multiple mandatory checks behind that one terminal boundary.
+
+On returned required-hook failure, the phase loop returns accumulated diagnostic
+state alongside the typed error. With execution recording enabled, the existing
+request lifecycle records a non-nil unsuccessful result, preserving admitted
+phases and completed tool results while excluding the rejected candidate. The
+existing retention selector therefore applies error retention, including to
+later effect-driven rewrites.
+This does not synthesize a response, alter optional-hook retention, or introduce
+another recorder or storage protocol.
 
 Before hooks run, orchestration also performs a shared enrichment-preparation pass for known metadata inputs. This is how raw conversation-turn metadata is normalized into the `conversation_history` enrichment on the primary chat-agent path without requiring a dedicated hook. The conversation-history preparer always performs a token-aware **preparation** step (`conversation_history_prepare`, recorded as a logical pre-execution interaction when LLM debug is enabled). When Tier 2 recursive compaction is configured, that same stage may additionally emit `conversation_history_compaction` as the optional LLM-backed extension.
 
@@ -519,8 +539,9 @@ Available hook stages:
 - **BeforePlanningHook** — Runs before the phase loop. Can inject enrichments (RAG context, conversation history, agent memory, activity coordination) into `PipelineContext.Enrichments`, or return a `PipelineShortCircuit` to skip the entire pipeline (e.g., semantic cache hit).
 - **AfterPlanningHook** — Runs once for each final validated planner-produced
   phase plan, before HITL persistence and execution. Mutations are applied to a
-  copy and fully revalidated; an invalid mutation is rejected while the last
-  valid plan is retained. HITL resume does not rerun this boundary.
+  copy and fully revalidated. An ordinary hook's invalid mutation is rejected
+  while the last valid plan is retained; a required hook's rejection stops the
+  phase. HITL resume does not rerun this boundary.
 - **AfterExecutionHook** — Runs after tool execution completes.
 - **AfterSynthesisHook** — Runs after synthesis. Can mutate the final response.
 
@@ -1703,7 +1724,7 @@ request-local holder is concurrency-safe because execution snapshots are
 written asynchronously, while hook invocation remains sequential.
 
 The invocation outcome reports whether the framework call returned normally,
-returned an error, or was skipped. It does not claim that every side effect
+returned an error, panicked, or was skipped. It does not claim that every side effect
 initiated by the hook completed successfully: a hook may deliberately fail
 open, and `KnowledgeExtractionHook` schedules work that completes later.
 
@@ -1718,6 +1739,54 @@ activity cleanup calls. Hook-specific context metadata does not duplicate the
 exact value already carried by its enrichment effect.
 Custom hooks use the typed `core.PipelineHookEffectReporter` context seam; no
 orchestration type or storage provider is exposed to the hook.
+
+On normal return, the same entry also carries an orchestration-owned `Decision`:
+the boundary's `failure_policy`, actual pipeline `action`, and bounded `reason`.
+Invocation failure is not request failure: an optional hook error records
+`fail_open` / `continue`, while required after-planning rejection records
+`fail_closed` / `terminate`. Required success still has a fail-closed policy
+but records `continue`. Accepted before-planning responses record
+`short_circuit`; rejected cache provenance records `continue` without serving
+the cached response. A missing decision means not recorded, never inferred
+success. A panic crossing an invocation boundary records `failed` with action
+`propagate_panic` and reason `panic`, closes the hook span, and re-panics the
+original value. The ordinary error policy remains recorded but never suppresses
+a panic. No later hook or protected phase work runs after that boundary.
+
+The phase loop transfers available failed diagnostic state through a private
+callback while unwinding, so a later-phase panic preserves admitted plans and
+completed steps. Its active phase span and timeout are closed. The shared
+request defer records the failure through the existing terminal publisher and
+marks/ends the request span before propagating the same panic. Native streaming
+also closes the enclosing synthesis span if an after-synthesis hook panics;
+already-delivered tokens cannot be retracted. Pending producer effects remain
+pending until the producer reports their outcome; a callback panic does not
+invent a side-effect result. Subsequent effect rewrites retain the failed state.
+This is best-effort in-process diagnostic capture, not durability through process
+termination or recovery of panics in separate application-owned goroutines.
+
+Native streaming records the successful synthesis model interaction before
+running AfterSynthesis hooks. Its exact prompt/response/usage and model-call
+duration therefore survive a later hook panic without labeling that LLM call
+failed. The request still fails and no final application response is stored.
+The typed request state retains the existing stream callback count so error
+completion logs do not claim zero chunks after streaming has begun.
+
+Invalid explicit before-planning decisions store a failed, zero-step result.
+The hook-terminal fallback also supplies a failed result when no result exists
+and the request ended with a non-interruption error. Later planning/validation
+failures carry completed work and admitted plans to that same terminal writer;
+they do not admit the rejected candidate. An existing richer terminal publisher
+is never replaced. HITL suspension remains an interruption, not an invented
+failure. The ordinary execution-store outcome rule selects failure retention,
+including subsequent effect-driven rewrites; no new retention mechanism is used.
+
+The decision is copied under the existing holder mutex before its revision is
+published, and defensively copied in snapshots. Detached effect updates retain
+it. The runner supplies that same value to the existing span as bounded
+`pipeline.hook.failure_policy`, `pipeline.hook.action`, and
+`pipeline.hook.reason` attributes before ending the span, even when execution
+recording is disabled. No application payload is added to these attributes.
 
 This evidence is captured by orchestration and stored through the existing
 `ExecutionStore.Store` method. It does not add a backend method, Redis command,
@@ -2935,6 +3004,10 @@ modularity and flexibility.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.27 | 2026-09-11 | Added panic-safe per-hook completion, partial-state transfer to the existing request recorder, and phase/native-synthesis span cleanup while preserving the original panic and asynchronous effect semantics |
+| 1.26 | 2026-09-10 | Preserved failed terminal results for invalid early decisions and partial work for later planning errors, using existing retention/publisher semantics without changing HITL suspension |
+| 1.25 | 2026-09-10 | Added normal-return hook decisions to existing execution records and spans, distinguishing invocation status from pipeline consequence while preserving ordered effect publication and backend contracts |
+| 1.24 | 2026-09-10 | Added construction-validated, terminal `RequiredAfterPlanningHook` composition and fail-closed propagation before persistence, HITL, and execution; preserved prior-phase audit state and failed-record retention through the existing terminal recorder |
 | 1.23 | 2026-09-08 | Removed numbered-DB, obsolete raw-prefix (including skills), duplicate execution-debug options, and execution-ID-only workflow compatibility paths under the development-stage exception; preserved typed composition, explicit task routing, scoped workflow identity, and observability/ownership contracts |
 | 1.22 | 2026-09-08 | Preserved the unchanged CI workflow and full unit-test selection as the primary gate; real-topology and capacity fixtures are integration-tagged, optional manual verification, superseding the mandatory integration-gate policy in 1.14 |
 | 1.21 | 2026-09-08 | Gated enrichment/effect serialization on active debug capture and made HITL checkpoint/command adapters preserve caller-owned span errors while emitting bounded, correlated diagnostics |

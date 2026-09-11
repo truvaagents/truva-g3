@@ -904,6 +904,46 @@ callback errors retain the legacy fail-open behavior.
 See [Pipeline Hooks Guide](../orchestration/PIPELINE_HOOKS_GUIDE.md) for the
 full lifecycle, compatibility behavior, and cache-hook example.
 
+#### Required after-planning governance
+
+Ordinary `AfterPlanningHook` implementations remain fail-open: orchestration
+rejects a callback error, wrong return type, clone failure, or invalid mutation
+and continues with the last valid plan. A mandatory plan-governance hook also
+implements this marker:
+
+```go
+type RequiredAfterPlanningHook interface {
+    PipelineHook
+    RequireAfterPlanningSuccess()
+}
+```
+
+The marker intentionally does not embed `AfterPlanningHook`. During factory
+construction, orchestration verifies that the same registered value implements
+both contracts. It also requires at most one required hook and requires it to
+be the final registered hook that participates in `AfterPlanning`. Invalid
+composition returns `*orchestration.InvalidRequiredAfterPlanningHookError`,
+matches `orchestration.ErrInvalidOrchestratorConfig`, and carries one stable
+reason:
+
+```go
+type InvalidRequiredAfterPlanningHookReason string
+
+const (
+    InvalidRequiredAfterPlanningStageDrift InvalidRequiredAfterPlanningHookReason = "stage_drift"
+    InvalidRequiredAfterPlanningMultiple   InvalidRequiredAfterPlanningHookReason = "multiple_required"
+    InvalidRequiredAfterPlanningNotLast    InvalidRequiredAfterPlanningHookReason = "required_not_terminal"
+)
+```
+
+At runtime, a rejected required mutation returns
+`*orchestration.RequiredAfterPlanningError` with `HookName` and the underlying
+`Cause`. `orchestration.IsRequiredAfterPlanningError(err)` and
+`orchestration.IsInvalidRequiredAfterPlanningHook(err)` provide stable checks.
+The request stops before phase-plan persistence, HITL evaluation, tool
+execution, or synthesis. Required hooks do not run again for HITL resume plans;
+those plans are restored approved checkpoint state.
+
 #### Background Redis Retry
 
 TruvaG3 provides an intelligent background retry mechanism for handling Redis connection failures during service startup. This is particularly useful in Kubernetes environments where Redis may not be immediately available.
@@ -4506,7 +4546,7 @@ To build the Layer-2 distillation result processor **outside** `CreateOrchestrat
 | `AgentInputProcessor` | `AgentInputProcessor` | No | Transform/redact/trim tool→tool input parameters before dispatch (default: identity; built-in byte guard when `MaxAgentInputBytes > 0`) |
 | `ContinuationDistiller` | `ResultProcessor` | No | Summarizer for non-JSON continuation escalations (default: built-in LLM distiller when distillation is enabled and an `AIClient` is present) |
 | `DistillCache` | `core.DigestCache` | No | Content-addressed cache for distillation results (nil = no caching) |
-| `PipelineHooks` | `[]core.PipelineHook` | No | Per-stage middleware for context engineering. See [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) |
+| `PipelineHooks` | `[]core.PipelineHook` | No | Per-stage middleware for context engineering. A nil or empty slice is valid; a nil or typed-nil entry fails factory construction with an error wrapping `ErrInvalidOrchestratorConfig`. Ordinary hooks use documented fail-open fallbacks; one terminal `RequiredAfterPlanningHook` may provide fail-closed plan governance. Invalid required composition fails factory construction with `InvalidRequiredAfterPlanningHookError`. See [Pipeline Hooks: Registering Hooks](../orchestration/PIPELINE_HOOKS_GUIDE.md#8-registering-hooks) |
 | `ConversationHistoryPreparer` | `ConversationHistoryPreparer` | No | Shared conversation-history preparer for the metadata and hook ingress paths. If nil, the factory auto-builds the default Tier 1 processor from config. |
 | `ActivityCoordinator` | `core.ActivityCoordinator` | No | Real-time agent coordination signals — typically the second return value of `orchestration.BuildMemoryHooks` |
 
@@ -5885,6 +5925,30 @@ type PipelineHookExecution struct {
     Duration  time.Duration               `json:"duration"`
     Error     string                      `json:"error,omitempty"`
     Effects   []core.PipelineHookEffect   `json:"effects,omitempty"`
+    Decision  *PipelineHookDecision       `json:"decision,omitempty"`
+}
+
+// Orchestration-owned boundary semantics, distinct from invocation/effect status.
+type PipelineHookFailurePolicy string
+
+const (
+    PipelineHookFailOpen   PipelineHookFailurePolicy = "fail_open"
+    PipelineHookFailClosed PipelineHookFailurePolicy = "fail_closed"
+)
+
+type PipelineHookAction string
+
+const (
+    PipelineHookContinue       PipelineHookAction = "continue"
+    PipelineHookTerminate      PipelineHookAction = "terminate"
+    PipelineHookShortCircuit   PipelineHookAction = "short_circuit"
+    PipelineHookPropagatePanic PipelineHookAction = "propagate_panic"
+)
+
+type PipelineHookDecision struct {
+    FailurePolicy PipelineHookFailurePolicy `json:"failure_policy"`
+    Action        PipelineHookAction        `json:"action"`
+    Reason        string                    `json:"reason"`
 }
 
 type PipelineHookExecutionStatus string
@@ -5944,6 +6008,22 @@ without any Redis-specific method or key.
 `Status` is the outcome of the framework invocation. It does not assert that
 all hook-initiated effects completed: hooks may fail open or schedule work that
 finishes after the invocation returns.
+
+`Decision` records what the framework did at a completed hook boundary.
+`FailurePolicy` is `fail_open` or `fail_closed`; `Action` is `continue`,
+`terminate`, `short_circuit`, or `propagate_panic`; `Reason` is a bounded framework classification
+such as `hook_error`, `accepted`, or `cache_dimension_mismatch`. Required
+after-planning success is `fail_closed` / `continue`; optional callback failure
+is `fail_open` / `continue`. Rejected cache provenance is `fail_closed` /
+`continue` because the cached response is withheld while planning may continue.
+A nil decision means not recorded, not inferred success. `propagate_panic`
+records a panic crossing the synchronous hook boundary: invocation status is
+`failed`, reason is `panic`, and the ordinary boundary policy is retained.
+The framework closes the hook span, preserves known prior work in the failed
+request record, and re-throws the original panic value. Independent goroutine
+panics and process-exit durability are outside this contract. Normal-return
+capture does not emit it. Existing hook spans carry the same three fields as
+`pipeline.hook.*` attributes, independently of debug-store enablement.
 
 `Effects` separately records those concrete outcomes. Effect IDs are stable
 within one invocation and carry a producer-owned schema version. A hook must
@@ -6197,7 +6277,7 @@ type InterruptHandler interface {
 ```go
 func NewInterruptController(
     policy InterruptPolicy,
-    store CheckpointStore,
+    store CheckpointPersistence,
     handler InterruptHandler,
     opts ...InterruptControllerOption,
 ) *DefaultInterruptController
@@ -6313,7 +6393,7 @@ func WithHandlerTelemetry(telemetry core.Telemetry) WebhookHandlerOption
 
 **HITLHandler (HTTP API):**
 ```go
-func NewHITLHandler(controller InterruptController, store CheckpointStore, opts ...HITLHandlerOption) *HITLHandler
+func NewHITLHandler(controller InterruptController, store CheckpointPersistence, opts ...HITLHandlerOption) *HITLHandler
 
 // Options
 func WithHITLHandlerLogger(logger core.Logger) HITLHandlerOption

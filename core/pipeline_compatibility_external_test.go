@@ -34,6 +34,14 @@ func (decisionPipelineHook) BeforePlanningDecision(
 	}, nil
 }
 
+// requiredAfterPlanningDeclaration deliberately omits AfterPlanning. The
+// marker must remain independently detectable when a stage method drifts;
+// orchestration owns the construction-time compatibility check.
+type requiredAfterPlanningDeclaration struct{}
+
+func (requiredAfterPlanningDeclaration) Name() string                 { return "required-declaration" }
+func (requiredAfterPlanningDeclaration) RequireAfterPlanningSuccess() {}
+
 func TestPipelineContractsRemainSourceCompatibleAndComposable(t *testing.T) {
 	// These positional literals intentionally protect the exact field count and
 	// order of the two pre-existing exported structs.
@@ -45,8 +53,12 @@ func TestPipelineContractsRemainSourceCompatibleAndComposable(t *testing.T) {
 
 	var _ core.BeforePlanningHook = legacyPipelineHook{}
 	var _ core.BeforePlanningDecisionHook = decisionPipelineHook{}
+	var _ core.RequiredAfterPlanningHook = requiredAfterPlanningDeclaration{}
 	hooks := []core.PipelineHook{legacyPipelineHook{}, decisionPipelineHook{}}
 	if len(hooks) != 2 {
 		t.Fatalf("hooks = %d, want 2", len(hooks))
+	}
+	if _, participates := interface{}(requiredAfterPlanningDeclaration{}).(core.AfterPlanningHook); participates {
+		t.Fatal("required marker unexpectedly embeds the after-planning stage interface")
 	}
 }

@@ -161,7 +161,8 @@ type StoredExecution struct {
 
 // PipelineHookExecution is the provider-neutral troubleshooting record for one
 // registered pipeline hook at one lifecycle boundary. Status describes the
-// callback invocation; Effects describe separately reported concrete outcomes.
+// callback invocation; Effects describe separately reported concrete outcomes;
+// Decision describes what the framework did at this boundary.
 // Error preserves the exact hook or validation error because execution-debug
 // persistence is an explicit, fidelity-preserving opt-in.
 type PipelineHookExecution struct {
@@ -174,6 +175,35 @@ type PipelineHookExecution struct {
 	Duration  time.Duration               `json:"duration"`
 	Error     string                      `json:"error,omitempty"`
 	Effects   []core.PipelineHookEffect   `json:"effects,omitempty"`
+	// A nil Decision means no consequence was recorded, not inferred success.
+	Decision *PipelineHookDecision `json:"decision,omitempty"`
+}
+
+// PipelineHookFailurePolicy describes the framework boundary's error policy,
+// not the business meaning of the hook or its effects.
+type PipelineHookFailurePolicy string
+
+const (
+	PipelineHookFailOpen   PipelineHookFailurePolicy = "fail_open"
+	PipelineHookFailClosed PipelineHookFailurePolicy = "fail_closed"
+)
+
+// PipelineHookAction describes the pipeline consequence of one hook boundary.
+type PipelineHookAction string
+
+const (
+	PipelineHookContinue       PipelineHookAction = "continue"
+	PipelineHookTerminate      PipelineHookAction = "terminate"
+	PipelineHookShortCircuit   PipelineHookAction = "short_circuit"
+	PipelineHookPropagatePanic PipelineHookAction = "propagate_panic"
+)
+
+// PipelineHookDecision records the boundary policy and actual pipeline action.
+// Reason is a bounded framework classification, never application payload text.
+type PipelineHookDecision struct {
+	FailurePolicy PipelineHookFailurePolicy `json:"failure_policy"`
+	Action        PipelineHookAction        `json:"action"`
+	Reason        string                    `json:"reason"`
 }
 
 // PipelineHookExecutionStatus is the terminal framework-observed outcome of a

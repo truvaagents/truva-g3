@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -166,6 +167,10 @@ func createOrchestrator(
 	compatibilityBootstrap bool,
 	diagnostics []ConfigDiagnostic,
 ) (*AIOrchestrator, error) {
+	pipelineHooks := append([]core.PipelineHook(nil), deps.PipelineHooks...)
+	if err := validatePipelineHooks(pipelineHooks); err != nil {
+		return nil, err
+	}
 
 	var factoryLogger core.Logger
 	if deps.Logger != nil {
@@ -619,11 +624,11 @@ func createOrchestrator(
 	}
 
 	// Wire pipeline hooks for context engineering
-	if len(deps.PipelineHooks) > 0 {
-		orchestrator.pipelineHooks = deps.PipelineHooks
+	if len(pipelineHooks) > 0 {
+		orchestrator.pipelineHooks = pipelineHooks
 		factoryLogger.Info("Pipeline hooks configured", map[string]interface{}{
 			"operation": "pipeline_hooks_initialization",
-			"count":     len(deps.PipelineHooks),
+			"count":     len(pipelineHooks),
 		})
 
 		// Propagate debug store and telemetry to hooks that need them.
@@ -664,10 +669,65 @@ func createOrchestrator(
 		"llm_debug":       config.LLMDebug.Enabled,
 		"execution_store": config.ExecutionStore.Enabled,
 		"result_trim":     config.ResultTrim.Enabled,
-		"pipeline_hooks":  len(deps.PipelineHooks),
+		"pipeline_hooks":  len(pipelineHooks),
 	})
 
 	return orchestrator, nil
+}
+
+// validatePipelineHooks rejects invalid explicit hook composition before any
+// optional runtime component is constructed. Ordinary partial hooks remain
+// valid; only a hook declaring RequiredAfterPlanningHook must also implement
+// the after-planning stage contract.
+func validatePipelineHooks(hooks []core.PipelineHook) error {
+	requiredIndex := -1
+	lastAfterPlanningIndex := -1
+
+	for index, hook := range hooks {
+		if isNilPipelineHook(hook) {
+			return fmt.Errorf("%w: pipeline hook at index %d is nil", ErrInvalidOrchestratorConfig, index)
+		}
+		if _, participates := hook.(core.AfterPlanningHook); participates {
+			lastAfterPlanningIndex = index
+		}
+		if _, required := hook.(core.RequiredAfterPlanningHook); !required {
+			continue
+		}
+		if _, participates := hook.(core.AfterPlanningHook); !participates {
+			return &InvalidRequiredAfterPlanningHookError{
+				HookName: hook.Name(),
+				Reason:   InvalidRequiredAfterPlanningStageDrift,
+			}
+		}
+		if requiredIndex >= 0 {
+			return &InvalidRequiredAfterPlanningHookError{
+				HookName: hook.Name(),
+				Reason:   InvalidRequiredAfterPlanningMultiple,
+			}
+		}
+		requiredIndex = index
+	}
+
+	if requiredIndex >= 0 && requiredIndex != lastAfterPlanningIndex {
+		return &InvalidRequiredAfterPlanningHookError{
+			HookName: hooks[requiredIndex].Name(),
+			Reason:   InvalidRequiredAfterPlanningNotLast,
+		}
+	}
+	return nil
+}
+
+func isNilPipelineHook(hook core.PipelineHook) bool {
+	if hook == nil {
+		return true
+	}
+	value := reflect.ValueOf(hook)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func emitConfigDiagnostics(logger core.Logger, diagnostics []ConfigDiagnostic) {

@@ -71,6 +71,10 @@ func TestBuildUnifiedViewPreservesStoredPipelineHookDiagnostics(t *testing.T) {
 		Sequence:  2,
 		StartedAt: startedAt,
 		Duration:  750 * time.Microsecond,
+		Decision: &orchestration.PipelineHookDecision{
+			FailurePolicy: orchestration.PipelineHookFailOpen,
+			Action:        orchestration.PipelineHookContinue, Reason: "completed",
+		},
 		Effects: []core.PipelineHookEffect{{
 			EffectID: "activity_signal_cleanup", SchemaVersion: 1,
 			Name: "Activity signal cleanup", Status: core.PipelineHookEffectSucceeded,
@@ -83,6 +87,40 @@ func TestBuildUnifiedViewPreservesStoredPipelineHookDiagnostics(t *testing.T) {
 	})
 	if view == nil || len(view.PipelineHooks) != 1 || !reflect.DeepEqual(view.PipelineHooks[0], hook) {
 		t.Fatalf("unified pipeline hooks = %#v", view)
+	}
+	for _, decision := range []*orchestration.PipelineHookDecision{nil, hook.Decision, {
+		FailurePolicy: orchestration.PipelineHookFailClosed,
+		Action:        orchestration.PipelineHookTerminate, Reason: "clone_failed",
+	}} {
+		hook.Decision = decision
+		hook.Status = orchestration.PipelineHookSkipped
+		hook.Error = "exact <application error>"
+		execution := &StoredExecution{RequestID: "round-trip", PipelineHooks: []orchestration.PipelineHookExecution{hook}}
+		for name, value := range map[string]any{"execution": execution, "unified": buildUnifiedView(execution)} {
+			payload, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct {
+				Hooks []orchestration.PipelineHookExecution `json:"pipeline_hooks"`
+			}
+			if err := json.Unmarshal(payload, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(wire.Hooks, execution.PipelineHooks) {
+				t.Fatalf("%s changed hook evidence: %s", name, payload)
+			}
+			var fields struct {
+				Hooks []map[string]json.RawMessage `json:"pipeline_hooks"`
+			}
+			if err := json.Unmarshal(payload, &fields); err != nil {
+				t.Fatal(err)
+			}
+			_, recorded := fields.Hooks[0]["decision"]
+			if recorded != (decision != nil) {
+				t.Fatalf("%s fabricated legacy decision", name)
+			}
+		}
 	}
 }
 

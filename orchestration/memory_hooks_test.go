@@ -218,7 +218,9 @@ func TestMemoryRecordHook_ReportsExactRecordedEvent(t *testing.T) {
 	if err := hook.AfterExecution(invocation.Context(ctx), &core.PipelineContext{}, result); err != nil {
 		t.Fatal(err)
 	}
-	invocation.Complete(PipelineHookSucceeded, nil)
+	invocation.Complete(PipelineHookSucceeded, nil, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "completed",
+	})
 
 	records := holder.Snapshot()
 	if len(records) != 1 || len(records[0].Effects) != 1 {
@@ -274,7 +276,9 @@ func TestMemoryRecordHook_LabelsPartialProviderObservationsWithoutClaimingDurabi
 	if err := hook.AfterExecution(invocation.Context(ctx), &core.PipelineContext{}, result); err != nil {
 		t.Fatal(err)
 	}
-	invocation.Complete(PipelineHookSucceeded, nil)
+	invocation.Complete(PipelineHookSucceeded, nil, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "completed",
+	})
 
 	effect := holder.Snapshot()[0].Effects[0]
 	if effect.Status != core.PipelineHookEffectPartial {

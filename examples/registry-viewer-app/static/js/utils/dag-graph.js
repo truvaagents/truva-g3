@@ -97,42 +97,84 @@ export function isPostExecutionHook(hook) {
 
 /**
  * Stored hook records wrap hook implementations. Some framework hooks expose
- * their internal operations as richer LLM-debug nodes. Suppress only those
- * wrapper nodes in Full Flow so the graph does not imply duplicate execution;
- * the Pre/Post tabs still show both the hook invocation and its operations.
+ * their internal operations in an existing User Memory group. Only those
+ * groups can replace a standalone invocation node. Other internal operations
+ * are not hook wrappers and must not hide the authoritative hook record.
  */
 export function pipelineHookHasDetailedInteractions(hook, interactions) {
     const name = hook?.hook_name || '';
     const calls = interactions || [];
 
-    if (name === 'user-memory-enrichment') {
+    if (name === 'user-memory-enrichment' && hook.phase === 'before_planning') {
         return calls.some(call =>
             call?.type?.startsWith('user_memory_recall_') ||
             call?.type === 'user_memory_enrichment_injected'
         );
     }
-    if (name === 'user-memory-extraction') {
+    if (name === 'user-memory-extraction' && hook.phase === 'after_synthesis') {
         return calls.some(call =>
             call?.type?.startsWith('user_memory_') &&
             !call?.type?.startsWith('user_memory_recall_') &&
             call?.type !== 'user_memory_enrichment_injected'
         );
     }
-    if (name === 'memory-enrichment') {
-        return calls.some(call =>
-            call?.type === 'activity_compaction' ||
-            call?.type === 'activity_compaction_incremental'
-        );
-    }
-    if (name === 'memory-record') {
-        return calls.some(call => call?.type === 'event_summarization');
-    }
     return false;
+}
+
+/** Preserve each invocation exactly once. Ambiguous repeated registrations
+ * stay standalone: do not attach a decision to a guessed inner operation. */
+export function projectPipelineHookWrappers(hooks, interactions) {
+    const standalone = [];
+    const wrappers = {};
+    (hooks || []).forEach(hook => {
+        const unique = hooks.filter(other => other.hook_name === hook.hook_name && other.phase === hook.phase).length === 1;
+        if (!unique || !pipelineHookHasDetailedInteractions(hook, interactions)) {
+            standalone.push(hook);
+            return;
+        }
+        const id = hook.phase === 'before_planning' ? 'user_memory_before' : 'user_memory_after';
+        wrappers[id] = [hook];
+    });
+    return { standalone, wrappers };
+}
+
+/** Describe only the stored boundary decision, never infer it from an effect,
+ * request status, hook name, or a trace. Values remain available verbatim. */
+export function pipelineHookConsequence(hook) {
+    const decision = hook?.decision;
+    const action = decision?.action;
+    const labels = {
+        continue: ['Request continued', 'Continued'],
+        terminate: ['Request stopped', 'Stopped'],
+        short_circuit: ['Early answer selected · planning skipped', 'Early answer'],
+        propagate_panic: ['Panic propagated · request stopped', 'Panic propagated'],
+    };
+    let [summary, nodeLabel] = (Object.hasOwn(labels, action) ? labels[action] : null) || [
+        decision ? 'Pipeline consequence not recognized' : 'Pipeline consequence not recorded',
+        decision ? 'Unknown decision' : 'Not recorded',
+    ];
+    if (action === 'continue' || action === 'terminate') {
+        if (decision.reason === 'clone_failed') summary = `Hook could not run · ${summary.toLowerCase()}`;
+        else if (['invalid_type', 'invalid_plan'].includes(decision.reason)) summary = `Plan change rejected · ${summary.toLowerCase()}`;
+        else if (hook.status === 'failed') summary = `Hook failed · ${summary.toLowerCase()}`;
+        else if (['cache_read_disabled', 'cache_dimension_mismatch'].includes(decision.reason)) summary = `Cached answer not used · ${summary.toLowerCase()}`;
+    }
+    return { summary, nodeLabel, action: action || '', policy: decision?.failure_policy || '', reason: decision?.reason || '' };
+}
+
+/** Legacy hooks without a usable phase identity remain visible as evidence,
+ * but must not be inserted into a guessed chronological phase. */
+export function unplacedPipelineHooks(hooks, phases) {
+    const known = new Set((phases || []).map(p => p.phase_number));
+    return (hooks || []).filter(hook => {
+        if (hook.phase === 'after_planning') return !known.has(Number(hook.plan_phase));
+        return !isPreExecutionHook(hook) && !isPostExecutionHook(hook);
+    });
 }
 
 /**
  * Associate AfterPlanning hook records with their explicitly stored iterative
- * plan phase. Unknown phases remain tab-visible and are omitted from Full Flow
+ * plan phase. Unknown phases are handled separately as unplaced evidence,
  * instead of being attached to a guessed phase.
  */
 export function assignAfterPlanningHooksToPhases(hooks, phasePlans) {
@@ -149,4 +191,34 @@ export function assignAfterPlanningHooksToPhases(hooks, phasePlans) {
     });
 
     return assignments;
+}
+
+/**
+ * Full Flow follows observed phases, not just admitted plans. A required hook
+ * can reject a generated plan, so its phase has planning/hook evidence but no
+ * admitted tool steps. Keep that distinction in this view model; never insert
+ * a synthetic plan into the execution record.
+ */
+export function buildObservedPhases(execution, planningCallsByPhase = {}) {
+    const phases = new Map();
+    const ensurePhase = value => {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number <= 0) return null;
+        if (!phases.has(number)) phases.set(number, { phase_number: number, plan: null });
+        return phases.get(number);
+    };
+    const admittedPlans = execution?.phase_plans?.length
+        ? execution.phase_plans
+        : (execution?.plan ? [execution.plan] : []);
+    admittedPlans.forEach((plan, index) => {
+        const phase = ensurePhase(plan.phase_number || index + 1);
+        if (phase) phase.plan = plan;
+    });
+    for (const hook of execution?.pipeline_hooks || []) {
+        if (hook.phase === 'after_planning') ensurePhase(hook.plan_phase);
+    }
+    for (const [number, calls] of Object.entries(planningCallsByPhase)) {
+        if (calls.length > 0) ensurePhase(number);
+    }
+    return [...phases.values()].sort((a, b) => a.phase_number - b.phase_number);
 }

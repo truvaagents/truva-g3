@@ -48,10 +48,13 @@ Every hook implements the base `core.PipelineHook` interface (just a `Name()` me
 | `AfterExecutionHook` | After all tools finish executing | No (observe-only) | No |
 | `AfterSynthesisHook` | After the LLM produces its synthesis draft | Response text | No |
 
-Hook callbacks are **resilient by design**: if a hook returns an error, the
-orchestrator logs a warning and continues. Invalid provenance-aware
-short-circuit contracts—an unknown kind or missing payload—are programming
-errors and fail the request rather than bypassing cache enforcement.
+Ordinary hook callbacks are **resilient by design**: if a hook returns an
+error, the orchestrator uses that stage's documented fallback and continues.
+For mandatory plan governance, an `AfterPlanningHook` may also implement
+`RequiredAfterPlanningHook`; its error or invalid result stops before HITL and
+tool execution. Invalid provenance-aware short-circuit contracts—an unknown
+kind or missing payload—are also programming errors and fail the request rather
+than bypassing cache enforcement.
 
 ---
 
@@ -729,6 +732,9 @@ That gives you the richer Layer 2 path without forcing you into full direct cons
 - Hooks that may **short-circuit** should be registered first (cache hooks). Once a short-circuit is returned, no further hooks run.
 - **Enrichment** hooks should run in dependency order. If you still use `ConversationHistoryHook` and your RAG hook benefits from conversation context, register the history hook before the RAG hook.
 - **AfterSynthesis** hooks run in order — the output of one feeds into the next. Register PII redaction before content policy checks if you want the policy check to see the redacted version.
+- A `RequiredAfterPlanningHook` must be the final hook that participates in
+  `AfterPlanning`. Only one may be registered. The factory rejects stage-method
+  drift, multiple required markers, and a later after-planning mutator.
 
 ---
 
@@ -832,8 +838,8 @@ func TestRAGHook_EmbeddingFailure_DoesNotBreakPipeline(t *testing.T) {
         Request:     "test query",
         Enrichments: make(map[string]interface{}),
     }
-    // The hook returns an error — but the orchestrator logs it and continues.
-    // The pipeline proceeds without RAG context rather than failing entirely.
+    // This is an ordinary optional hook. The orchestrator logs its error and
+    // continues without RAG context rather than failing the whole request.
     _, err := hook.BeforePlanning(context.Background(), pctx)
 
     if err == nil {
@@ -875,6 +881,14 @@ type BeforePlanningDecisionHook interface {
 type AfterPlanningHook interface {
     PipelineHook
     AfterPlanning(ctx context.Context, pctx *PipelineContext, plan interface{}) (interface{}, error)
+}
+
+// Marker for the one fail-closed, terminal AfterPlanning boundary.
+// It embeds PipelineHook rather than AfterPlanningHook so construction can
+// detect a drifted or missing stage method.
+type RequiredAfterPlanningHook interface {
+    PipelineHook
+    RequireAfterPlanningSuccess()
 }
 
 // After tool execution — observe-only
@@ -1013,8 +1027,13 @@ User memory requires a `user_id` in `PipelineContext.Metadata["user_id"]`. Agent
 **Why per-stage interfaces instead of a single callback?**
 A single `OnEvent(stage, data)` callback requires type-switching inside every hook. Per-stage interfaces let developers implement only the stages they care about. The hook runner uses type assertions — a hook that only implements `BeforePlanningHook` is silently skipped for all other stages.
 
-**Why errors don't abort the pipeline?**
-Hooks are optional enhancements. A failing RAG retrieval shouldn't prevent the agent from answering — the LLM can still work without the extra context. This follows the framework's design principle: "Missing optional dependencies should not break core functionality."
+**Why don't ordinary errors abort the pipeline?**
+Most hooks are optional enhancements. A failing RAG retrieval shouldn't prevent
+the agent from answering — the LLM can still work without the extra context.
+This follows the framework's design principle: "Missing optional dependencies
+should not break core functionality." A mandatory plan-governance check is not
+an optional enhancement; implement `RequiredAfterPlanningHook` so its failure
+returns `RequiredAfterPlanningError` and blocks downstream work.
 
 **Why `interface{}` for plan and results types?**
 The plan and execution result types are internal to the orchestration module. Exposing concrete types like `*RoutingPlan` would couple hook implementations to the orchestration module's internals. Using `interface{}` keeps hooks in the `core` module (which has no dependencies) and lets the orchestration module evolve its types freely.

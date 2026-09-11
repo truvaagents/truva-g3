@@ -212,18 +212,27 @@ func (c phaseCoordinator) Run(
 		state.Span,
 		state.Pipeline,
 		progress,
+		func(partial *phaseLoopResult) { state.Phase.Result = partial },
 	)
 	var preparationErr *boundaryPreparationError
 	if err != nil && errors.As(err, &preparationErr) {
-		// A boundary failure occurs before the planner/executor can produce a
-		// result. Persist the request-local debug snapshot that the boundary
-		// contributor captured so the failure is still diagnosable.
+		// Preserve the boundary contributor's debug snapshot together with
+		// any already-admitted work. A later boundary can fail after earlier
+		// phases completed; this terminal publisher must not erase them.
+		var plan *RoutingPlan
+		var executionResult *ExecutionResult
+		if result != nil {
+			plan, executionResult = result.LastPlan, result.CombinedResult
+		}
+		if executionResult == nil {
+			executionResult = &ExecutionResult{Success: false, TotalDuration: time.Since(state.StartedAt)}
+		}
 		c.orchestrator.storeTerminalExecutionAsync(
 			state.Context,
 			state.Input.Request,
 			state.Correlation.RequestID,
-			nil,
-			nil,
+			plan,
+			executionResult,
 			nil,
 		)
 	}
@@ -321,20 +330,21 @@ type executionDebugState struct {
 // state is typed and request-scoped; provider clients and content bodies never
 // attach to this aggregate.
 type executionRunState struct {
-	Input            requestRunInput
-	Context          context.Context
-	StartedAt        time.Time
-	Correlation      requestCorrelation
-	Pipeline         *core.PipelineContext
-	Phase            phaseRunState
-	Usage            usageState
-	Debug            executionDebugState
-	SkillState       *SkillExecutionState
-	Recorder         *executionRecorder
-	Span             core.Span
-	completionLogged bool
-	completionReason string
-	spanFailed       bool
+	Input                 requestRunInput
+	Context               context.Context
+	StartedAt             time.Time
+	Correlation           requestCorrelation
+	Pipeline              *core.PipelineContext
+	Phase                 phaseRunState
+	Usage                 usageState
+	Debug                 executionDebugState
+	SkillState            *SkillExecutionState
+	Recorder              *executionRecorder
+	Span                  core.Span
+	completionLogged      bool
+	completionReason      string
+	spanFailed            bool
+	streamChunksDelivered int
 }
 
 func (s *executionRunState) setSkillState(state SkillExecutionState) {
@@ -435,6 +445,15 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 	defer state.Span.End()
 	defer o.releaseExecutionRecorder(state.Correlation.RequestID)
 	defer func() {
+		if value := recover(); value != nil {
+			// Named return values are not assigned while a panic unwinds. Use
+			// the phase coordinator's last diagnostic state before propagating.
+			state.completionReason = "panic"
+			o.ensureTerminalPipelineHookSnapshot(state, fmt.Errorf("orchestration request panic: %v", value))
+			recordRunSpanFailure(state)
+			o.completeFailedRun(state, nil)
+			panic(value)
+		}
 		if runErr != nil {
 			o.ensureTerminalPipelineHookSnapshot(state, runErr)
 		}
@@ -532,15 +551,15 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 	)
 	if err != nil {
 		state.completionReason = "before_planning_failed"
-		// The hook contract failed before a plan/result existed. Persist the
-		// request-local hook record so execution-debug consumers can diagnose
-		// the boundary without relying on tracing.
+		// No plan was admitted, but the request failed. Preserve that outcome
+		// so the existing recorder selects error retention, including rewrites
+		// from effects that finish after this boundary.
 		o.storeTerminalExecutionAsync(
 			state.Context,
 			state.Input.Request,
 			state.Correlation.RequestID,
 			nil,
-			nil,
+			&ExecutionResult{Success: false, TotalDuration: time.Since(state.StartedAt)},
 			nil,
 		)
 		return nil, fmt.Errorf("before-planning pipeline contract: %w", err)
@@ -639,7 +658,7 @@ func (o *AIOrchestrator) ensureTerminalPipelineHookSnapshot(
 	state *executionRunState,
 	runErr error,
 ) {
-	if state == nil || o.executionStore == nil {
+	if state == nil || o.executionStore == nil || runErr == nil {
 		return
 	}
 	holder, ok := pipelineHookExecutionHolderFromContext(state.Context)
@@ -660,6 +679,8 @@ func (o *AIOrchestrator) ensureTerminalPipelineHookSnapshot(
 	var checkpoint *ExecutionCheckpoint
 	if IsInterrupted(runErr) {
 		checkpoint = GetCheckpoint(runErr)
+	} else if result == nil {
+		result = &ExecutionResult{Success: false, TotalDuration: time.Since(state.StartedAt)}
 	}
 	o.storeTerminalExecutionAsync(
 		state.Context,
@@ -938,7 +959,7 @@ func (o *AIOrchestrator) completeFailedRun(state *executionRunState, runErr erro
 			"success": false, "status": status,
 			"duration_ms": durationMs, "total_duration_ms": durationMs,
 			"termination_reason": reason, "phase_count": phaseCount,
-			"chunks_delivered": 0,
+			"chunks_delivered": state.streamChunksDelivered,
 		}
 		if status == "error" {
 			fields["error"] = "orchestration request failed"

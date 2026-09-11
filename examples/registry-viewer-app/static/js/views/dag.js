@@ -34,13 +34,16 @@ import {
 } from '../llm-types.js';
 import {
     assignAfterPlanningHooksToPhases,
+    buildObservedPhases,
     executionDisplayStepNumber,
     filterInteractionsWithRenderedParent,
     filterRenderableEdges,
     hasVisibleRelationOwner,
     isPostExecutionHook,
     isPreExecutionHook,
-    pipelineHookHasDetailedInteractions,
+    pipelineHookConsequence,
+    projectPipelineHookWrappers,
+    unplacedPipelineHooks,
 } from '../utils/dag-graph.js';
 
 // ---------------------------------------------------------------------------
@@ -225,7 +228,7 @@ function pipelineHookNodeData(hook, id) {
     const hookName = hook.hook_name || 'Unknown hook';
     return {
         id,
-        label: `🪝 ${phase}\n${hookName}`,
+        label: `🪝 ${phase}\n${hookName}\n${pipelineHookConsequence(hook).nodeLabel}`,
         nodeType: 'pipeline_hook',
         hookName,
         hookPhase: hook.phase || '',
@@ -236,7 +239,25 @@ function pipelineHookNodeData(hook, id) {
         startedAt: hook.started_at || '',
         error: hook.error || '',
         effects: hook.effects || [],
+        hookDecision: hook.decision || null,
+        hookAction: pipelineHookConsequence(hook).action,
     };
+}
+
+function renderPipelineHookDecision(hook) {
+    const consequence = pipelineHookConsequence(hook);
+    return `<section class="pipeline-hook-decision">
+        <span class="dag-step-label">Pipeline consequence</span>
+        <div class="pipeline-hook-decision-summary">${escapeHtml(consequence.summary)}</div>
+        ${hook.decision ? `<details class="pipeline-hook-decision-details">
+            <summary>Decision details</summary>
+            <div class="dag-step-info">
+                <span class="dag-step-label">Failure policy</span><span class="dag-step-value">${escapeHtml(consequence.policy || 'Not recorded')}</span>
+                <span class="dag-step-label">Action</span><span class="dag-step-value">${escapeHtml(consequence.action || 'Not recorded')}</span>
+                <span class="dag-step-label">Reason</span><span class="dag-step-value">${escapeHtml(consequence.reason || 'Not recorded')}</span>
+            </div>
+        </details>` : ''}
+    </section>`;
 }
 
 function renderPipelineHookObservations(hooks) {
@@ -282,6 +303,7 @@ function renderPipelineHookObservations(hooks) {
                                     <span class="dag-step-value">${escapeHtml(startedAt)}</span>
                                     ${errorDetail}
                                 </div>
+                                ${renderPipelineHookDecision(hook)}
                                 ${renderPipelineHookEffects(hook.effects || [])}
                             </div>
                         </article>`;
@@ -2424,7 +2446,9 @@ function renderDAGVisualization(container) {
 // Type membership and phase-closing semantics are driven by the LLM-type
 // registry at static/js/llm-types.js — see isPlanningType / isPhaseClosingType.
 function groupLLMCallsByPhase(llmInteractions) {
-    const planningCalls = llmInteractions.filter(i => isPlanningType(i.type));
+    const planningCalls = llmInteractions.filter(i =>
+        isPlanningType(i.type) || (i.type === 'micro_resolution' && !i.step_id)
+    );
 
     const phases = {};
     let currentGroup = [];
@@ -2566,7 +2590,8 @@ function getResolutionInfo(result) {
 
 function initCytoscape() {
     const dagContainerParent = document.getElementById('dagContainer');
-    if (!dagContainerParent || !selected?.plan?.steps) return;
+    if (!dagContainerParent || !selected) return;
+    const planSteps = selected.plan?.steps || [];
 
     // Hide existing cached containers
     dagContainerParent.querySelectorAll('.dag-cached-graph').forEach(el => el.style.display = 'none');
@@ -2576,6 +2601,13 @@ function initCytoscape() {
     dagContainer.className = 'dag-cached-graph';
     dagContainer.style.cssText = 'width: 100%; height: 100%;';
     dagContainerParent.appendChild(dagContainer);
+
+    if (viewMode === 'steps' && planSteps.length === 0) {
+        cyInstance = null;
+        dagContainer.innerHTML = '<div class="empty-detail">No admitted steps to display. Full Flow shows the recorded execution activity.</div>';
+        updateDAGLegend(0, 0);
+        return;
+    }
 
     // Helper to extract duration in ms from result (handles both duration_ms and duration in nanoseconds)
     const getDurationMs = (result) => {
@@ -2622,9 +2654,8 @@ function initCytoscape() {
         const agentName = selected.agent_name || 'orchestrator';
         const llmInteractions = selected.llm_interactions || [];
         const checkpoints = selected.hitl_checkpoints || [];
-        const storedPipelineHooks = (selected.pipeline_hooks || []).filter(hook =>
-            !pipelineHookHasDetailedInteractions(hook, llmInteractions)
-        );
+        const hookProjection = projectPipelineHookWrappers(selected.pipeline_hooks || [], llmInteractions);
+        const storedPipelineHooks = hookProjection.standalone;
 
         // 1. Orchestrator node (root)
         nodes.push({
@@ -2638,16 +2669,12 @@ function initCytoscape() {
         // 2. Phase-aware graph building: group LLM planning calls by phase, then
         // build per-phase subgraphs so each phase's planning → steps → boundary
         // topology is preserved in multi-phase iterative executions.
-        const allPlanSteps = selected.plan.steps || [];
-        const phasePlans = selected.phase_plans || [];
+        const allPlanSteps = planSteps;
         const llmByPhase = groupLLMCallsByPhase(llmInteractions);
-        const fullFlowLevels = computeStepLevels(allPlanSteps);
-        const hookPlacementPlans = phasePlans.length > 0
-            ? phasePlans
-            : (selected.plan ? [selected.plan] : []);
+        const graphPhases = buildObservedPhases(selected, llmByPhase);
         const afterPlanningByPhase = assignAfterPlanningHooksToPhases(
             storedPipelineHooks.filter(hook => hook.phase === 'after_planning'),
-            hookPlacementPlans
+            graphPhases
         );
 
         // HITL plan-approval checkpoints (before_plan_execution) are attached
@@ -2665,8 +2692,14 @@ function initCytoscape() {
             const sources = Array.isArray(sourceNodeIDs) ? sourceNodeIDs : [sourceNodeIDs];
             let previousNodeID = '';
             hooks.forEach((hook, index) => {
-                const nodeId = `pipeline_hook_${pipelineHookIndex++}`;
-                nodes.push({ data: pipelineHookNodeData(hook, nodeId) });
+                // Insert a detailed wrapper at this invocation's actual
+                // position, not at the end of the stage. Its node is populated
+                // below from the existing User Memory interaction group.
+                const wrapperID = Object.keys(hookProjection.wrappers).find(id =>
+                    hookProjection.wrappers[id].includes(hook)
+                );
+                const nodeId = wrapperID || `pipeline_hook_${pipelineHookIndex++}`;
+                if (!wrapperID) nodes.push({ data: pipelineHookNodeData(hook, nodeId) });
                 if (index === 0) {
                     sources.filter(Boolean).forEach(source => {
                         edges.push({ data: { source, target: nodeId, edgeType: 'pipeline_hook' } });
@@ -2679,7 +2712,15 @@ function initCytoscape() {
             return previousNodeID || sources[0] || '';
         };
 
-        const beforePlanningHooks = storedPipelineHooks.filter(hook => hook.phase === 'before_planning');
+        // Missing legacy placement is not a license to invent phase order.
+        // Keep the record as a non-directional evidence branch from the root.
+        unplacedPipelineHooks(storedPipelineHooks, graphPhases).forEach(hook => {
+            const nodeId = `pipeline_hook_${pipelineHookIndex++}`;
+            nodes.push({ data: { ...pipelineHookNodeData(hook, nodeId), placementUnknown: true } });
+            edges.push({ data: { source: 'orchestrator', target: nodeId, edgeType: 'hook_evidence' } });
+        });
+
+        const beforePlanningHooks = (selected.pipeline_hooks || []).filter(hook => hook.phase === 'before_planning');
         if (beforePlanningHooks.length > 0) {
             previousPhaseExitNode = appendPipelineHookChain(beforePlanningHooks, previousPhaseExitNode);
         }
@@ -2717,25 +2758,32 @@ function initCytoscape() {
             nodes.push({
                 data: {
                     id: nodeId,
-                    label: `📝 User Memory: BeforePlanning (${userMemBeforeCalls.length} steps, ${formatDuration(totalDuration)})`,
+                    label: `📝 User Memory: BeforePlanning (${userMemBeforeCalls.length} steps, ${formatDuration(totalDuration)})` +
+                        (hookProjection.wrappers[nodeId]?.length ? `\n${pipelineHookConsequence(hookProjection.wrappers[nodeId][0]).nodeLabel}` : ''),
                     nodeType: 'user_memory_group',
                     pipelineStage: 'before_planning',
+                    pipelineHooks: hookProjection.wrappers[nodeId] || [],
+                    hookAction: hookProjection.wrappers[nodeId]?.[0]?.decision?.action || '',
+                    hookStatus: hookProjection.wrappers[nodeId]?.[0]?.status || '',
                     steps: userMemBeforeCalls,
                     totalDuration: totalDuration,
                     stepCount: userMemBeforeCalls.length,
                 }
             });
-            edges.push({ data: { source: previousPhaseExitNode, target: nodeId, edgeType: 'memory_llm' } });
-            previousPhaseExitNode = nodeId;
+            if (!hookProjection.wrappers[nodeId]?.length) {
+                edges.push({ data: { source: previousPhaseExitNode, target: nodeId, edgeType: 'memory_llm' } });
+                previousPhaseExitNode = nodeId;
+            }
         }
 
-        if (phasePlans.length > 0) {
+        let lastPhaseEntryNode = previousPhaseExitNode;
+        if (graphPhases.length > 0) {
             // === Per-phase graph building ===
-            for (let phaseIdx = 0; phaseIdx < phasePlans.length; phaseIdx++) {
-                const phasePlan = phasePlans[phaseIdx];
-                const phaseNum = phasePlan.phase_number || (phaseIdx + 1);
+            for (let phaseIdx = 0; phaseIdx < graphPhases.length; phaseIdx++) {
+                const phase = graphPhases[phaseIdx];
+                const phaseNum = phase.phase_number;
                 const phaseLLMCalls = llmByPhase[phaseNum] || [];
-                const phaseSteps = phasePlan.steps || [];
+                const phaseSteps = phase.plan?.steps || [];
                 const phaseStepIds = new Set(phaseSteps.map(s => s.step_id));
 
                 // Phase-local topological levels for parallelism counts.
@@ -2775,8 +2823,7 @@ function initCytoscape() {
                 // generated and before any approval checkpoint or step from
                 // that phase. The framework records the iterative plan phase
                 // explicitly, so placement does not infer from timestamps.
-                const phaseHookIndex = phasePlans.length > 0 ? phaseIdx : 0;
-                const phaseAfterPlanningHooks = afterPlanningByPhase[phaseHookIndex] || [];
+                const phaseAfterPlanningHooks = afterPlanningByPhase[phaseIdx] || [];
                 if (phaseAfterPlanningHooks.length > 0) {
                     lastLLMNodeInPhase = appendPipelineHookChain(
                         phaseAfterPlanningHooks,
@@ -2804,6 +2851,7 @@ function initCytoscape() {
                 }
 
                 const stepEntryNode = lastLLMNodeInPhase;
+                lastPhaseEntryNode = stepEntryNode;
 
                 // 2c. Step nodes for this phase
                 phaseSteps.forEach(step => {
@@ -2883,7 +2931,7 @@ function initCytoscape() {
                 });
 
                 // 2d. Phase boundary node (links this phase's leaf steps to next phase)
-                if (phaseIdx < phasePlans.length - 1) {
+                if (phaseIdx < graphPhases.length - 1) {
                     const boundaryId = `phase_boundary_${phaseIdx + 1}`;
                     const dependedOn = new Set();
                     phaseSteps.forEach(s => {
@@ -2892,7 +2940,8 @@ function initCytoscape() {
                         });
                     });
                     const leafStepsInPhase = phaseSteps.filter(s => !dependedOn.has(s.step_id));
-                    const nextPhaseNum = phasePlans[phaseIdx + 1]?.phase_number || (phaseNum + 1);
+                    const nextPhase = graphPhases[phaseIdx + 1];
+                    const nextPhaseNum = nextPhase.phase_number;
                     nodes.push({
                         data: {
                             id: boundaryId,
@@ -2900,126 +2949,18 @@ function initCytoscape() {
                             nodeType: 'phase_boundary',
                             phaseFrom: phaseNum,
                             phaseTo: nextPhaseNum,
-                            continuationNote: phasePlans[phaseIdx + 1]?.continuation_note || ''
+                            continuationNote: nextPhase.plan?.continuation_note || ''
                         }
                     });
                     leafStepsInPhase.forEach(s => {
                         edges.push({ data: { source: s.step_id, target: boundaryId, edgeType: 'phase_transition' } });
                     });
+                    if (phaseSteps.length === 0) {
+                        edges.push({ data: { source: stepEntryNode, target: boundaryId, edgeType: 'phase_transition' } });
+                    }
                     previousPhaseExitNode = boundaryId;
                 }
             }
-        } else {
-            // === Fallback: no phase_plans data (single-phase backward compat) ===
-            // Type membership comes from the LLM-type registry — see isPlanningType.
-            // Orchestrator-level micro_resolution (without a step_id) is also
-            // pulled in here because it represents pre-execution parameter
-            // resolution that visually belongs in the planner column.
-            const planningCalls = llmInteractions.filter(i =>
-                isPlanningType(i.type) ||
-                (i.type === 'micro_resolution' && !i.step_id)
-            );
-            planningCalls.forEach((call, idx) => {
-                const nodeId = `llm_plan_${globalLLMIndex++}`;
-                nodes.push({
-                    data: buildLLMBackedNodeData(call, {
-                        id: nodeId,
-                        label: `💭 ${getLLMType(call.type).label}`,
-                        nodeType: 'llm_call',
-                    })
-                });
-                const source = idx === 0 ? previousPhaseExitNode : `llm_plan_${idx - 1}`;
-                edges.push({ data: { source, target: nodeId } });
-            });
-            let lastPlanNode = planningCalls.length > 0 ? `llm_plan_${planningCalls.length - 1}` : previousPhaseExitNode;
-            const fallbackAfterPlanningHooks = afterPlanningByPhase[0] || [];
-            if (fallbackAfterPlanningHooks.length > 0) {
-                lastPlanNode = appendPipelineHookChain(fallbackAfterPlanningHooks, lastPlanNode);
-            }
-            planCheckpoints.forEach((cp, idx) => {
-                const nodeId = `checkpoint_plan_${idx}`;
-                const statusLabel = cp.status === 'approved' ? '✓' : cp.status === 'pending' ? '⏳' : '✗';
-                nodes.push({
-                    data: {
-                        id: nodeId,
-                        label: `${statusLabel}`,
-                        nodeType: 'checkpoint',
-                        checkpointType: 'plan_approval',
-                        status: cp.status
-                    }
-                });
-                edges.push({ data: { source: lastPlanNode, target: nodeId } });
-            });
-            const stepEntryNode = planCheckpoints.length > 0
-                ? `checkpoint_plan_${planCheckpoints.length - 1}`
-                : lastPlanNode;
-            const rootSteps = allPlanSteps.filter(s => !s.depends_on || s.depends_on.length === 0);
-            allPlanSteps.forEach(step => {
-                const result = stepResults[step.step_id];
-                let status = 'pending';
-                if (result) {
-                    if (result.skipped) status = 'skipped';
-                    else if (result.success) status = 'completed';
-                    else if (result.error) status = 'failed';
-                } else if (currentStepId === step.step_id) {
-                    status = 'blocked';
-                }
-                const stepCapability = step.metadata?.capability || result?.metadata?.capability || step.capability || step.agent_name || '';
-                const level = fullFlowLevels.findIndex(l => l.includes(step.step_id));
-                const parallelCount = level >= 0 ? fullFlowLevels[level].length : 1;
-                const resInfoFull = getResolutionInfo(result);
-                const baseLabelFull = step.agent_name || stepCapability;
-                const trimMetaFull = result?.metadata?.result_trim;
-                // Mirror the multi-phase path: show every recorded compaction,
-                // while isLossyTrim remains the authoritative loss check.
-                const wasTrimmedFull = hasTrimDisplay(trimMetaFull);
-                const trimLabelFull = wasTrimmedFull ? trimNodeLabel(trimMetaFull) : '';
-                nodes.push({
-                    data: {
-                        id: step.step_id,
-                        label: baseLabelFull + (resInfoFull.summary ? '\n' + resInfoFull.summary : '') + trimLabelFull,
-                        nodeType: 'step',
-                        status: status,
-                        resolutionType: resInfoFull.type,
-                        resolutionSummary: resInfoFull.summary,
-                        duration: getDurationMs(result),
-                        capability: stepCapability,
-                        instruction: step.instruction || '',
-                        level: level + 1,
-                        parallelCount: parallelCount,
-                        isParallel: parallelCount > 1,
-                        dependsOn: step.depends_on || [],
-                        implicitDeps: step.implicit_deps || [],
-                        hasAutoIncludes: (result?.metadata?.template_auto_includes?.length > 0),
-                        trimmed: !!wasTrimmedFull
-                    }
-                });
-            });
-            rootSteps.forEach(step => {
-                edges.push({ data: { source: stepEntryNode, target: step.step_id } });
-            });
-            allPlanSteps.forEach(step => {
-                (step.depends_on || []).forEach(dep => {
-                    const depResult = stepResults[dep];
-                    const depFailed = depResult && !depResult.success;
-                    edges.push({
-                        data: {
-                            source: dep,
-                            target: step.step_id,
-                            edgeType: depFailed ? 'failed' : undefined
-                        }
-                    });
-                });
-                (step.implicit_deps || []).forEach(dep => {
-                    edges.push({
-                        data: {
-                            source: dep,
-                            target: step.step_id,
-                            edgeType: 'implicit_dependency'
-                        }
-                    });
-                });
-            });
         }
 
         // Create stepIds set (needed by sections 4b, 4c, 4d below)
@@ -3154,9 +3095,7 @@ function initCytoscape() {
 
         // 5b. Find leaf steps of the LAST phase for synthesis/response connection.
         // For multi-phase executions only last-phase leaves feed into synthesis.
-        const lastPhasePlanSteps = phasePlans.length > 0
-            ? (phasePlans[phasePlans.length - 1].steps || [])
-            : allPlanSteps;
+        const lastPhasePlanSteps = graphPhases.at(-1)?.plan?.steps || [];
         const lastPhaseStepIds = new Set(lastPhasePlanSteps.map(s => s.step_id));
         const lastPhaseDependedOn = new Set();
         lastPhasePlanSteps.forEach(s => {
@@ -3166,29 +3105,9 @@ function initCytoscape() {
         });
         const leafSteps = lastPhasePlanSteps.filter(s => !lastPhaseDependedOn.has(s.step_id));
 
-        // When the planner emits NeedsUserInput (clarification short-
-        // circuit), the last phase has zero steps — leafSteps is empty and the
-        // synthesis node would be orphaned in the DAG. In that case the synthesis
-        // node should connect from the last upstream node before execution: the
-        // last planning LLM call (or whatever previousPhaseExitNode points to,
-        // e.g. user_memory_before). previousPhaseExitNode is a snapshot from the
-        // top of the phase loop, so for clarification turns we recompute the
-        // intended source by walking backwards from synthesis through the
-        // existing planning chain. The most recent llm_plan_* node is the right
-        // anchor — it represents the planner call that produced the clarification.
-        const lastPlanningNodeId = (() => {
-            // Find the highest-index llm_plan_N node we've already added.
-            for (let i = nodes.length - 1; i >= 0; i--) {
-                const id = nodes[i].data && nodes[i].data.id;
-                if (typeof id === 'string' && id.startsWith('llm_plan_')) {
-                    return id;
-                }
-            }
-            // No planning node yet (extremely defensive — phase loop must have
-            // produced at least one planner call to reach a clarification plan).
-            // Fall back to the upstream of the phase loop entry.
-            return previousPhaseExitNode;
-        })();
+        // A zero-step phase can end at a hook or checkpoint, not only an LLM
+        // call. Keep its last actual entry node as the tail's source.
+        const lastPlanningNodeId = lastPhaseEntryNode;
 
         // Deterministic AfterExecution hooks do not necessarily emit an LLM
         // interaction. Place their stored nodes after the terminal step
@@ -3316,7 +3235,7 @@ function initCytoscape() {
         // AfterSynthesis hooks run after the model draft and before the
         // terminal application response. Their stored records preserve
         // deterministic response-governance outcomes without tracing.
-        const afterSynthesisHooks = storedPipelineHooks.filter(hook => hook.phase === 'after_synthesis');
+        const afterSynthesisHooks = (selected.pipeline_hooks || []).filter(hook => hook.phase === 'after_synthesis');
         if (afterSynthesisHooks.length > 0) {
             const hookSources = synthesisCalls.length > 0 || eventSumNodes.length > 0 || afterExecutionHookExit
                 ? [responseSource]
@@ -3372,21 +3291,27 @@ function initCytoscape() {
             nodes.push({
                 data: {
                     id: nodeId,
-                    label: `📝 User Memory: AfterSynthesis (${userMemAfterCalls.length} steps, ${formatDuration(totalDuration)}${llmCount ? `, ${llmCount} LLM` : ''})`,
+                    label: `📝 User Memory: AfterSynthesis (${userMemAfterCalls.length} steps, ${formatDuration(totalDuration)}${llmCount ? `, ${llmCount} LLM` : ''})` +
+                        (hookProjection.wrappers[nodeId]?.length ? `\n${pipelineHookConsequence(hookProjection.wrappers[nodeId][0]).nodeLabel}` : ''),
                     nodeType: 'user_memory_group',
                     pipelineStage: 'after_synthesis',
+                    pipelineHooks: hookProjection.wrappers[nodeId] || [],
+                    hookAction: hookProjection.wrappers[nodeId]?.[0]?.decision?.action || '',
+                    hookStatus: hookProjection.wrappers[nodeId]?.[0]?.status || '',
                     steps: userMemAfterCalls,
                     totalDuration: totalDuration,
                     stepCount: userMemAfterCalls.length,
                     llmCount: llmCount,
                 }
             });
-            edges.push({ data: { source: 'response', target: nodeId, edgeType: 'memory_llm' } });
+            if (!hookProjection.wrappers[nodeId]?.length) {
+                edges.push({ data: { source: 'response', target: nodeId, edgeType: 'memory_llm' } });
+            }
         }
 
     } else {
         // === STEPS ONLY MODE (original behavior) ===
-        nodes = selected.plan.steps.map(step => {
+        nodes = planSteps.map(step => {
             const result = stepResults[step.step_id];
             // Determine step status: completed/failed/skipped from result, blocked if current HITL step, pending otherwise
             let status = 'pending';
@@ -3430,7 +3355,7 @@ function initCytoscape() {
 
         // Build edges for steps mode
         // If source step failed, mark the edge as failed to show broken data flow
-        selected.plan.steps.forEach(step => {
+        planSteps.forEach(step => {
             (step.depends_on || []).forEach(dep => {
                 const depResult = stepResults[dep];
                 const depFailed = depResult && !depResult.success;
@@ -3888,6 +3813,25 @@ function initCytoscape() {
                 }
             },
             {
+                // A failed optional callback continued; do not style it as a
+                // stopping boundary. Invocation details still retain failure.
+                selector: 'node[hookAction="continue"][hookStatus="failed"]',
+                style: {
+                    'background-color': '#3d2e0a',
+                    'border-color': '#f0a030',
+                    'color': '#ffe0a3'
+                }
+            },
+            {
+                // Includes skipped required invocations and grouped wrappers.
+                selector: 'node[hookAction="terminate"], node[hookAction="propagate_panic"]',
+                style: {
+                    'background-color': '#3d1717',
+                    'border-color': '#ff6b6b',
+                    'color': '#ffd0d0'
+                }
+            },
+            {
                 // HITL Checkpoint - default orange diamond style (plan approval)
                 selector: 'node[nodeType="checkpoint"]',
                 style: {
@@ -4103,6 +4047,17 @@ function initCytoscape() {
                 }
             },
             {
+                selector: 'edge[edgeType="hook_evidence"]',
+                style: {
+                    'line-style': 'dotted',
+                    'line-color': '#8b949e',
+                    'target-arrow-shape': 'none',
+                    'label': 'Placement not recorded',
+                    'font-size': '9px',
+                    'color': '#c2c9d1'
+                }
+            },
+            {
                 // Phase transition edge (dashed teal)
                 selector: 'edge[edgeType="phase_transition"]',
                 style: {
@@ -4157,7 +4112,7 @@ function initCytoscape() {
             // Step node - use existing logic
             const stepId = node.id();
             const result = stepResults[stepId];
-            const step = selected.plan.steps.find(s => s.step_id === stepId);
+            const step = selected.plan?.steps?.find(s => s.step_id === stepId);
             showNodePopup(node, step, result);
         }
     });
@@ -4446,6 +4401,10 @@ function showFullFlowNodePopup(node, nodeData) {
             if (nodeData.effects?.length) {
                 content += renderPipelineHookEffects(nodeData.effects);
             }
+            content += renderPipelineHookDecision({ decision: nodeData.hookDecision, status: nodeData.hookStatus });
+            if (nodeData.placementUnknown) {
+                content += '<p class="pipeline-hook-placement-note">Execution order was not recorded. The line links stored evidence to this request; it is not a dependency or execution-order arrow.</p>';
+            }
             break;
         }
         case 'llm_step':
@@ -4476,7 +4435,7 @@ function showFullFlowNodePopup(node, nodeData) {
             const stepLlmError = nodeData.error || '';
 
             // Find parent step info
-            const parentStep = selected.plan.steps.find(s => s.step_id === parentStepId);
+            const parentStep = selected.plan?.steps?.find(s => s.step_id === parentStepId);
             const parentStepLabel = parentStep ? (parentStep.agent_name || parentStep.metadata?.capability || parentStepId) : parentStepId;
 
             content = `
@@ -4819,6 +4778,11 @@ function showFullFlowNodePopup(node, nodeData) {
     popup.style.position = 'fixed';
     popup.style.left = popupLeft + 'px';
     popup.style.top = popupTop + 'px';
+    // Expanding hook decisions/effects must not move content below the
+    // viewport after the initial position has been clamped.
+    popup.style.boxSizing = 'border-box';
+    popup.style.maxHeight = `${window.innerHeight - popupTop - 8}px`;
+    popup.style.overflowY = 'auto';
 }
 
 function showNodePopup(node, step, result) {
@@ -6140,6 +6104,10 @@ function showUserMemoryGroupPopup(node, nodeData) {
             ${steps.length} steps | ${formatDuration(nodeData.totalDuration || 0)}${llmCount ? ` | ${llmCount} LLM calls` : ''}
         </div>
     `;
+
+    // These are the stored invocation records represented by this group, not
+    // decisions inferred from the success/failure of its inner operations.
+    html += renderPipelineHookObservations(nodeData.pipelineHooks || []);
 
     steps.forEach(step => {
         const category = step.category || 'llm';
