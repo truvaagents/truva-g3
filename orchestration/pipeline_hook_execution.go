@@ -121,6 +121,7 @@ func (invocation *pipelineHookInvocation) Context(ctx context.Context) context.C
 func (invocation *pipelineHookInvocation) Complete(
 	status PipelineHookExecutionStatus,
 	err error,
+	decision PipelineHookDecision,
 ) {
 	if invocation == nil || invocation.holder == nil {
 		return
@@ -133,6 +134,7 @@ func (invocation *pipelineHookInvocation) Complete(
 	}
 	execution := &holder.executions[invocation.index]
 	execution.Status = status
+	execution.Decision = &decision
 	execution.Duration = time.Since(invocation.startedAt)
 	if execution.Duration < 0 {
 		execution.Duration = 0
@@ -369,6 +371,10 @@ func clonePipelineHookExecutions(source []PipelineHookExecution) []PipelineHookE
 
 func clonePipelineHookExecution(source PipelineHookExecution) PipelineHookExecution {
 	cloned := source
+	if source.Decision != nil {
+		decision := *source.Decision
+		cloned.Decision = &decision
+	}
 	if len(source.Effects) > 0 {
 		cloned.Effects = make([]core.PipelineHookEffect, len(source.Effects))
 		for index := range source.Effects {
@@ -388,9 +394,10 @@ func recordPipelineHookExecution(
 	planPhase int,
 	startedAt time.Time,
 	err error,
+	decision PipelineHookDecision,
 ) {
 	invocation := beginPipelineHookInvocation(
 		ctx, hookName, phase, sequence, planPhase, startedAt,
 	)
-	invocation.Complete(status, err)
+	invocation.Complete(status, err, decision)
 }

@@ -333,12 +333,49 @@ For HITL resume records, elapsed observation ignores restored pre-checkpoint
 steps and uses resume-owned steps/phases plus later LLM evidence. This prevents
 the human approval wait from being presented as active compute time.
 
+### Full Flow when a plan is rejected
+
+Full Flow renders recorded planning and hook activity even when no plan was
+admitted. If a later phase is rejected, the graph keeps earlier steps and shows
+the rejected phase's recorded planning calls and hook invocation. It does not
+invent tool steps from the rejected candidate plan. Stored hooks remain visible
+when LLM debug data is unavailable; their popups show invocation status, errors,
+and reported effects. A failed hook invocation alone does not change the
+execution's recorded outcome.
+
+Cards and hook-node popups show **Pipeline consequence** separately: an optional
+hook can fail while the request continues; a required hook can stop the request
+even if it was skipped because its input could not be cloned. **Decision
+details** shows the stored failure policy, action, and reason. Older records
+without decisions say **not recorded**, never an inferred success.
+
+A hook panic shows **Panic propagated · request stopped**, even for an optional
+hook. Completed earlier steps remain visible. For native streaming, the
+successful synthesis call remains in LLM Calls if a later hook panics; that is
+model evidence, not a successful final application response.
+
+A unique User Memory invocation attaches to its existing detailed group at its
+recorded stage position. Repeated registrations stay separate. Hooks without
+usable phase placement remain visible on a non-directional **Placement not
+recorded** evidence branch; this is not an execution-order or dependency claim.
+
+Steps Only shows admitted plan steps. When none exist, it displays an explicit
+empty state and points readers to Full Flow.
+
 ### Raw synthesis and terminal application response
 
-The LLM Calls tab shows the synthesis interaction as model evidence. The card is
-labeled **Pre-hook LLM synthesis output**, and its response expander says **View
-Pre-hook Output**, because application `AfterSynthesis` hooks may change that
-content. When the execution record contains `final_response` with source
+The LLM Calls tab shows synthesis as model evidence. Its labels depend on the
+recorded interaction type:
+
+- Buffered synthesis (`synthesis`): **Pre-hook LLM synthesis output**, with
+  **View Pre-hook Output**.
+- Native streaming (`synthesis_streaming`): **LLM synthesis output streamed to
+  client**, with **View Streamed Output**.
+
+Both contain model output produced before application `AfterSynthesis` hooks.
+Those hooks may change the final application response, but cannot retract tokens
+already streamed. Neither label proves that the request completed successfully.
+When the execution record contains `final_response` with source
 `after_synthesis_hooks`, the Post-Execution tab shows that post-hook application
 response separately.
 

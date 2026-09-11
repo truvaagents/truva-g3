@@ -304,6 +304,9 @@ func TestExecutionStore_StorePreservesPipelineHookDiagnostics(t *testing.T) {
 		StartedAt: time.Date(2026, time.September, 3, 10, 31, 42, 184_000_000, time.UTC),
 		Duration:  284 * time.Millisecond,
 		Error:     "application-owned hook error",
+		Decision: &PipelineHookDecision{
+			FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "hook_error",
+		},
 		Effects: []core.PipelineHookEffect{{
 			EffectID: "knowledge_extraction", SchemaVersion: 1,
 			Name: "Knowledge extraction", Status: core.PipelineHookEffectFailed,

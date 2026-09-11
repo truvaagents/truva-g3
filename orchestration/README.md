@@ -1857,7 +1857,7 @@ These features are not yet implemented but could be added:
 - `LLMCallRecorderAdapter` - Bridges `LLMDebugStore` to `telemetry.LLMCallRecorder`
 - `ExecutionStore` - Required request-oriented execution persistence contract
 - `StoredExecution` - DAG evidence, including provider-neutral pipeline-hook invocation outcomes and the optional terminal application response
-- `PipelineHookExecution` - Ordered request-local hook phase, invocation outcome, timing, sequence, plan phase, and failure evidence
+- `PipelineHookExecution` - Ordered request-local hook phase, invocation outcome, recorded pipeline decisions, timing, sequence, plan phase, and failure evidence
 - `FinalResponseSourceAfterSynthesisHooks` / `FinalResponseSourceBeforePlanningShortCircuit` - Source labels for terminal application responses
 - `ErrExecutionRecordNotFound` - Typed absence for optional execution evidence
 - `ConversationExecutionLister` - Optional capability for bounded chronological conversation lookup

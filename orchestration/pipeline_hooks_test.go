@@ -323,7 +323,7 @@ func TestAfterPlanningHookDiagnosticsIncludePlanPhaseAndInvalidOutput(t *testing
 	}
 	plan := &RoutingPlan{PlanID: "original"}
 
-	result := orchestrator.runValidatedAfterPlanningHooks(
+	result, err := orchestrator.runValidatedAfterPlanningHooks(
 		ctx,
 		&core.PipelineContext{},
 		plan,
@@ -332,6 +332,9 @@ func TestAfterPlanningHookDiagnosticsIncludePlanPhaseAndInvalidOutput(t *testing
 		3,
 		"request-id",
 	)
+	if err != nil {
+		t.Fatalf("optional invalid hook output returned an error: %v", err)
+	}
 	if result != plan {
 		t.Fatalf("invalid hook output replaced original plan: %#v", result)
 	}
@@ -887,11 +890,14 @@ func TestValidatedAfterPlanningHooks_RejectInvalidMutationAndPreservePriorPlan(t
 	}}
 	orchestrator.pipelineHooks = []core.PipelineHook{hook}
 
-	result := orchestrator.runValidatedAfterPlanningHooks(
+	result, err := orchestrator.runValidatedAfterPlanningHooks(
 		context.Background(),
 		&core.PipelineContext{Request: "request", Enrichments: map[string]interface{}{}},
 		valid, nil, nil, 1, "request-id",
 	)
+	if err != nil {
+		t.Fatalf("optional invalid mutation returned an error: %v", err)
+	}
 	if result != valid || result.PlanID != "valid-plan" {
 		t.Fatalf("invalid hook mutation replaced prior plan: %#v", result)
 	}
@@ -1151,11 +1157,22 @@ func (t *pipelineHookSpanTelemetry) StartSpan(ctx context.Context, name string) 
 func (*pipelineHookSpanTelemetry) RecordMetric(string, float64, map[string]string) {}
 
 type pipelineHookSpan struct {
-	name   string
-	ended  bool
-	errors []error
+	name               string
+	ended              bool
+	endCount           int
+	errors             []error
+	attributes         map[string]interface{}
+	attributesAfterEnd bool
 }
 
-func (s *pipelineHookSpan) End()                           { s.ended = true }
-func (*pipelineHookSpan) SetAttribute(string, interface{}) {}
-func (s *pipelineHookSpan) RecordError(err error)          { s.errors = append(s.errors, err) }
+func (s *pipelineHookSpan) End() { s.ended = true; s.endCount++ }
+func (s *pipelineHookSpan) SetAttribute(key string, value interface{}) {
+	if s.ended {
+		s.attributesAfterEnd = true
+	}
+	if s.attributes == nil {
+		s.attributes = make(map[string]interface{})
+	}
+	s.attributes[key] = value
+}
+func (s *pipelineHookSpan) RecordError(err error) { s.errors = append(s.errors, err) }

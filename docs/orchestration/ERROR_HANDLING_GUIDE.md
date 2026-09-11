@@ -562,4 +562,4 @@ h.sendError(rw, "city_code is required", http.StatusBadRequest, "MISSING_FIELDS"
 - [API Reference — ClassifyUpstreamError](../reference/API_REFERENCE.md#classifyupstreamerror) — Type signatures and function docs
 - [API Reference — BackoffConfig](../reference/API_REFERENCE.md#backoffconfig) — Backoff calculation details
 - [Environment Variables Guide](../reference/ENVIRONMENT_VARIABLES_GUIDE.md) — All configurable env vars
-- [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) — Pipeline hooks error handling: hooks are resilient by design — if a hook returns an error, the orchestrator logs a warning and continues. A failing hook never aborts the pipeline. This follows the principle that optional enhancements (RAG, caching, memory) should degrade gracefully rather than block the response
+- [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) — Pipeline-hook error handling: ordinary optional enhancements (RAG, caching, memory) degrade gracefully; an explicitly registered `RequiredAfterPlanningHook` instead fails closed before HITL and execution

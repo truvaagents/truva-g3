@@ -1354,7 +1354,7 @@ change request correlation or caller-owned span-error handling.
 | orchestration | `streaming_fallback` | Caller requested streaming but the effective AI client reported no native streaming support. WARN with request correlation, `status=fallback`, and bounded `reason=client_streaming_unsupported` |
 | orchestration | `pipeline_short_circuit_decision` | WARN diagnostic for a rejected provenance-aware decision or an accepted legacy short-circuit when reserved cache dimensions exist. Carries request ID, hook, bounded kind/reason/status. Accepted modern decisions are intentionally trace/metric-only to avoid routine log volume |
 | orchestration | `before_planning_hook` / `after_execution_hook` / `after_synthesis_hook` | A phase callback returned an error and the fail-open runner continued. WARN with `request_id`, hook name, exact hook error, and bounded `error_type=hook_error` |
-| orchestration | `after_planning_hook` | An after-planning hook error, wrong return type, clone failure, or invalid mutation was rejected. WARN with request ID, hook, and bounded reason; the last valid plan continues. Accepted mutations are metric/span-only |
+| orchestration | `after_planning_hook` | An after-planning hook error, wrong return type, clone failure, or invalid mutation was rejected. WARN with request ID, hook, and bounded reason (`clone_failed`, `hook_error`, `invalid_type`, or `invalid_plan`). An ordinary hook retains the last valid plan; a `RequiredAfterPlanningHook` emits the same bounded rejection evidence and then returns a typed failure before HITL or execution. Accepted mutations are metric/span-only |
 | orchestration | `knowledge_extraction` | Detached knowledge-extraction work. Context-aware WARN/INFO records run under the linked async span, carry `request_id`, and use bounded error types such as `llm_unavailable`, `parse_failure`, `embedding`, and `knowledge_store` |
 | orchestration | `clarification_short_circuit` | Phase loop terminated early because the planner emitted `needs_user_input` |
 | orchestration | `synthesis_clarification_mode` | Synthesizer entered clarification mode and used the augmented system prompt |
@@ -1559,6 +1559,17 @@ application-owned error text, and bounded `error_type=hook_error`. Built-in
 hooks retain their documented operation-specific logs. Exact structured effect
 payloads are written only through the opt-in `ExecutionStore` and are not
 expanded into log fields.
+
+A panic at a synchronous hook boundary is not logged as an optional-hook WARN.
+The existing request completion operation records one ERROR with
+`termination_reason=panic`, `status=error`, and `error_type=request_failed`,
+using request correlation and duration fields. Its message stays bounded; exact
+panic evidence belongs to the hook execution record and hook span. The original
+panic continues to the application's existing recovery boundary. This adds no
+duplicate hook-error log stream and does not change normal returned-error logs.
+Native-stream error completion retains the count of chunks passed to the stream
+callback before the failure, using the same counting convention as successful
+streaming completion. This is not an acknowledgement of client consumption.
 
 Built-in fail-open provider warnings carry a bounded `error_type` but do not
 copy raw provider error text or body-bearing effect data into the ordinary log.

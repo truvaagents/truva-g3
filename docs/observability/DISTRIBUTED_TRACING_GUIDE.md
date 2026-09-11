@@ -2057,6 +2057,13 @@ validated planner-produced plan and before HITL or execution. Hook-returned plan
 bodies are never span attributes or events. Accepted/rejected outcomes are
 counted by `orchestration.pipeline.after_planning`; rejected mutations also
 emit the bounded `after_planning_hook` WARN documented in the logging guide.
+An ordinary rejection continues with the prior valid plan. A
+`RequiredAfterPlanningHook` rejection records the same existing reason/status
+labels, then marks the phase/request path failed with
+`RequiredAfterPlanningError`; no downstream HITL or tool-execution span may
+follow for that phase. The hook span starts before cloning and covers return-type
+and plan validation. A clone failure therefore records a failed span as well as
+the bounded rejection metric and warning, even though the callback did not run.
 HITL resume plans do not emit this span because they restore approved checkpoint
 state rather than a new planner-produced plan.
 
@@ -2067,7 +2074,32 @@ Pipeline-hook traces and execution-debug evidence answer different questions:
 | Surface | Authoritative for | Payload policy |
 |---------|-------------------|----------------|
 | `pipeline.hook.<phase>.<hook-name>` spans | Request timing, causal placement, and whether the complete callback/validation boundary failed | Bounded span attributes and ordinary error observations; hook-returned plans and effect payloads are excluded |
-| `StoredExecution.PipelineHooks` | Ordered invocation outcomes and the exact, versioned effects reported by each hook | Exact-fidelity, opt-in execution-debug data governed by the configured `ExecutionStore` |
+| `StoredExecution.PipelineHooks` | Ordered invocation outcomes, recorded pipeline decisions, and the exact, versioned effects reported by each hook | Exact-fidelity, opt-in execution-debug data governed by the configured `ExecutionStore` |
+
+On normal return, each hook span includes `pipeline.hook.failure_policy`,
+`pipeline.hook.action`, and `pipeline.hook.reason`. These bounded attributes
+match the execution record's `Decision` and do not require an execution-debug
+store. For example, an optional callback error is `fail_open` / `continue` /
+`hook_error`; a required after-planning callback error is `fail_closed` /
+`terminate` / `hook_error`. Both spans record the callback error, but only the
+second boundary stops the request. Required clone failure records invocation
+status `skipped` with action `terminate`: the callback could not run.
+Missing decision evidence means unknown, not success. A panic at a hook boundary
+records `failed` with action `propagate_panic` and reason `panic`, then closes
+that hook span before re-throwing the original value. Its ordinary error policy
+is still recorded; a fail-open policy does not suppress panics. The shared
+request boundary marks and closes the failed request span. A phase-loop panic
+also closes the active phase span and cancels its timeout; a native-stream
+AfterSynthesis panic closes the enclosing synthesis span. Earlier completed
+phase evidence remains in the execution record. No new span family, metric, or
+trace-based reconstruction is introduced. This contract covers the synchronous
+hook boundary, not independent application goroutine panics or process exits.
+
+For native streaming, the completed synthesis model call is recorded before
+AfterSynthesis hooks run. A later hook panic therefore leaves a successful raw
+`synthesis_streaming` interaction alongside a failed hook/request. Its debug
+duration measures the model call and excludes subsequent hook work; it is not
+evidence of a successfully delivered final application response.
 
 The Registry Viewer reads `StoredExecution.PipelineHooks`; it does not query
 Jaeger or another tracing backend to reconstruct hook cards. The effect-capture

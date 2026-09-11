@@ -709,9 +709,15 @@ Pipeline hooks run at defined stages:
 - after execution
 - after synthesis
 
-Hooks can inject context, short-circuit the pipeline, mutate plans, observe results, or post-process responses. Hooks are fail-open by design.
+Hooks can inject context, short-circuit the pipeline, mutate plans, observe results,
+or post-process responses. Ordinary hook callback errors use the stage's fail-open
+fallback. A `RequiredAfterPlanningHook` instead stops the phase if its plan
+governance fails, before HITL or execution. Invalid explicit `BeforePlanning`
+decisions also stop the request. Panics propagate rather than using the ordinary
+error fallback, even for optional hooks.
 
-See [Adding Context To Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md).
+See [Adding Context To Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md)
+and the [Pipeline Hooks Guide](../orchestration/PIPELINE_HOOKS_GUIDE.md).
 
 #### Shared Agent Memory
 

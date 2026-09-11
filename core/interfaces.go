@@ -317,9 +317,21 @@ type BeforePlanningDecisionHook interface {
 }
 
 // AfterPlanningHook runs after the planning phase. It may mutate the plan.
+// Rejected mutations from an ordinary AfterPlanningHook are fail-open: the
+// orchestrator retains the last valid plan and continues.
 type AfterPlanningHook interface {
 	PipelineHook
 	AfterPlanning(ctx context.Context, pctx *PipelineContext, plan interface{}) (interface{}, error)
+}
+
+// RequiredAfterPlanningHook declares that a registered hook must participate
+// successfully in the after-planning stage. It intentionally embeds only
+// PipelineHook. Orchestration validates AfterPlanningHook separately during
+// construction so a drifted stage method cannot silently remove required
+// intent. A required hook failure aborts before HITL or execution.
+type RequiredAfterPlanningHook interface {
+	PipelineHook
+	RequireAfterPlanningSuccess()
 }
 
 // AfterExecutionHook runs after tool execution completes.

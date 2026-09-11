@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.13
+**Version**: 1.15
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -9,11 +9,16 @@
 
 ## Core Module Mission
 
-The **core module** is the foundation of the TruvaG3 framework. It defines all framework interfaces, provides base implementations, and ensures architectural consistency across all other modules. **Every other framework module depends on core - core depends on no other framework modules.**
+The **core module** is the foundation of the TruvaG3 framework. It defines
+cross-module foundational contracts and base implementations. A
+feature-specific contract that uses types owned by one module stays in that
+owning module; it moves to core only when it is a genuine cross-module
+foundation in the canonical module DAG. **Every other framework module depends
+on core - core depends on no other framework modules.**
 
 ### Primary Responsibilities
 
-1. **Interface Definitions**: Define all framework contracts (`Component`, `Registry`, `Discovery`, `AIClient`, etc.)
+1. **Interface Definitions**: Define foundational cross-module contracts (`Component`, `Registry`, `Discovery`, `AIClient`, etc.)
 2. **Base Implementations**: Provide extensible `BaseTool` and `BaseAgent` implementations
 3. **Architectural Enforcement**: Use Go's type system to enforce Tool/Agent separation at compile time
 4. **Configuration Intelligence**: Smart configuration with environment awareness and auto-injection
@@ -27,7 +32,10 @@ The **core module** is the foundation of the TruvaG3 framework. It defines all f
 
 ### 1. **Interface-First Architecture**
 
-**Rule**: Every external dependency and framework concept must be defined as an interface in core.
+**Rule**: Every external dependency must be abstracted behind a narrow
+interface. Foundational cross-module concepts are defined in core. A
+feature-specific lifecycle interface stays in the module that owns its types
+and behavior; placing it in core solely for visibility is a layering error.
 
 ```go
 // ✅ Good: Core defines interfaces, implementations are pluggable
@@ -1054,6 +1062,32 @@ configured execution store own capture and retention. Applications that emit
 custom effect data own its schema and sensitivity. Effect status is explicitly
 producer-reported; it is not an independent verification of backend durability.
 
+## Required After-Planning Declaration
+
+Core defines the cross-module `RequiredAfterPlanningHook` marker so applications
+can declare mandatory plan governance without core importing orchestration-owned
+plan or error types:
+
+```go
+type RequiredAfterPlanningHook interface {
+    PipelineHook
+    RequireAfterPlanningSuccess()
+}
+```
+
+The marker embeds only `PipelineHook`, not `AfterPlanningHook`. This keeps
+required intent detectable if the stage method is missing or its signature
+changes. Orchestration's factory validates that the registered value also
+implements `AfterPlanningHook`, that at most one required hook is registered,
+and that it is the last hook participating in that stage.
+
+Core owns the declaration, not its enforcement. Orchestration owns construction
+validation, plan validation, typed errors, and recorded pipeline decisions.
+A required hook's returned error or rejected mutation stops that phase before
+HITL or tool execution; ordinary hooks retain their documented fallback.
+See the [Pipeline Hooks Guide](../docs/orchestration/PIPELINE_HOOKS_GUIDE.md)
+for composition, panic behavior, and the approved-checkpoint resume boundary.
+
 ---
 
 ## Implementation Checklist
@@ -1090,7 +1124,9 @@ producer-reported; it is not an independent verification of backend durability.
 ## Current Implementation Status
 
 ### ✅ **Completed & Verified**
-- Interface definitions for all framework contracts
+
+- Foundational cross-module interface definitions; feature-specific lifecycle
+  contracts remain in their owning modules
 - Tool/Agent architectural separation enforced at compile-time
 - Base implementations with dependency injection support
 - Configuration system with intelligent auto-configuration
@@ -1115,12 +1151,14 @@ producer-reported; it is not an independent verification of backend durability.
 
 ---
 
-**Core Module Philosophy**: *"Provide everything other modules need, depend on nothing they provide. Enable architectural correctness through type system constraints, not documentation."*
+**Core Module Philosophy**: *"Provide the common foundations other modules need, depend on nothing they provide. Enable architectural correctness through type system constraints, not documentation."*
 
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.15 | 2026-09-11 | Completed required after-planning marker documentation and corrected the implementation-status wording to distinguish foundational contracts from module-owned lifecycle contracts |
+| 1.14 | 2026-09-09 | Reconciled interface ownership with the canonical module DAG and documented the foundational `RequiredAfterPlanningHook` declaration contract |
 | 1.13 | 2026-09-08 | Removed numbered-DB constructors/constants and deprecation-only resolution plumbing under the author-approved development exception; all owned topologies validate DB 0 and borrowed-client ownership is unchanged |
 | 1.12 | 2026-09-08 | Made discovery cleanup atomic with its missing-record recheck, preserved explicit namespace precedence over invalid environment values, and shared independently bounded startup checks without taking ownership of borrowed clients |
 | 1.11 | 2026-09-04 | Scoped topology-aware Redis client and configuration diagnostics to `framework/core` and required bounded, request-correlated health/error observations without endpoint or credential text |

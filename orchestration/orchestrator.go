@@ -1158,10 +1158,10 @@ func (o *AIOrchestrator) getAgentName() string {
 	return "orchestrator"
 }
 
-// buildNonSuccessResult constructs an ExecutionResult for the four non-success
-// storeExecutionAsync call sites (HITL interrupt plan-level, HITL interrupt
-// step-level, phase execution error, inter-phase intermediate store). It packs
-// multi-phase metadata so the stored record's PhasePlans / PhaseCount round-trip
+// buildNonSuccessResult constructs an ExecutionResult for non-success and
+// intermediate snapshots (HITL interrupt plan-level, HITL interrupt step-level,
+// phase execution error, inter-phase intermediate store, required-hook rejection).
+// It packs multi-phase metadata so the stored record's PhasePlans / PhaseCount round-trip
 // through storeExecutionAsync, and merges cross-phase step results so the DAG
 // visualization shows complete status.
 //
@@ -1172,6 +1172,7 @@ func (o *AIOrchestrator) getAgentName() string {
 //   - step-level HITL:        extractCurrentPhaseFromCheckpoint(checkpoint, allStepResults)
 //   - phase execution error:  phaseResult.Steps (nil-safe)
 //   - intermediate store:     nil — allStepsList already contains the just-completed phase
+//   - required-hook rejection: nil — only previously admitted phases may be retained
 //
 // phasePlans is shallow-copied (slice-header) to close the slice-header race
 // with the phase loop's continued appends. Plan pointers remain shared, so a
@@ -1941,7 +1942,9 @@ type phaseProgressFn func(phaseNumber int, stepsInPhase int)
 //	generate plan → validate → HITL approval → execute → accumulate → check termination → repeat
 //
 // Returns accumulated results from all phases, or an error (including ErrInterrupted
-// for HITL pauses). The caller is responsible for:
+// for HITL pauses). A pre-execution failure returns partial diagnostic results
+// together with the error; those results must not be synthesized or executed.
+// The caller is responsible for:
 //   - Calling updateMetrics() on both success and failure paths
 //   - Synthesis (sync or streaming)
 //   - Building the final response
@@ -1953,6 +1956,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 	span core.Span,
 	pipelineContext *core.PipelineContext,
 	onPhaseProgress phaseProgressFn,
+	onPhaseFailure func(*phaseLoopResult),
 ) (*phaseLoopResult, error) {
 	// --- Phase tracking ---
 	var (
@@ -1974,7 +1978,44 @@ func (o *AIOrchestrator) executePhaseLoop(
 		// termination, and the synthesizer tells the user the service is
 		// unavailable).
 		remediationAttempted bool
+		activePhaseSpan      core.Span
+		activePhaseCancel    context.CancelFunc
 	)
+	// Return request-local evidence to the existing terminal writer. This does
+	// not admit a failed candidate, synthesize a response, or read back a prior
+	// snapshot. Already-written executor errors and HITL suspensions keep their
+	// richer terminal publishers unchanged.
+	failedPhaseResult := func(currentPhaseSteps []StepResult) *phaseLoopResult {
+		lastPlanID, admittedPhase := "", 0
+		if lastPlan != nil {
+			lastPlanID, admittedPhase = lastPlan.PlanID, lastPlan.PhaseNumber
+		}
+		result := buildNonSuccessResult(currentPhaseSteps, phasePlans, admittedPhase, forcedTerminal, allStepsList, lastPlanID, false)
+		result.TotalDuration = time.Since(startTime)
+		if len(regenEvents) > 0 {
+			result.Metadata[MetadataKeyPlanRegenerations] = regenEvents
+		}
+		return &phaseLoopResult{
+			CombinedResult: result, PhasePlans: phasePlans,
+			ForcedTerminal: forcedTerminal, LastPlan: lastPlan,
+		}
+	}
+
+	defer func() {
+		if value := recover(); value != nil {
+			if activePhaseSpan != nil {
+				activePhaseSpan.RecordError(errors.New("orchestration phase panic"))
+				activePhaseSpan.End()
+			}
+			if activePhaseCancel != nil {
+				activePhaseCancel()
+			}
+			if onPhaseFailure != nil {
+				onPhaseFailure(failedPhaseResult(nil))
+			}
+			panic(value)
+		}
+	}()
 
 	iterativeEnabled := o.config.IterativePlanning.Enabled
 	maxPhases := o.config.IterativePlanning.MaxPhases
@@ -2062,6 +2103,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 		if phaseTimeout > 0 {
 			phaseCtx, phaseCancel = context.WithTimeout(loopCtx, phaseTimeout)
 		}
+		activePhaseCancel = phaseCancel
 
 		// Phase-level span
 		var phaseSpan core.Span
@@ -2075,6 +2117,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 		} else {
 			phaseSpan = &core.NoOpSpan{}
 		}
+		activePhaseSpan = phaseSpan
 
 		// --- Plan generation ---
 		var plan *RoutingPlan
@@ -2096,7 +2139,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 				if phaseCancel != nil {
 					phaseCancel()
 				}
-				return nil, fmt.Errorf("failed to prepare resume boundary (phase %d): %w", phaseCount, err)
+				return failedPhaseResult(nil), fmt.Errorf("failed to prepare resume boundary (phase %d): %w", phaseCount, err)
 			}
 			planSource = "hitl_resume"
 			plan = resumeOverride
@@ -2138,7 +2181,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 				if phaseCancel != nil {
 					phaseCancel()
 				}
-				return nil, fmt.Errorf("failed to prepare orchestration boundary (phase %d): %w", phaseCount, err)
+				return failedPhaseResult(nil), fmt.Errorf("failed to prepare orchestration boundary (phase %d): %w", phaseCount, err)
 			}
 			// Phase-appropriate retry
 			if len(allStepResults) > 0 {
@@ -2167,7 +2210,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 				if phaseCancel != nil {
 					phaseCancel()
 				}
-				return nil, fmt.Errorf("failed to generate execution plan (phase %d): %w", phaseCount, err)
+				return failedPhaseResult(nil), fmt.Errorf("failed to generate execution plan (phase %d): %w", phaseCount, err)
 			}
 		}
 
@@ -2246,7 +2289,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 					if phaseCancel != nil {
 						phaseCancel()
 					}
-					return nil, err
+					return failedPhaseResult(nil), err
 				}
 
 				// Regenerate from the validation error and loop (re-normalize + re-validate from top).
@@ -2267,7 +2310,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 					if phaseCancel != nil {
 						phaseCancel()
 					}
-					return nil, fmt.Errorf("failed to generate valid plan (phase %d): %w", phaseCount, err)
+					return failedPhaseResult(nil), fmt.Errorf("failed to generate valid plan (phase %d): %w", phaseCount, err)
 				}
 				regenEvents = append(regenEvents, map[string]interface{}{
 					"phase_number":         phaseCount,
@@ -2287,7 +2330,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 		// fixpoint and before HITL, persistence, or execution. Resume plans are
 		// approved checkpoint state rather than newly planner-produced values.
 		if planSource != "hitl_resume" && pipelineContext != nil {
-			plan = o.runValidatedAfterPlanningHooks(
+			plan, err = o.runValidatedAfterPlanningHooks(
 				phaseCtx,
 				pipelineContext,
 				plan,
@@ -2296,6 +2339,14 @@ func (o *AIOrchestrator) executePhaseLoop(
 				phaseCount,
 				requestID,
 			)
+			if err != nil {
+				phaseSpan.RecordError(err)
+				phaseSpan.End()
+				if phaseCancel != nil {
+					phaseCancel()
+				}
+				return failedPhaseResult(nil), fmt.Errorf("required after-planning hook failed (phase %d): %w", phaseCount, err)
+			}
 		}
 
 		// Set phase metadata on plan
@@ -2405,7 +2456,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 				if phaseCancel != nil {
 					phaseCancel()
 				}
-				return nil, fmt.Errorf("HITL plan check failed (phase %d): %w", phaseCount, hitlErr)
+				return failedPhaseResult(nil), fmt.Errorf("HITL plan check failed (phase %d): %w", phaseCount, hitlErr)
 			}
 			if checkpoint != nil {
 				snapshot := newExecutionRunSnapshot(phaseCount, allStepResults, executedStepIDs, continuationNote)
@@ -2415,7 +2466,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 					if phaseCancel != nil {
 						phaseCancel()
 					}
-					return nil, saveErr
+					return failedPhaseResult(nil), saveErr
 				}
 
 				// Route through buildNonSuccessResult so the interrupted
@@ -2475,7 +2526,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 						if phaseCancel != nil {
 							phaseCancel()
 						}
-						return nil, saveErr
+						return failedPhaseResult(extractCurrentPhaseFromCheckpoint(checkpoint, allStepResults)), saveErr
 					}
 				}
 				// Route through buildNonSuccessResult so the interrupted
@@ -2628,9 +2679,11 @@ func (o *AIOrchestrator) executePhaseLoop(
 		// End phase span and cancel timeout (C3 fix: explicit cancel,
 		// not defer, to prevent resource leak across loop iterations)
 		phaseSpan.End()
+		activePhaseSpan = nil
 		if phaseCancel != nil {
 			phaseCancel()
 		}
+		activePhaseCancel = nil
 
 		// --- Remediation on template-induced skips ---
 		// When one or more steps in this phase were skipped because their
@@ -3116,6 +3169,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 			finishReason = chunk.FinishReason
 		}
 		chunkIndex++
+		state.streamChunksDelivered = chunkIndex
 		return callback(chunk)
 	}
 
@@ -3230,10 +3284,44 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 		return nil, fmt.Errorf("synthesis streaming failed: %w", err)
 	}
 
+	// Record the completed model call before application hooks can panic.
+	// LLM Debug: Record successful streaming synthesis
+	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
+	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		Type:             "synthesis_streaming",
+		Timestamp:        synthesisStart,
+		DurationMs:       time.Since(synthesisStart).Milliseconds(),
+		Prompt:           effective.Prompt,
+		SystemPrompt:     effective.SystemPrompt,
+		Temperature:      effectiveAITemperature(effective, streamSynthesisOpts.Temperature),
+		MaxTokens:        effectiveAIMaxTokens(effective, streamSynthesisOpts.MaxTokens),
+		Model:            model,
+		Provider:         provider,
+		Response:         aiResponse.Content,
+		PromptTokens:     aiResponse.Usage.PromptTokens,
+		CompletionTokens: aiResponse.Usage.CompletionTokens,
+		TotalTokens:      aiResponse.Usage.TotalTokens,
+		Success:          true,
+		Attempt:          1,
+	})
+
 	// --- Pipeline hooks: after synthesis (streaming path) ---
 	// Note: tokens were already streamed to the client. AfterSynthesis hooks
 	// operate on the accumulated full content for post-processing (logging, memory storage, etc.).
-	finalContent := o.runAfterSynthesisHooks(ctx, pctx, aiResponse.Content)
+	finalContent := func() string {
+		// Native synthesis normally keeps its span open through response
+		// assembly. A hook panic must close it before leaving that boundary.
+		defer func() {
+			if value := recover(); value != nil {
+				if synthesisSpan != nil {
+					synthesisSpan.RecordError(errors.New("after-synthesis hook panic"))
+					synthesisSpan.End()
+				}
+				panic(value)
+			}
+		}()
+		return o.runAfterSynthesisHooks(ctx, pctx, aiResponse.Content)
+	}()
 
 	// The terminal native-streaming snapshot is recorded only after synthesis
 	// and AfterSynthesis hooks reach their terminal outcome. Request-local
@@ -3288,26 +3376,6 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 			synthesisSpan.SetAttribute("synthesis.finish_reason", finishReason)
 		}
 	}
-
-	// LLM Debug: Record successful streaming synthesis
-	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
-		Type:             "synthesis_streaming",
-		Timestamp:        synthesisStart,
-		DurationMs:       time.Since(synthesisStart).Milliseconds(),
-		Prompt:           effective.Prompt,
-		SystemPrompt:     effective.SystemPrompt,
-		Temperature:      effectiveAITemperature(effective, streamSynthesisOpts.Temperature),
-		MaxTokens:        effectiveAIMaxTokens(effective, streamSynthesisOpts.MaxTokens),
-		Model:            model,
-		Provider:         provider,
-		Response:         aiResponse.Content,
-		PromptTokens:     aiResponse.Usage.PromptTokens,
-		CompletionTokens: aiResponse.Usage.CompletionTokens,
-		TotalTokens:      aiResponse.Usage.TotalTokens,
-		Success:          true,
-		Attempt:          1,
-	})
 
 	if synthesisSpan != nil {
 		synthesisSpan.End()

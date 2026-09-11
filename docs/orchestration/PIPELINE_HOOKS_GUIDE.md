@@ -60,7 +60,12 @@ type PipelineHook interface {
 }
 ```
 
-There are four stage interfaces. A single hook type can implement as many as it wants; the orchestrator discovers what a hook supports via type assertion at each stage, so partial implementations are normal and expected.
+There are four stage interfaces and one required-stage declaration. A single
+hook type can implement as many stages as it wants; the orchestrator discovers
+what an ordinary hook supports via type assertion at each stage, so partial
+implementations are normal and expected. `RequiredAfterPlanningHook` is not a
+fifth stage. It changes the failure contract for one `AfterPlanningHook` and is
+validated when the orchestrator is constructed.
 
 | Hook Stage | When It Runs | Can Mutate? | Can Short-Circuit? | Wired in live path? |
 |---|---|---|---|---|
@@ -71,7 +76,12 @@ There are four stage interfaces. A single hook type can implement as many as it 
 
 Two properties define the whole system and are worth committing to memory:
 
-- **Hook callback failures fail open.** If a hook returns an error, the orchestrator logs a warning and continues. Invalid provenance-aware short-circuit contracts (missing payload or unknown kind) are configuration/programming errors and fail the request instead of silently bypassing cache enforcement.
+- **Ordinary hook callback failures fail open.** The documented stage fallback
+  continues the request. A hook explicitly implementing
+  `RequiredAfterPlanningHook` instead fails closed before HITL or execution.
+  Invalid provenance-aware short-circuit contracts (missing payload or unknown
+  kind) are also programming errors and fail the request rather than silently
+  bypassing cache enforcement.
 - **Hooks run sequentially, in registration order.** There is no concurrent access to the shared context object, so hooks can read and write it without locking.
 
 ---
@@ -143,7 +153,10 @@ runners and validation logic live in `orchestration/pipeline_hooks.go`.
 
 ## 4. The Hook Stages
 
-All four contracts are defined in `core/interfaces.go:264-301`. Each embeds `PipelineHook`.
+All four stage contracts and the required-stage declaration are defined in
+`core/interfaces.go`. Each stage contract embeds `PipelineHook`; the required
+declaration embeds only `PipelineHook` so construction can detect stage-method
+drift independently.
 
 ### 4.1 BeforePlanningHook
 
@@ -172,6 +185,14 @@ type AfterPlanningHook interface {
     PipelineHook
     AfterPlanning(ctx context.Context, pctx *PipelineContext, plan interface{}) (interface{}, error)
 }
+
+// RequiredAfterPlanningHook declares required intent independently from the
+// stage method. Factory construction validates that the same hook also
+// implements AfterPlanningHook.
+type RequiredAfterPlanningHook interface {
+    PipelineHook
+    RequireAfterPlanningSuccess()
+}
 ```
 
 Runs exactly once for the final planner-produced plan in each phase, after the
@@ -181,10 +202,47 @@ state rather than newly produced plans.
 
 Mutation is copy-on-write and chained in registration order. Each hook must
 return a non-nil `*orchestration.RoutingPlan`. The framework normalizes and
-runs the complete plan-validation gauntlet after each mutation. A hook error,
-wrong return type, clone failure, or invalid mutation is rejected with bounded
-diagnostics and the last valid plan continues; it never triggers LLM
-regeneration and cannot corrupt that prior plan.
+runs the complete plan-validation gauntlet after each mutation. For an ordinary
+hook, a hook error, wrong return type, clone failure, or invalid mutation is
+rejected with bounded diagnostics and the last valid plan continues. It never
+triggers LLM regeneration and cannot corrupt that prior plan.
+
+For a mandatory plan-governance boundary, implement both interfaces and include
+an explicit compile-time assertion:
+
+```go
+type governedPlanHook struct{}
+
+func (*governedPlanHook) Name() string { return "governed-plan" }
+func (*governedPlanHook) RequireAfterPlanningSuccess() {}
+func (*governedPlanHook) AfterPlanning(
+    ctx context.Context,
+    pctx *core.PipelineContext,
+    plan interface{},
+) (interface{}, error) {
+    // Bind or validate trusted application state, then return the plan.
+    return plan, nil
+}
+
+var _ core.AfterPlanningHook = (*governedPlanHook)(nil)
+var _ core.RequiredAfterPlanningHook = (*governedPlanHook)(nil)
+```
+
+A required hook's error, wrong result type, clone failure, or invalid plan
+returns `*orchestration.RequiredAfterPlanningError`. The phase stops before its
+plan is persisted, before HITL is evaluated, and before any tool executes.
+Factory construction also enforces three composition rules: the required marker
+must implement `AfterPlanningHook`, only one required marker may be registered,
+and it must be the final hook that participates in `AfterPlanning`. Hooks for
+other stages may follow it because they cannot mutate the governed plan.
+
+With execution recording enabled, the rejection is stored as an unsuccessful
+request using the configured error retention. If earlier phases completed,
+their plans and successful tool results remain in that record. The rejected
+candidate is not added as an accepted phase. A first-phase rejection has no
+accepted plan or tool steps, but still has a failed result and hook evidence.
+Later effect updates preserve this failure state. None of these diagnostic
+results is sent to synthesis or returned as a successful application response.
 
 ### 4.3 AfterExecutionHook
 
@@ -369,7 +427,9 @@ A hook is any struct with a `Name()` method plus at least one stage method. Noth
 
 ### 7.1 The smallest possible hook
 
-This is the minimal shape — a `BeforePlanning` hook that injects a static enrichment. (It mirrors the `enrichmentHook` test helper in `pipeline_hooks_test.go:87-97`.)
+This is the minimal shape — a `BeforePlanning` hook that injects a static
+enrichment. It mirrors the `enrichmentHook` test helper in
+[pipeline_hooks_test.go](../../orchestration/pipeline_hooks_test.go).
 
 ```go
 package hooks
@@ -476,6 +536,14 @@ func (h *RedactionHook) AfterSynthesis(ctx context.Context, pctx *core.PipelineC
 
 > **Registration is factory-only.** There is no framework-level `WithHooks` option. Hooks are attached through `OrchestratorDependencies.PipelineHooks` when you create the orchestrator. (`framework.go` exposes config options but nothing about pipeline hooks.)
 
+A nil or empty `PipelineHooks` slice is valid and registers no hooks. A nil or
+typed-nil **entry** in that slice is invalid, whether the hook is optional or
+required. The factory rejects it before serving requests, with an error wrapping
+`ErrInvalidOrchestratorConfig` that identifies the entry's zero-based index.
+Remove the entry or supply an initialized hook; do not use nil placeholders.
+This is a general configuration error, not an
+`InvalidRequiredAfterPlanningHookError` or one of its required-hook reason codes.
+
 ### 8.1 The direct path
 
 ```go
@@ -516,6 +584,11 @@ For per-user memory, `BuildUserMemoryHooks` plays the same role — see [`exampl
 >
 > `PipelineHooks` is a flat slice, and slice order is execution order. **Append** enrichment hooks to the builder's output — your RAG hook and `MemoryEnrichmentHook` both run at `BeforePlanning`, each accumulating into `Enrichments`. But **prepend** a short-circuiting cache hook if you want it to pre-empt the builder's (expensive) enrichment hooks: the first `BeforePlanning` hook to short-circuit wins (§9).
 
+When a required after-planning hook is present, place it after every ordinary
+`AfterPlanningHook`. The factory rejects two required hooks or any later
+after-planning mutator. Compose several mandatory checks inside one terminal
+required hook rather than relying on order between multiple required mutators.
+
 ---
 
 ## 9. Execution Semantics and Guarantees
@@ -524,13 +597,18 @@ The runners in `orchestration/pipeline_hooks.go` all share one shape: iterate `p
 
 **Ordering.** Hooks fire in registration (slice) order within a stage. A hook that implements multiple stages is invoked once per stage, at the appropriate point in the lifecycle.
 
-**Type filtering.** Implementing `BeforePlanningHook` does not obligate you to implement the others. At each stage the runner does `h, ok := hook.(core.AfterSynthesisHook)` and silently skips non-matching hooks. This is why partial hooks are idiomatic.
+**Type filtering.** Implementing `BeforePlanningHook` does not obligate you to implement the others. At each stage the runner does `h, ok := hook.(core.AfterSynthesisHook)` and silently skips non-matching ordinary hooks. This is why partial hooks are idiomatic. Silent filtering does not apply to a registered `RequiredAfterPlanningHook`: factory construction fails if that marker does not also implement `AfterPlanningHook`, so method-signature drift cannot silently downgrade a mandatory control.
 
-**Fail-open resilience.** Every runner handles a hook error identically: log `"Pipeline hook failed, skipping"` with the hook name and `continue`. One bad hook never aborts the request and never prevents later hooks from running. If your hook's work is *mandatory* (e.g. a hard compliance gate), a hook is the wrong place — enforce it at a layer that can reject the request.
+**Failure behavior.** Ordinary pipeline hooks are fail-open and retain their
+documented stage fallback. A required after-planning hook is a first-class
+fail-closed lifecycle control: its error or rejected mutation returns
+`RequiredAfterPlanningError` and prevents all downstream work for that phase.
+Use the required contract for a mandatory plan-governance boundary; use an
+ordinary hook for optional transformation or enrichment.
 
-**Mutation chaining.** `AfterSynthesis` and `AfterPlanning` chain: the accepted output of hook *N* is the input to hook *N+1*. Order matters. Invalid after-planning output leaves the last valid plan in place. `AfterExecution` is observe-only and `BeforePlanning` accumulates into the shared `Enrichments` map, so neither "chains" a return value.
+**Mutation chaining.** `AfterSynthesis` and `AfterPlanning` chain: the accepted output of hook *N* is the input to hook *N+1*. Order matters. Invalid optional after-planning output leaves the last valid plan in place; invalid required output stops the phase. The required hook is the unique terminal after-planning participant, so no later hook can rewrite its governed result. `AfterExecution` is observe-only and `BeforePlanning` accumulates into the shared `Enrichments` map, so neither "chains" a return value.
 
-**Short-circuit precedence.** The first `BeforePlanning` hook to return a non-nil short-circuit wins; subsequent `BeforePlanning` hooks are not called. Put your cache hook early if you want it to pre-empt expensive enrichment hooks.
+**Short-circuit precedence.** The first accepted before-planning short-circuit wins; subsequent before-planning hooks are not called. An explicit cache decision must pass cache-read and provenance checks first; a rejected cached value is not served, and later hooks and normal planning may still run. Put your cache hook early if you want it to pre-empt expensive enrichment hooks.
 
 **Execution-debug evidence.** When an `ExecutionStore` is configured, every
 eligible hook invocation is also appended to the request's
@@ -541,6 +619,46 @@ provider-neutral source for troubleshooting which hooks ran; it does not require
 Redis specifically or a tracing backend. Workflow-mode
 `ExecutePlanWithSynthesis` does not run application pipeline hooks and therefore
 does not populate this field.
+
+Each completed boundary also records a `Decision`, separate from its
+invocation status and effect results:
+
+| Example | Failure policy | Actual action | Reason |
+|---|---|---|---|
+| Optional callback returned an error | `fail_open` | `continue` | `hook_error` |
+| Required after-planning callback returned an error | `fail_closed` | `terminate` | `hook_error` |
+| Required after-planning mutation was accepted | `fail_closed` | `continue` | `accepted` |
+| Cached response matched current provenance | `fail_closed` | `short_circuit` | `cache_match` |
+| Cached response did not match | `fail_closed` | `continue` | `cache_dimension_mismatch` |
+| Hook panicked | The boundary's ordinary error policy | `propagate_panic` | `panic` |
+
+Here, fail-closed cache evaluation means that an unverified cached response is
+not served; it does not mean that planning must stop. A missing `Decision`
+means no decision was recorded, not that the hook succeeded. The same fields
+appear on the existing hook trace span even without execution recording.
+Panics are not ordinary hook errors: even a fail-open hook stops execution if it
+panics. The framework records the failed invocation, closes its trace span, and
+propagates the original panic value. It preserves completed earlier phases in
+the failed request record and closes the request/active phase spans. Native
+streaming also closes the enclosing synthesis span when an AfterSynthesis hook
+panics; tokens already sent to the client cannot be withdrawn. This does not
+recover a panic in a separate goroutine started by application code, or guarantee
+that buffered debug writes survive process termination.
+
+The successful native synthesis model call is saved before AfterSynthesis runs.
+If that hook panics, LLM Calls can still show the raw model output while the
+request is failed and has no final application response. Model success and
+application success are different outcomes.
+
+Registry Viewer shows **Pipeline consequence** separately
+from invocation and effect status. **Decision details** exposes the stored
+policy, action, and reason; older records without them say **not recorded**.
+
+Invalid explicit before-planning decisions retain a failed zero-step result.
+If planning fails in a later phase after a hook ran, completed steps and admitted
+plans remain in the failed terminal record. These failures use the configured
+error retention, including later effect updates. An ordinary HITL suspension
+keeps its checkpoint/interruption semantics.
 
 Invocation outcome and effect outcome are intentionally separate. Orchestration
 automatically records exact added, changed, or removed `BeforePlanning`
@@ -640,11 +758,22 @@ func TestRAGHook_InjectsContext(t *testing.T) {
 }
 ```
 
-The framework's own contract tests are worth reading as a reference for expected behavior — `orchestration/pipeline_hooks_test.go` proves type filtering (only matching hooks fire), short-circuit precedence (first wins, rest skipped), and fail-open error handling (an erroring hook is logged and skipped). The file also contains compact exemplar hooks:
+The framework's own contract tests are worth reading as a reference for expected
+behavior. `orchestration/pipeline_hooks_test.go` proves type filtering (only
+matching hooks fire), short-circuit precedence (first wins, rest skipped), and
+optional fail-open behavior. `orchestration/required_after_planning_test.go`
+proves construction validation, all required rejection classes, the
+no-HITL/no-execution boundary, and failed-record preservation across buffered
+requests, streaming entry points, and later effect updates. It also checks
+configured normal/error retention using local store fixtures.
 
-- `enrichmentHook` (`:87-97`) — the minimal one-stage hook shown in §7.
-- `allStagesHook` (`:33-84`) — implements all four stages with call counters and injectable errors/mutations; a good template for an exhaustive test double.
-- `beforeOnlyHook` (`:100-109`) — demonstrates the partial-implementation pattern.
+For compact exemplar hooks, see
+[pipeline_hooks_test.go](../../orchestration/pipeline_hooks_test.go):
+
+- `enrichmentHook` — the minimal one-stage hook shown in §7.
+- `allStagesHook` — implements all four stages with call counters and injectable
+  errors/mutations; a good template for an exhaustive test double.
+- `beforeOnlyHook` — demonstrates the partial-implementation pattern.
 
 There is no exported NoOp hook in non-test code; if you want one for tests, the `enrichmentHook` shape above is the smallest thing that compiles. To stub a hook's *dependencies* (an embedding client, a memory backend), the `core` module ships `NoOp*` and `Mock*` doubles — see [Adding Context to Your Agent §11](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) for the conventions.
 
@@ -654,7 +783,7 @@ There is no exported NoOp hook in non-test code; if you want one for tests, the 
 
 **Why per-stage interfaces instead of one big callback?** Type assertion lets a hook declare exactly the stages it cares about. A guardrail hook implements only `AfterSynthesis`; the orchestrator skips it everywhere else with no boilerplate on your side. It also keeps each method signature honest about what data is available and what can change at that point.
 
-**Why do hooks fail open?** Context injection is an enhancement. A vector store being briefly unreachable should degrade the answer's quality, not turn the request into a 500. If you need hard enforcement, the hook layer is the wrong layer — reject at the API boundary instead.
+**Why do ordinary hooks fail open?** Context injection is usually an enhancement. A vector store being briefly unreachable should degrade the answer's quality, not turn the request into a 500. Mandatory plan governance is different: use `RequiredAfterPlanningHook` when continuing with the planner's prior valid plan would violate an application invariant. The explicit marker keeps optional enrichment resilient while making the selected control fail closed.
 
 **Why can only `BeforePlanning` short-circuit?** Short-circuiting means "I already have the answer, skip the work." That only makes sense before any work has happened. After planning or execution, you've already paid the cost, so there's nothing to save.
 
@@ -669,10 +798,12 @@ There is no exported NoOp hook in non-test code; if you want one for tests, the 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Hook never runs | Not in `deps.PipelineHooks`, or doesn't implement the stage interface you expect | Confirm it's in the slice and that the method signature exactly matches the interface (pointer vs value receiver matters for the type assertion) |
-| `AfterPlanning` hook never fires | Request short-circuited, no planner-produced plan was accepted, the request is a HITL resume, or the hook signature does not match | Confirm the request reached planning and look for `pipeline.hook.after_planning.<name>` plus `after_planning_hook` diagnostics |
+| `AfterPlanning` hook never fires | Request short-circuited, no planner-produced plan was accepted, the request is a HITL resume, or an ordinary hook signature does not match | Confirm the request reached planning and look for `pipeline.hook.after_planning.<name>` plus `after_planning_hook` diagnostics. A drifted required hook prevents construction instead of being skipped |
 | Enrichment set but LLM ignores it | Wrong key, or a custom `PromptBuilder` that doesn't read enrichments | Use a well-known key (§5) with the default builder, or have your custom builder call `core.GetPipelineEnrichments(ctx)` |
 | Guardrail didn't block streamed text | `AfterSynthesis` runs after tokens stream | Move the check to `BeforePlanning`, a guarded prompt builder, or the non-streaming path |
-| Hook error silently swallowed | Fail-open by design — errors are logged at WARN and skipped | Check logs for `"Pipeline hook failed, skipping"`; enforce mandatory logic outside the hook layer |
+| Optional hook error was ignored | Ordinary hooks are fail-open by design | Check the stage's WARN diagnostic; use `RequiredAfterPlanningHook` when a rejected plan mutation must stop before HITL and execution |
+| Hook registration reports a nil entry | `PipelineHooks` contains a nil or typed-nil hook | Check `errors.Is(err, orchestration.ErrInvalidOrchestratorConfig)` and the zero-based index in the error; remove or initialize that entry. A nil or empty slice is valid |
+| Required-hook registration fails | Required marker is missing `AfterPlanningHook`, more than one required hook exists, or a later after-planning mutator follows it | Inspect `InvalidRequiredAfterPlanningHookError.Reason` (`stage_drift`, `multiple_required`, or `required_not_terminal`) and correct the hook slice |
 | Hook ran but its work was overwritten | Another hook later in the slice mutated the same enrichment key or chained response | Reorder the slice; remember `AfterSynthesis` chains and `BeforePlanning` shares one `Enrichments` map |
 | Can't find the hook in a trace | Telemetry provider not configured, or hook never matched its stage | Verify telemetry is initialized; look for span `pipeline.hook.<stage>.<name>` |
 
@@ -683,7 +814,9 @@ This hook pipeline applies to the normal `ProcessRequest` paths.
 hooks or store a post-hook `FinalResponse`; its synthesis record is model output
 only.
 
-That's the whole surface: four stages, one shared context, fail-open semantics. Wire a hook, confirm its span shows up in a trace, and build out from there. Happy hooking!
+That's the whole surface: four stages, one shared context, fail-open ordinary
+extensions, and one explicit fail-closed after-planning boundary. Wire a hook,
+confirm its span shows up in a trace, and build out from there. Happy hooking!
 
 ---
 

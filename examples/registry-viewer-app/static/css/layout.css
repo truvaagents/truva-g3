@@ -2064,6 +2064,33 @@ tr.expandable td:nth-child(2)::before {
     margin-bottom: 0;
 }
 
+.pipeline-hook-decision {
+    margin-top: 14px;
+    padding: 12px;
+    background: rgba(8, 12, 20, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+.pipeline-hook-decision-summary {
+    margin-top: 5px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.pipeline-hook-decision-details {
+    margin-top: 10px;
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+.pipeline-hook-decision-details summary { cursor: pointer; }
+.pipeline-hook-decision-details .dag-step-info { margin-top: 10px; }
+.pipeline-hook-placement-note {
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
 .pipeline-hook-effects {
     display: grid;
     gap: 10px;

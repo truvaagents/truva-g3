@@ -199,7 +199,9 @@ func TestActivityAnnouncementHook_ReportsSignalAndInjectedContext(t *testing.T) 
 	if _, err := hook.BeforePlanning(invocation.Context(ctx), pctx); err != nil {
 		t.Fatal(err)
 	}
-	invocation.Complete(PipelineHookSucceeded, nil)
+	invocation.Complete(PipelineHookSucceeded, nil, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "no_decision",
+	})
 
 	records := holder.Snapshot()
 	if len(records) != 1 || len(records[0].Effects) != 2 {

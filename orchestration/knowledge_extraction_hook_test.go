@@ -180,7 +180,9 @@ func TestKnowledgeExtractionHook_ExtractsAndStores(t *testing.T) {
 
 	// Call AfterSynthesis — extraction runs async
 	hook.AfterSynthesis(invocation.Context(ctx), &core.PipelineContext{Request: "investigate latency"}, "Found high latency caused by GC pressure")
-	invocation.Complete(PipelineHookSucceeded, nil)
+	invocation.Complete(PipelineHookSucceeded, nil, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "completed",
+	})
 
 	select {
 	case fragment := <-storedFragments:

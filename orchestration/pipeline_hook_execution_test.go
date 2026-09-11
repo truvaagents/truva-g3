@@ -38,7 +38,9 @@ func TestTerminalExecutionSnapshotIsRewrittenWhenAsyncEffectCompletes(t *testing
 	}); err != nil {
 		t.Fatalf("report pending effect: %v", err)
 	}
-	invocation.Complete(PipelineHookSucceeded, nil)
+	invocation.Complete(PipelineHookSucceeded, nil, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "completed",
+	})
 	orchestrator.storeExecutionWithFinalResponseAsync(
 		ctx, "request", "request-id", nil,
 		&ExecutionResult{Success: true}, "response",
@@ -58,6 +60,9 @@ func TestTerminalExecutionSnapshotIsRewrittenWhenAsyncEffectCompletes(t *testing
 	}
 
 	updated := <-store.records
+	assertPipelineHookDecision(t, updated.PipelineHooks[0].Decision, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "completed",
+	})
 	if got := updated.PipelineHooks[0].Effects[0]; got.Status != core.PipelineHookEffectSucceeded || string(got.Data) != string(finalData) {
 		t.Fatalf("updated effect = %#v", got)
 	}
@@ -85,14 +90,20 @@ func TestFailedRequestFallbackIsRewrittenWhenAsyncEffectCompletes(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("report pending effect: %v", err)
 	}
-	invocation.Complete(PipelineHookSucceeded, nil)
+	invocation.Complete(PipelineHookSucceeded, nil, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "no_decision",
+	})
 	orchestrator.ensureTerminalPipelineHookSnapshot(&executionRunState{
 		Input:       requestRunInput{Request: "request"},
 		Context:     ctx,
 		Correlation: requestCorrelation{RequestID: "failed-request-id"},
+		StartedAt:   time.Now().Add(-time.Second),
 	}, errors.New("request failed before producing an execution result"))
 
 	initial := <-store.records
+	if initial.Result == nil || initial.Result.Success || initial.Result.TotalDuration < time.Second {
+		t.Fatalf("fallback did not retain a failed terminal result: %+v", initial.Result)
+	}
 	if got := initial.PipelineHooks[0].Effects[0].Status; got != core.PipelineHookEffectPending {
 		t.Fatalf("initial effect status = %q", got)
 	}
@@ -104,11 +115,65 @@ func TestFailedRequestFallbackIsRewrittenWhenAsyncEffectCompletes(t *testing.T) 
 	}
 
 	updated := <-store.records
+	if !reflect.DeepEqual(updated.Result, initial.Result) {
+		t.Fatal("late effect changed the failed terminal result")
+	}
 	got := updated.PipelineHooks[0].Effects[0]
 	if got.Status != core.PipelineHookEffectFailed || got.Error != "provider unavailable" {
 		t.Fatalf("updated effect = %#v", got)
 	}
 	orchestrator.executionWg.Wait()
+}
+
+func TestHookTerminalFallbackPreservesOwnershipAndInterruption(t *testing.T) {
+	for _, scenario := range []string{"success", "no_hooks", "rich_publisher", "interruption", "partial_result"} {
+		t.Run(scenario, func(t *testing.T) {
+			o, _, _, store, _ := newRequiredHookRecordingFixture(t, nil)
+			holder := newPipelineHookExecutionHolder(&o.executionWg)
+			ctx := withPipelineHookExecutionHolder(t.Context(), holder)
+			if scenario != "no_hooks" {
+				invocation := beginPipelineHookInvocation(ctx, "observer", PipelineHookPhaseBeforePlanning, 1, 0, time.Now())
+				invocation.Complete(PipelineHookSucceeded, nil, PipelineHookDecision{PipelineHookFailOpen, PipelineHookContinue, "no_decision"})
+			}
+			state := &executionRunState{
+				Context: ctx, StartedAt: time.Now().Add(-time.Second),
+				Input: requestRunInput{Request: "request"}, Correlation: requestCorrelation{RequestID: "fallback-request"},
+			}
+			runErr := errors.New("request failed")
+			prior := &ExecutionResult{Success: true, Steps: []StepResult{{StepID: "completed", Success: true, Response: "exact prior result"}}}
+			checkpoint := &ExecutionCheckpoint{CheckpointID: "paused", Status: CheckpointStatusPending}
+			switch scenario {
+			case "success":
+				runErr = nil
+			case "rich_publisher":
+				holder.SetTerminalPublisher(100, func(uint64, []PipelineHookExecution) { t.Error("fallback replaced terminal publisher") })
+			case "interruption":
+				runErr = NewInterruptError(checkpoint)
+			case "partial_result":
+				state.Phase.Result = &phaseLoopResult{LastPlan: &RoutingPlan{PlanID: "admitted"}, CombinedResult: prior}
+			}
+			o.ensureTerminalPipelineHookSnapshot(state, runErr)
+			shutdownRequiredHookFixture(t, o)
+			records, _ := store.snapshot()
+			if scenario == "success" || scenario == "no_hooks" || scenario == "rich_publisher" {
+				if len(records) != 0 {
+					t.Fatalf("unexpected fallback record: %+v", records)
+				}
+				return
+			}
+			if len(records) != 1 {
+				t.Fatalf("records = %d", len(records))
+			}
+			got := records[0]
+			if scenario == "interruption" {
+				if !got.Interrupted || got.Checkpoint == nil || got.Checkpoint.CheckpointID != checkpoint.CheckpointID || got.Result != nil {
+					t.Fatalf("interruption converted to invented failure: %+v", got)
+				}
+			} else if got.Result == nil || got.Result.Success || !prior.Success || !reflect.DeepEqual(got.Result.Steps, prior.Steps) || got.Plan.PlanID != "admitted" {
+				t.Fatalf("partial work lost or mutated: %+v", got)
+			}
+		})
+	}
 }
 
 func TestOrderedPipelineHookExecutionPublisherRejectsStaleRevisions(t *testing.T) {
@@ -155,7 +220,9 @@ func TestPipelineHookEffectValidationAndDefensiveSnapshots(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("valid effect rejected: %v", err)
 	}
-	invocation.Complete(PipelineHookSucceeded, nil)
+	invocation.Complete(PipelineHookSucceeded, nil, PipelineHookDecision{
+		FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "no_decision",
+	})
 	payload[2] = 'X'
 
 	snapshot := holder.Snapshot()
@@ -207,6 +274,7 @@ func TestExecutionSnapshotCarriesRequestLocalPipelineHookDiagnostics(t *testing.
 		0,
 		startedAt,
 		nil,
+		PipelineHookDecision{FailurePolicy: PipelineHookFailOpen, Action: PipelineHookContinue, Reason: "completed"},
 	)
 
 	orchestrator.storeExecutionAsync(ctx, "request", "request-id", nil, nil, nil)
