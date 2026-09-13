@@ -455,8 +455,8 @@ NOT acceptable:
 module github.com/truvaagents/truva-g3/memory
 
 require (
-    github.com/truvaagents/truva-g3/core v0.4.0        // Required: interfaces and types
-    github.com/truvaagents/truva-g3/telemetry v0.4.0   // Allowed: observability
+    github.com/truvaagents/truva-g3/core v0.5.0        // Required: interfaces and types
+    github.com/truvaagents/truva-g3/telemetry v0.5.0   // Allowed: observability
     github.com/qdrant/go-client v1.19.0                // Qdrant gRPC client (Apache 2.0)
 )
 ```

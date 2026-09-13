@@ -3,10 +3,10 @@ module github.com/truvaagents/truva-g3/examples/scheduler-tool
 go 1.27.0
 
 require (
-	github.com/truvaagents/truva-g3/core v0.4.0
-	github.com/truvaagents/truva-g3/memory v0.4.0
-	github.com/truvaagents/truva-g3/orchestration v0.4.0
-	github.com/truvaagents/truva-g3/telemetry v0.4.0
+	github.com/truvaagents/truva-g3/core v0.5.0
+	github.com/truvaagents/truva-g3/memory v0.5.0
+	github.com/truvaagents/truva-g3/orchestration v0.5.0
+	github.com/truvaagents/truva-g3/telemetry v0.5.0
 )
 
 require (

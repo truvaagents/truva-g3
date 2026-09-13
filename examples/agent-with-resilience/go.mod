@@ -3,10 +3,10 @@ module github.com/truvaagents/truva-g3/examples/agent-with-resilience
 go 1.27.0
 
 require (
-	github.com/truvaagents/truva-g3/ai v0.4.0
-	github.com/truvaagents/truva-g3/core v0.4.0
-	github.com/truvaagents/truva-g3/resilience v0.4.0
-	github.com/truvaagents/truva-g3/telemetry v0.4.0
+	github.com/truvaagents/truva-g3/ai v0.5.0
+	github.com/truvaagents/truva-g3/core v0.5.0
+	github.com/truvaagents/truva-g3/resilience v0.5.0
+	github.com/truvaagents/truva-g3/telemetry v0.5.0
 )
 
 // Use local workspace modules for development
