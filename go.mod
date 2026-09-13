@@ -5,6 +5,7 @@ go 1.27.0
 require github.com/truvaagents/truva-g3/core v0.4.0
 
 require (
+	github.com/alicebob/miniredis/v2 v2.39.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/redis/go-redis/v9 v9.22.0 // indirect

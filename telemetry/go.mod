@@ -3,7 +3,7 @@ module github.com/truvaagents/truva-g3/telemetry
 go 1.27.0
 
 require (
-	github.com/alicebob/miniredis/v2 v2.38.0
+	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/truvaagents/truva-g3/core v0.4.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
