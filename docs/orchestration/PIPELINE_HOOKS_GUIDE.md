@@ -28,6 +28,12 @@ The extension points that let you inject context, short-circuit work, and post-p
 13. [Troubleshooting](#13-troubleshooting)
 14. [Further Reading](#14-further-reading)
 
+Practical recipes:
+
+- [Allow or reject a plan with a required hook](#74-recipe-allow-or-reject-a-plan)
+- [Report work performed by a hook](#75-recipe-report-a-hook-effect)
+- [Verify the result in a running agent](#131-verify-an-allowed-and-a-rejected-request)
+
 ---
 
 ## 1. Why This Guide Exists
@@ -38,6 +44,7 @@ Pipeline hooks are how you open that loop *without touching framework internals*
 
 - Inject retrieved context (RAG, memory, conversation history) into the prompt **before** the planner runs.
 - Return a cached answer and skip the entire pipeline (**short-circuit**).
+- Reject a plan before tools run, using an explicitly required `AfterPlanning` hook.
 - Record execution outcomes to memory or analytics **after** tools finish.
 - Filter, redact, or log the final response **after** synthesis.
 
@@ -227,6 +234,10 @@ func (*governedPlanHook) AfterPlanning(
 var _ core.AfterPlanningHook = (*governedPlanHook)(nil)
 var _ core.RequiredAfterPlanningHook = (*governedPlanHook)(nil)
 ```
+
+This shows the interface shape only; it does not enforce a rule. Use the
+[worked policy example](#74-recipe-allow-or-reject-a-plan) for an actual rejection,
+registration, and caller-side error handling.
 
 A required hook's error, wrong result type, clone failure, or invalid plan
 returns `*orchestration.RequiredAfterPlanningError`. The phase stops before its
@@ -524,11 +535,270 @@ func (h *RedactionHook) AfterSynthesis(ctx context.Context, pctx *core.PipelineC
 
 > **Tip: assert the contract at compile time**
 >
-> Because stages are discovered by type assertion, a typo in a method signature fails silently — your hook compiles, registers, and is simply skipped at runtime. Add a compile-time assertion so the mismatch becomes a build error instead. Several built-in hooks do this (e.g. `ConversationHistoryHook`, `UserMemoryEnrichmentHook`):
+> Ordinary stages are discovered by type assertion, so a typo in a method signature can silently skip that stage. A registered required after-planning marker instead makes stage mismatch a construction error. Add compile-time assertions in either case to catch mistakes earlier. Several built-in hooks do this (e.g. `ConversationHistoryHook`, `UserMemoryEnrichmentHook`):
 >
 > ```go
 > var _ core.BeforePlanningHook = (*RAGHook)(nil)
 > ```
+
+### 7.4 Recipe: allow or reject a plan
+
+Suppose an agent may read a stock quote, but must not submit a trade. The LLM
+proposes operations; application code decides which operations are permitted.
+The rule must use trusted application configuration, not an allow-list supplied
+in the user's prompt or in planner-generated metadata.
+
+This example checks the tool namespace, registered service name, and capability
+together. These identifiers are illustrative: replace them with the exact
+identities shown in your service registry. A matching name does not prove that
+a tool is safe; the application owner must trust the registered implementation.
+
+Put this code in an application file, for example `plan_policy.go`. It uses the
+same `core` and `orchestration` modules as your agent; no new service is needed.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/orchestration"
+)
+
+type Operation struct {
+	Namespace  string
+	Agent      string
+	Capability string
+}
+
+type CapabilityPolicy struct {
+	allowed map[Operation]bool
+}
+
+func NewCapabilityPolicy(allowed []Operation) *CapabilityPolicy {
+	// Copy the configuration once. Concurrent requests only read this map.
+	policy := &CapabilityPolicy{allowed: make(map[Operation]bool, len(allowed))}
+	for _, operation := range allowed {
+		policy.allowed[operation] = true
+	}
+	return policy
+}
+
+func (*CapabilityPolicy) Name() string                 { return "allowed-operations" }
+func (*CapabilityPolicy) RequireAfterPlanningSuccess() {}
+
+func (h *CapabilityPolicy) AfterPlanning(
+	ctx context.Context, pctx *core.PipelineContext, candidate interface{},
+) (interface{}, error) {
+	plan, ok := candidate.(*orchestration.RoutingPlan)
+	if !ok || plan == nil {
+		return nil, fmt.Errorf("expected a routing plan")
+	}
+	for _, step := range plan.Steps {
+		capability, ok := step.Metadata["capability"].(string)
+		operation := Operation{step.Namespace, step.AgentName, capability}
+		if !ok || capability == "" || !h.allowed[operation] {
+			return nil, fmt.Errorf("step %s uses an operation not allowed by this application", step.StepID)
+		}
+	}
+	return plan, nil
+}
+
+var _ core.AfterPlanningHook = (*CapabilityPolicy)(nil)
+var _ core.RequiredAfterPlanningHook = (*CapabilityPolicy)(nil)
+```
+
+At startup, add it to the dependency slice **before** calling the factory.
+Here `config` and `deps` are the configuration and dependencies your application
+already uses to construct its orchestrator:
+
+```go
+policy := NewCapabilityPolicy([]Operation{
+	{Namespace: "demo-tools", Agent: "stock-service", Capability: "stock_quote"},
+})
+deps.PipelineHooks = append(deps.PipelineHooks, policy)
+orch, err := orchestration.CreateOrchestrator(config, deps)
+if err != nil {
+	return err // Invalid registration must prevent application startup.
+}
+```
+
+Append after all ordinary `AfterPlanning` mutators. Do not append a second
+required hook. Other mandatory checks belong inside this one terminal hook.
+Hooks that participate only in other stages may follow it.
+
+At your normal request boundary, distinguish a policy failure from a successful
+answer. This block needs the standard-library `errors` import:
+
+```go
+response, err := orch.ProcessRequest(ctx, request, metadata)
+var rejected *orchestration.RequiredAfterPlanningError
+if errors.As(err, &rejected) {
+	// Map this to your application's denial/error response, not HTTP 200 success.
+	// HookName identifies the boundary; Cause retains the underlying failure.
+	return fmt.Errorf("request stopped by %s: %w", rejected.HookName, err)
+}
+if err != nil {
+	return err
+}
+// Only this branch may deliver response.Response as a successful answer.
+_ = response
+```
+
+Not every required-hook error is a deliberate policy denial: an internal hook
+error or invalid mutation also stops the request. If your API distinguishes
+denials from internal faults, return an application-defined typed error from
+the hook and inspect it through the error chain. Do not expose internal causes
+to an untrusted client without an application decision to do so.
+
+You can first check the rule without Redis or an LLM. Save this as
+`plan_policy_test.go` beside the hook and run `go test -run TestCapabilityPolicy`:
+
+```go
+package main
+
+import (
+	"context"
+	"testing"
+
+	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/orchestration"
+)
+
+func TestCapabilityPolicy(t *testing.T) {
+	hook := NewCapabilityPolicy([]Operation{
+		{Namespace: "demo-tools", Agent: "stock-service", Capability: "stock_quote"},
+	})
+	for _, capability := range []string{"stock_quote", "execute_trade"} {
+		t.Run(capability, func(t *testing.T) {
+			plan := &orchestration.RoutingPlan{Steps: []orchestration.RoutingStep{{
+				StepID: "step-1", Namespace: "demo-tools", AgentName: "stock-service",
+				Metadata: map[string]interface{}{"capability": capability},
+			}}}
+			_, err := hook.AfterPlanning(context.Background(), &core.PipelineContext{}, plan)
+			wantDenied := capability == "execute_trade"
+			if (err != nil) != wantDenied {
+				t.Fatalf("capability=%s error=%v; want denied=%v", capability, err, wantDenied)
+			}
+		})
+	}
+}
+```
+
+This tests the application's rule only. It does not test the factory, planner,
+or fail-closed request boundary. Verify those with the running-agent exercise
+in [§13.1](#131-verify-an-allowed-and-a-rejected-request).
+
+The hook checks the proposed operation, not every possible parameter or later
+change in authority. Enforce parameter-level permissions and time-sensitive
+authorization in the application/tool as well. In particular, an approved HITL
+checkpoint resumes without running `AfterPlanning` again.
+
+### 7.5 Recipe: report a hook effect
+
+An invocation record answers **"Did the hook return successfully?"** An effect
+record answers **"What work did the hook attempt, and what result did it observe?"**
+These are different when a hook submits background work.
+
+The following application hook submits an audit write. `Submit` is an
+application-owned worker/queue function, not a new framework API. Its contract
+is: return an error if submission failed; otherwise call `done` when the write
+finishes. It must handle bounded admission, cancellation, and shutdown. The
+hook copies the small amount of data the writer needs, so background work does
+not retain a mutable framework result.
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/orchestration"
+)
+
+type AuditRecord struct {
+	StepCount int `json:"step_count"`
+}
+
+type AuditHook struct {
+	Submit func(context.Context, AuditRecord, func(error)) error
+}
+
+func (*AuditHook) Name() string { return "application-audit" }
+
+func (h *AuditHook) AfterExecution(ctx context.Context, pctx *core.PipelineContext, value interface{}) error {
+	execution, ok := value.(*orchestration.ExecutionResult)
+	if !ok || execution == nil || h.Submit == nil {
+		return fmt.Errorf("audit hook requires execution results and a submitter")
+	}
+	record := AuditRecord{StepCount: len(execution.Steps)}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	started := time.Now()
+	effect := core.PipelineHookEffect{
+		EffectID: "audit-write", SchemaVersion: 1, Name: "Application audit write",
+		Status: core.PipelineHookEffectPending, Data: data, StartedAt: started,
+	}
+	// Announce before returning; later callbacks may update this same effect ID.
+	_ = core.ReportPipelineHookEffect(ctx, effect)
+	var once sync.Once
+	done := func(writeErr error) {
+		once.Do(func() {
+			final := effect
+			final.Duration = time.Since(started)
+			final.Status = core.PipelineHookEffectSucceeded
+			final.Summary = "Audit writer acknowledged completion"
+			if writeErr != nil {
+				final.Status = core.PipelineHookEffectFailed
+				final.Error = writeErr.Error()
+				final.Summary = "Audit writer reported failure"
+			}
+			_ = core.ReportPipelineHookEffect(ctx, final)
+		})
+	}
+	if err := h.Submit(ctx, record, done); err != nil {
+		done(err)
+		return err
+	}
+	return nil
+}
+
+var _ core.AfterExecutionHook = (*AuditHook)(nil)
+```
+
+Register `&AuditHook{Submit: yourSubmitter}` in `deps.PipelineHooks`. A simple
+synchronous submitter may perform the write and call `done` before returning;
+an asynchronous one may complete later. Keeping `ctx` for the effect reporter
+does not require a background write to inherit request cancellation. Your
+worker owns that choice. Drain accepted work before closing the orchestrator
+and its stores; an in-memory callback does not survive a process crash. If the
+worker creates tracing spans, follow the linked-span pattern in the
+[Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md).
+
+Expected evidence:
+
+| Point in time | Hook invocation | Effect `audit-write` |
+|---|---|---|
+| Submission accepted; write still running | `succeeded` after the hook returns | `pending` |
+| Writer reports success | Still `succeeded` | `succeeded` |
+| Writer later reports failure | Still `succeeded` | `failed`, with the writer's error |
+| Submission fails immediately | `failed`; ordinary hook remains fail-open | `failed` |
+
+The framework records what the writer reports; it does not independently prove
+the audit database committed the write. Effect-reporting errors are diagnostic
+and must not change the business outcome. Capture them through your application's
+diagnostic logger if needed. Payloads and errors are stored as supplied: choose
+what may be retained before reporting them. With execution recording disabled,
+reporting is a no-op.
 
 ---
 
@@ -807,7 +1077,44 @@ There is no exported NoOp hook in non-test code; if you want one for tests, the 
 | Hook ran but its work was overwritten | Another hook later in the slice mutated the same enrichment key or chained response | Reorder the slice; remember `AfterSynthesis` chains and `BeforePlanning` shares one `Enrichments` map |
 | Can't find the hook in a trace | Telemetry provider not configured, or hook never matched its stage | Verify telemetry is initialized; look for span `pipeline.hook.<stage>.<name>` |
 
-To verify a hook fired, look in Jaeger for its span (`pipeline.hook.before_planning.<name>`) or grep agent logs for the hook name. The DAG/registry-viewer debug UI surfaces `BeforePlanning` activity under its **Pre-Execution** tab and `AfterSynthesis` activity under **Post-Execution** — see the [Dev Tools Guide](../operations/DEV_TOOLS_GUIDE.md).
+To verify a hook fired, look in Jaeger for its span (`pipeline.hook.before_planning.<name>`). Successful hooks need not emit a log line. The DAG/registry-viewer debug UI surfaces `BeforePlanning` and `AfterPlanning` activity under **Pre-Execution**, and `AfterExecution` and `AfterSynthesis` activity under **Post-Execution** — see the [Dev Tools Guide](../operations/DEV_TOOLS_GUIDE.md).
+
+### 13.1 Verify an allowed and a rejected request
+
+1. Enable execution recording (`TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`) before
+   constructing the orchestrator, and supply its execution backend. Register
+   the hook through `deps.PipelineHooks`; recording configuration alone does
+   not register it. Enable tracing through the agent's normal telemetry setup.
+   LLM-debug recording is optional and separate from hook recording.
+2. Deploy your modified agent using its `./setup.sh rebuild`. Submit through
+   its normal JSON or streaming endpoint, not `ExecutePlanWithSynthesis`.
+3. Ask for an allowed operation, such as a stock quote. Save the request ID and
+   confirm the actual planner-selected identity matches your allow-list.
+4. Ask for a disallowed operation that is **discoverable and can produce a
+   valid plan**. A planner refusal or an unavailable tool does not exercise the
+   hook. Use a harmless mock tool for this exercise, never a live trade or
+   destructive operation. A temporary deny-all application configuration can
+   also exercise rejection against the same read-only operation.
+5. Open Registry Viewer, find the request in **Execution DAG**, and inspect
+   the `allowed-operations` card under **Pre-Execution**. Follow the trace link
+   to `pipeline.hook.after_planning.allowed-operations` in Jaeger.
+
+These are expected results, not captured live-run evidence:
+
+| Evidence | Allowed plan | First-phase hook rejection |
+|---|---|---|
+| Hook invocation | `succeeded` | `failed`, with the application error |
+| Recorded decision | `fail_closed / continue / accepted` | `fail_closed / terminate / hook_error` |
+| Tools and HITL | May proceed normally | No tool call or checkpoint from this phase |
+| Stored execution | Final status depends on later work | Failed request, zero executed steps, hook evidence retained |
+| Client result | Normal result if later work succeeds | Error/denial, not a synthesized success answer |
+
+A later-phase rejection preserves earlier completed work; it cannot undo it.
+The rejected candidate is not an accepted executable plan, so do not expect a
+tool-node DAG for it. The hook failure should remain visible. If using the audit
+recipe, also inspect **Post-Execution** before and after its callback finishes:
+the same effect should change status, not create a second effect card. An
+`AfterExecution` hook will not run when rejection prevents execution entirely.
 
 This hook pipeline applies to the normal `ProcessRequest` paths.
 `ExecutePlanWithSynthesis` is workflow mode and currently does not invoke these
