@@ -24,7 +24,7 @@ Auto-discovery is what lets you deploy a new tool to your cluster and have exist
   - [End-to-End Flow](#end-to-end-flow)
 - [How Components Register](#how-components-register)
   - [The Registration Record (`ServiceInfo`)](#the-registration-record-serviceinfo)
-  - [What the Registry Stores: Four Key Types](#what-the-registry-stores-four-key-types)
+  - [What the Registry Stores: Versioned, Co-Located Key Types](#what-the-registry-stores-versioned-co-located-key-types)
   - [Atomic Registration](#atomic-registration)
   - [Address Resolution: Pod IP vs Service DNS](#address-resolution-pod-ip-vs-service-dns)
 - [How Agents Discover Tools and Other Agents](#how-agents-discover-tools-and-other-agents)
