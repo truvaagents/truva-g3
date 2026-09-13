@@ -1,6 +1,28 @@
 # Changelog
 
-## Unreleased — DB-0 API cleanup
+## Unreleased — v0.5.0 preparation
+
+The release is not yet published. See the [root changelog](../CHANGELOG.md)
+for the cross-module release summary.
+
+### Redis/Valkey topology and keyspaces
+
+- Add shared standalone, Sentinel, and cluster connection configuration and
+  client construction. Use DB 0 and validated `RedisKeyspace` values to isolate
+  deployments and build same-slot keys. This replaces the v0.4.0 numbered-DB
+  layout; no automatic data migration is provided.
+- Preserve ownership boundaries: constructors that create clients own their
+  lifetime; injected clients remain the application's responsibility.
+
+### Pipeline contracts
+
+- Add `RequiredAfterPlanningHook`, a required-intent marker independent of the
+  stage method, so orchestration can reject signature drift at construction.
+- Add application-reported pipeline effects and explicit short-circuit
+  decision contracts. Payload capture is opt-in and does not perform
+  framework-inferred redaction.
+
+### DB-0 API cleanup
 
 - `ResolveRedisConnectionConfig` returns `RedisConnectionConfig` directly;
   remove callers' `.Config` access. The diagnostics wrapper and startup
@@ -18,4 +40,5 @@
 
 This author-approved development cleanup needs no compatibility interval or
 data migration. The canonical DB-0 schema and client-ownership contract are
-unchanged; see the [root changelog](../CHANGELOG.md).
+unchanged by the subsequent API cleanup, not by the full v0.4.0-to-v0.5.0
+transition; see the [root changelog](../CHANGELOG.md).

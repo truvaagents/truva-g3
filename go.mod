@@ -2,7 +2,7 @@ module github.com/truvaagents/truva-g3
 
 go 1.27.0
 
-require github.com/truvaagents/truva-g3/core v0.4.0
+require github.com/truvaagents/truva-g3/core v0.5.0
 
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0 // indirect

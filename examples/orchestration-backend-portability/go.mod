@@ -8,9 +8,9 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/nats-io/nats.go v1.53.1
 	github.com/redis/go-redis/v9 v9.22.0
-	github.com/truvaagents/truva-g3/core v0.4.0
-	github.com/truvaagents/truva-g3/orchestration v0.4.0
-	github.com/truvaagents/truva-g3/telemetry v0.4.0
+	github.com/truvaagents/truva-g3/core v0.5.0
+	github.com/truvaagents/truva-g3/orchestration v0.5.0
+	github.com/truvaagents/truva-g3/telemetry v0.5.0
 )
 
 require (
