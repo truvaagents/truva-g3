@@ -135,7 +135,20 @@ defer hitl.Close()  // Clean up on shutdown
 orch.SetInterruptController(hitl.Controller)
 
 // 4. Register the HTTP endpoints for approval commands
-hitlHandler := orchestration.NewHITLHandler(hitl.Controller, hitl.CheckpointStore)
+resumeConfig := orchestration.DefaultResumeCoordinatorRuntimeConfig()
+coordinator, err := orchestration.NewResumeCoordinator(
+    hitl.CheckpointStore,
+    orchestration.ResumeExecutorFunc(func(ctx context.Context, cp *orchestration.ExecutionCheckpoint) (*orchestration.ExecutionResult, error) {
+        _, execution, err := orch.ProcessRequestWithExecution(ctx, cp.OriginalRequest, cp.UserContext)
+        return execution, err
+    }),
+    resumeConfig,
+)
+if err != nil { log.Fatal(err) }
+hitlHandler, err := orchestration.NewHITLHandler(
+    hitl.Controller, hitl.CheckpointStore, orchestration.WithHITLResumer(coordinator),
+)
+if err != nil { log.Fatal(err) }
 agent.RegisterHITLCapabilities(hitlHandler)
 ```
 
@@ -143,7 +156,8 @@ The `SetupHITL` function creates four components that work together:
 1. **CheckpointStore**: Saves execution state to Redis when HITL pauses
 2. **CommandStore**: Receives approval/rejection decisions via Pub/Sub
 3. **Policy**: Decides when to pause (based on your configuration)
-4. **Controller**: Coordinates everything
+4. **Controller**: Creates interruptions and saves human decisions
+5. **ResumeCoordinator**: Claims an approved checkpoint, runs the application adapter, and saves its actual outcome. Construct it separately with the same checkpoint store.
 
 For a runnable compatibility example, see
 [hitl_setup.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/hitl_setup.go).
@@ -241,14 +255,14 @@ Executing plan:
     [HITL PAUSES HERE - "on_error"]
          │
          ▼
-    Human reviews: Retry? Skip? Abort?
+    Human reviews: Approve another attempt? Reject? Abort?
 ```
 
 Enable with: `TRUVAG3_HITL_ESCALATE_AFTER_RETRIES=3`
 
 When the configured number of retries is exceeded, the checkpoint includes the error details and allows the human to:
-- **Retry**: Try the step again
-- **Skip**: Skip this step and continue with the plan
+- **Approve**: Permit another attempt at the interrupted step
+- **Reject**: Stop the execution
 - **Abort**: Stop the entire workflow
 
 **4. Reserved Interrupt Points**
@@ -356,48 +370,18 @@ If you forget to set the mode, HITL logs a warning and uses the default from `TR
 
 ### The Resume Handler
 
-When the user approves, the frontend calls your resume endpoint. This handler needs to:
+The application route calls `ResumeCoordinator.ResumeExecution`, or
+`ResumeWithExecutor` for a request-local SSE callback. The coordinator claims
+the saved approval and passes the complete restored context to the adapter.
 
-1. Load the checkpoint from Redis
-2. Set up the context with the saved state
-3. Re-run the orchestrator
+The adapter calls the existing result-bearing processing method. It does not
+replan independently or write a completed status. The framework reuses the
+stored plan and completed steps, preserving approved parameters and skills.
 
-Here's the critical part - setting up the context:
-
-```go
-// 1. Mark this as a resume (so HITL doesn't pause at the same point again)
-ctx = orchestration.WithResumeMode(ctx, checkpointID)
-
-// 2. Use the stored plan (critical - step IDs must match)
-ctx = orchestration.WithPlanOverride(ctx, checkpoint.Plan)
-
-// 3. Inject completed steps (so we don't redo work)
-if len(checkpoint.StepResults) > 0 {
-    ctx = orchestration.WithCompletedSteps(ctx, checkpoint.StepResults)
-}
-
-// 4. For step-level approval, inject the approved parameters
-if checkpoint.ResolvedParameters != nil && checkpoint.CurrentStep != nil {
-    ctx = orchestration.WithPreResolvedParams(
-        ctx,
-        checkpoint.ResolvedParameters,
-        checkpoint.CurrentStep.StepID,
-    )
-}
-
-// 5. Re-process the original request with this enriched context
-err = t.ProcessWithStreaming(ctx, sessionID, checkpoint.OriginalRequest, callback)
-```
-
-**Why is `WithPlanOverride` critical?**
-
-Without it, the orchestrator would generate a NEW plan. The step IDs would be different, and `WithCompletedSteps` wouldn't know which steps to skip. By injecting the original plan, step IDs stay stable.
-
-**What happens if HITL pauses again?**
-
-If there are multiple sensitive steps, resuming might trigger another checkpoint. That's fine! The handler will return `IsInterrupted(err) == true` again, and the frontend can show another approval dialog. This is called "chained approvals."
-
-See [handlers.go:handleResumeSSE](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go) for the complete implementation.
+A second interruption becomes a new checkpoint only after the parent is saved
+as `continued`. An error during that save must remain an error, even if it
+wraps an interruption. See [Implementing Resume Handlers](#implementing-resume-handlers-agent-specific)
+for construction, transport contracts, and cancellation behavior.
 
 ---
 
@@ -515,18 +499,18 @@ async function resumeExecution(checkpointId) {
         'Accept': 'text/event-stream'
     };
 
-    // Important: Send the original request_id for trace correlation
-    // This lets you find all related traces in Jaeger
-    if (originalRequestId) {
-        headers['X-Truvag3-Original-Request-ID'] = originalRequestId;
-    }
+    // The coordinator restores lineage from the saved checkpoint.
 
     const response = await fetch(`${backendUrl}/hitl/resume/${checkpointId}`, {
         method: 'POST',
         headers
     });
 
-    // Process SSE stream (use the same handler as initial request!)
+    if (!response.ok) {
+        const failure = await response.json();
+        throw new Error(failure.code + ': ' + failure.error);
+    }
+    // A 200 stream handshake is not completion. Require a terminal event.
     await processSSEStream(response);
 }
 ```
@@ -535,90 +519,17 @@ The resume stream uses the same event format as the initial request, so you can 
 
 See [hitl.html](https://github.com/truvaagents/truva-g3/blob/main/examples/chat-ui/hitl.html) for the complete frontend implementation.
 
-### Editing Plans and Parameters
+### Supported human commands
 
-Beyond simple approve/reject, users can modify plans or step parameters before proceeding. The `edit` command lets them do this.
+The default controller and HTTP handler support **approve**, **reject**, and
+**abort**. They reject **edit**, **skip**, **retry**, and **respond** with HTTP
+400 and code `unsupported_command`, before changing state or publishing a
+command. Their enum values and data fields do not imply an implemented workflow.
 
-**Frontend: Editing a Plan**
-
-```javascript
-async function submitEditedPlan(checkpointId, editedPlan) {
-    const response = await fetch(`${backendUrl}/hitl/command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            checkpoint_id: checkpointId,
-            type: 'edit',
-            edited_plan: editedPlan  // Modified plan structure
-        })
-    });
-
-    const result = await response.json();
-    if (result.should_resume) {
-        await resumeExecution(checkpointId);
-    }
-}
-```
-
-**Frontend: Editing Step Parameters**
-
-For step-level approval, users might want to modify parameters:
-
-```javascript
-async function submitEditedParams(checkpointId, editedParams) {
-    const response = await fetch(`${backendUrl}/hitl/command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            checkpoint_id: checkpointId,
-            type: 'edit',
-            edited_params: editedParams  // e.g., { "symbol": "AAPL", "quantity": 50 }
-        })
-    });
-
-    const result = await response.json();
-    if (result.should_resume) {
-        await resumeExecution(checkpointId);
-    }
-}
-```
-
-**Backend: Handling Edited Plans**
-
-The controller automatically handles edited plans. When you call `ProcessCommand` with an `edit` type:
-
-1. Status changes to `edited`
-2. `result.ModifiedPlan` contains the edited plan
-3. On resume, `BuildResumeContext` uses the edited plan
-
-For edited parameters, the modified values are stored in the checkpoint and used during resume via `WithPreResolvedParams`.
-
-**UI Example: Parameter Editor**
-
-```javascript
-function showEditDialog(checkpoint) {
-    const params = checkpoint.resolved_parameters;
-
-    // Build edit form
-    const form = document.createElement('form');
-    for (const [key, value] of Object.entries(params)) {
-        form.innerHTML += `
-            <label>${key}:</label>
-            <input name="${key}" value="${value}" />
-        `;
-    }
-
-    // On submit
-    form.onsubmit = (e) => {
-        e.preventDefault();
-        const editedParams = {};
-        new FormData(form).forEach((v, k) => editedParams[k] = v);
-        submitEditedParams(checkpoint.checkpoint_id, editedParams);
-    };
-}
-```
-
----
+An approval continues the stored plan and approved parameters unchanged.
+An `on_error` approval permits another attempt at the interrupted step;
+it does not grant a separate edit/skip/retry protocol. Applications needing
+those protocols must design and validate them explicitly.
 
 ## Non-Streaming API
 
@@ -802,10 +713,10 @@ HITL endpoints are split between framework-provided and agent-specific:
 | `POST /hitl/command` | **Framework** | Generic approval logic |
 | `GET /hitl/checkpoints` | **Framework** | Generic checkpoint listing |
 | `GET /hitl/checkpoints/{id}` | **Framework** | Generic checkpoint retrieval |
-| `POST /hitl/resume/{id}` | **Agent** | Needs to call agent's `ProcessWithStreaming` |
-| `POST /hitl/resume-sync/{id}` | **Agent** | Needs to call agent's `ProcessSync` |
+| `POST /hitl/resume/{id}` | **Framework or agent transport** | The framework JSON handler uses an injected resumer; an SSE adapter uses the same coordinator |
+| `POST /hitl/resume-sync/{id}` | **Agent** | Uses the coordinator with the agent's buffered processing adapter |
 
-The resume endpoints are agent-specific because they need to call your agent's processing method to continue execution. The framework provides the handlers for command and checkpoint operations via `orchestration.HITLHandler`.
+Resume lifecycle ownership belongs to the framework. Applications supply their processing adapter and optional streaming or queued transport; they do not write completion statuses themselves.
 
 ### Registering Framework Endpoints
 
@@ -813,15 +724,17 @@ Create an `HITLHandler` and register its routes:
 
 ```go
 // Create the handler with controller and checkpoint store
-hitlHandler := orchestration.NewHITLHandler(
+hitlHandler, err := orchestration.NewHITLHandler(
     hitl.Controller,
     hitl.CheckpointStore,
     orchestration.WithHITLHandlerLogger(logger),      // Optional
     orchestration.WithHITLHandlerTelemetry(telemetry), // Optional
+    orchestration.WithHITLResumer(coordinator),         // Optional resume route
 )
+if err != nil { return err }
 
 // Option 1: Use RegisterRoutes for automatic registration
-hitlHandler.RegisterRoutes(mux)  // Registers /hitl/command, /hitl/checkpoints, /hitl/checkpoints/{id}
+hitlHandler.RegisterRoutes(mux)  // Includes /hitl/resume/ only when a resumer is supplied
 
 // Option 2: Register handlers individually for more control
 mux.HandleFunc("/hitl/command", hitlHandler.HandleCommand)
@@ -835,88 +748,145 @@ For a complete example, see [chat_agent.go:RegisterHITLCapabilities](https://git
 
 ### Implementing Resume Handlers (Agent-Specific)
 
-Your resume handler needs to: load the checkpoint, build a context with the saved state, and call your agent's processing method. The framework provides helpers to make this straightforward.
-
-**Option 1: Use `BuildResumeContext` (Recommended)**
-
-The simplest approach - one function call handles all context setup:
-
-```go
-func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
-    ctx := r.Context()
-    checkpointID := extractCheckpointID(r)  // Your URL parsing
-
-    // 1. Load checkpoint from store
-    checkpoint, err := a.checkpointStore.LoadCheckpoint(ctx, checkpointID)
-    if err != nil {
-        http.Error(w, "Checkpoint not found", http.StatusNotFound)
-        return
-    }
-
-    // 2. Build resume context (handles all the plumbing)
-    resumeCtx, endResumeSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-    defer endResumeSpan()
-
-    // 3. Re-process the original request
-    err = a.ProcessRequest(resumeCtx, checkpoint.OriginalRequest, callback)
-
-    // 4. Handle potential chained interrupts
-    if orchestration.IsInterrupted(err) {
-        // Another HITL checkpoint - send it to frontend
-        newCheckpoint := orchestration.GetCheckpoint(err)
-        sendCheckpointResponse(w, newCheckpoint)
-        return
-    }
-    // ... handle success or error
-}
-```
-
-`BuildResumeContext` ([hitl_helpers.go:141](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_helpers.go#L141)) automatically:
-- Validates the checkpoint has a resumable status
-- Sets resume mode (`WithResumeMode`)
-- Injects the stored plan (`WithPlanOverride`)
-- Injects completed step results (`WithCompletedSteps`)
-- Injects pre-resolved parameters for step-level resume (`WithPreResolvedParams`)
-- Preserves request mode and user context
-- Validates and restores canonical `conversation_id` to core context,
-  checkpoint metadata, and metric-ineligible W3C Baggage when present
-- Starts a `hitl.resume` span linked to the original trace; the caller must
-  invoke the returned cleanup function
-
-**Option 2: Manual Context Building**
-
-For more control, use the individual helpers:
+Use `ResumeCoordinator` for synchronous HTTP, streaming, delegation, and
+queued work. It borrows a `CheckpointResumePersistence` and a
+`ResumeExecutor`; the latter calls your normal application processing method.
+With the included Redis provider, the checkpoint adapter implements both the
+ordinary persistence and resume contracts.
 
 ```go
-// Mark as resume (prevents re-triggering the same checkpoint)
-ctx = orchestration.WithResumeMode(ctx, checkpointID)
-
-// CRITICAL: Use stored plan (step IDs must match for skip logic)
-ctx = orchestration.WithPlanOverride(ctx, checkpoint.Plan)
-
-// Skip already-completed steps
-if len(checkpoint.StepResults) > 0 {
-    ctx = orchestration.WithCompletedSteps(ctx, checkpoint.StepResults)
-}
-
-// For step-level approval: use the approved parameter values
-if checkpoint.ResolvedParameters != nil && checkpoint.CurrentStep != nil {
-    ctx = orchestration.WithPreResolvedParams(
-        ctx,
-        checkpoint.ResolvedParameters,
-        checkpoint.CurrentStep.StepID,
+executor := orchestration.ResumeExecutorFunc(func(
+    ctx context.Context, checkpoint *orchestration.ExecutionCheckpoint,
+) (*orchestration.ExecutionResult, error) {
+    // Use the real terminal result; successful tool steps alone are not success.
+    _, execution, err := orchestrator.ProcessRequestWithExecution(
+        ctx, checkpoint.OriginalRequest, checkpoint.UserContext,
     )
-}
+    return execution, err
+})
+config, err := orchestration.LoadResumeCoordinatorRuntimeConfigFromEnvironment(
+    orchestration.DefaultResumeCoordinatorRuntimeConfig(), os.LookupEnv,
+)
+if err != nil { return err }
+coordinator, err := orchestration.NewResumeCoordinator(
+    checkpointStore, executor, config, orchestration.WithResumeLogger(logger),
+)
+if err != nil { return err }
 
-// Preserve request mode for expiry behavior
-if checkpoint.RequestMode != "" {
-    ctx = orchestration.WithRequestMode(ctx, checkpoint.RequestMode)
-}
+// At the request boundary:
+_, err = coordinator.ResumeExecution(ctx, checkpointID)
+return err
 ```
+
+If using composed backends, validate `BackendFeatureHITLResume` and obtain
+`backends.CheckpointResume()`. Do not construct a second Redis client or use a
+different DB for resumption.
+
+#### What the coordinator owns
+
+When using `BaseAgent`, construct `core.NewFramework` before passing
+`agent.Logger` to the coordinator or other long-lived HITL dependencies.
+`NewBaseAgent` initially supplies a no-op logger; host construction installs
+the configured logger. Dependencies retain the logger they receive.
+
+```text
+pending --approve--> approved --claim--> resuming --success--> completed
+                                               |
+                                               +--new checkpoint--> continued
+                                               |                    |
+                                               |                    +--> successor checkpoint
+                                               +--failure, no child--> approved
+```
+
+- Only `approved` and `expired_approved` may start an attempt. An existing
+  `resuming` record may be recovered after its lease expires.
+- A concurrent owner receives `resume_in_progress`; it runs no application
+  work. Each acquired attempt has an internal identity and a renewable lease.
+- The coordinator calls `BuildResumeContext` once. The adapter receives the
+  stored plan, completed results, approved parameters, pinned skill state,
+  request mode, metadata, and linked trace context.
+- Already completed steps are reused. The checkpoint-approved plan does not
+  rerun `AfterPlanning`; adopters must revalidate time-sensitive authority at
+  the action boundary when governance can change during an approval window.
+- Success means a real successful **terminal** `ExecutionResult`, no error,
+  and successful persistence. Synthesis, hooks, and in-execution stream
+  callback delivery are part of that result. Never infer it from `err == nil`
+  or tool results alone.
+- A second interruption reserves and saves one successor. The parent becomes
+  terminal `continued`, not `completed`. Recovery returns the saved child
+  without replaying the parent's work.
+- Ordinary failure without a child releases the claim to its previous approval
+  status. Ownership loss, ambiguous persistence failure, and panic do not
+  authorize immediate replay. Tools may already have acted.
+- Generic saves, stale command decisions, and deletion cannot overwrite an
+  owned attempt. Deletion of a `resuming` checkpoint is rejected even after
+  lease expiry; recover the attempt first.
+- Claim/renew/finalize preserve the record's remaining storage TTL. Lease
+  renewal does **not** extend record retention or the human decision window.
+
+#### HTTP and SSE outcomes
+
+| Result | JSON transport | Streaming transport |
+|---|---|---|
+| Persisted completion | 200 with result | One `done` event, after finalization |
+| Persisted continuation | 202 with `interrupted: true` and public checkpoint | One `checkpoint` event with the authoritative successor |
+| Another live owner | 409 `resume_in_progress` | Same JSON rejection before stream headers |
+| Unapproved or terminal | 409 `resume_not_resumable` | Same JSON rejection before stream headers |
+| Ownership lost after claim | 409 `resume_claim_lost`; work may have executed | JSON before headers, otherwise terminal `error` with `retryable: false` |
+| Other post-claim failure | 500 `resume_failed`; inspect execution evidence | JSON before headers, otherwise terminal `error` with `retryable: false` |
+
+An SSE HTTP 200 only confirms that streaming started. Progress chunks and
+`finish` are not final business outcomes. A stream that ends without `done`,
+`checkpoint`, or `error` has an unknown outcome; do not resubmit automatically.
+Use `ResumeWithExecutor` with a request-local callback for SSE, forwarding
+progress but holding terminal events until the coordinator returns.
+
+The final JSON response or SSE `done` acknowledgement is sent **after** durable
+completion. If that acknowledgement is lost, the checkpoint may already be
+`completed`. Reload its state and inspect execution evidence before retrying;
+failure to receive the acknowledgement does not undo completed work.
+
+A lifecycle error can wrap an interruption. Check
+`errors.As(err, &lifecycle)` for `*ErrCheckpointResumeLifecycle` **before**
+using `IsInterrupted`; failed finalization is not a successful continuation.
+`HITLErrorResponse` supplies the shared stable error mapping.
+
+#### Cancellation, ownership, and public data
+
+HTTP/SSE work uses the caller's request context. A disconnect cancels active
+execution cooperatively. Queued work uses the worker's independent task
+context, so closing the submitting HTTP request does not cancel an accepted
+task; its own deadline and shutdown still apply. The coordinator joins its
+per-call renewal worker before returning or propagating a panic.
+
+After execution settles, cleanup uses a bounded detached context to persist
+the outcome. A disconnected client may not receive it: inspect the stored
+checkpoint and trace before deciding to retry. The coordinator owns no
+background resources between calls and needs no `Close()`; hosts drain
+requests before closing borrowed dependencies.
+
+`CheckpointResponseFrom` projects checkpoints at the HTTP/SSE boundary.
+It preserves application data and exposes parent/successor navigation, but
+does not expose attempt IDs, lease deadlines, process owners, or reservations.
+Full ownership remains in persistence and internal observability. This is
+explicit protocol field selection, not payload redaction.
+
+#### Resume configuration
+
+Load these settings explicitly at application startup with
+`LoadResumeCoordinatorRuntimeConfigFromEnvironment`. Constructing the
+coordinator itself never reads environment variables.
+
+| Setting | Default | Validation |
+|---|---|---|
+| `TRUVAG3_HITL_RESUME_CLAIM_LEASE` | `30s` | 3 seconds–24 hours |
+| `TRUVAG3_HITL_RESUME_CLEANUP_TIMEOUT` | `5s` | Positive, at most 1 minute and at most one third of the lease |
+
+Renewal runs every one third of the lease while executing, plus once before
+finalization. These settings do not replace `TRUVAG3_HITL_DEFAULT_TIMEOUT`
+or the checkpoint storage TTL. Constructors reject nil/typed-nil dependencies
+and invalid explicit options. Omitting `WithHITLResumer` leaves command/query
+routes available but registers no resume route.
 
 **Framework Helpers Reference:**
 
@@ -924,7 +894,7 @@ if checkpoint.RequestMode != "" {
 
 | Helper | Purpose |
 |--------|---------|
-| `BuildResumeContext(ctx, checkpoint)` | Returns the resume context, linked-span cleanup function, and error (recommended) |
+| `BuildResumeContext(ctx, checkpoint)` | Lower-level context/link helper called by the coordinator; does not claim or finalize |
 | `WithResumeMode(ctx, checkpointID)` | Marks context as resume, prevents re-interrupt |
 | `WithPlanOverride(ctx, plan)` | Injects stored plan (critical for step ID matching) |
 | `WithCompletedSteps(ctx, results)` | Skips already-executed steps |
@@ -956,18 +926,18 @@ if checkpoint.RequestMode != "" {
 
 | Helper | Purpose |
 |--------|---------|
-| `IsResumableStatus(status)` | Returns true for: approved, edited, expired_approved |
-| `IsTerminalStatus(status)` | Returns true for: completed, rejected, aborted, expired, expired_rejected, expired_aborted |
+| `IsResumableStatus(status)` | Returns true for: approved, expired_approved |
+| `IsTerminalStatus(status)` | Returns true for: continued, completed, rejected, aborted, expired, expired_rejected, expired_aborted |
 | `IsPendingStatus(status)` | Returns true for: pending (awaiting human response) |
 
 *Key Types & Constants* ([hitl_interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_interfaces.go))
 
 | Type | Values | Purpose |
 |------|--------|---------|
-| `CheckpointStatus` | `preparing`, `pending`, `approved`, `rejected`, `edited`, `completed`, `aborted`, `expired`, `expired_approved`, `expired_rejected`, `expired_aborted` | Checkpoint lifecycle states; `preparing` is framework-owned and transient |
+| `CheckpointStatus` | `preparing`, `pending`, `approved`, `rejected`, `edited` (reserved), `resuming`, `continued`, `completed`, `aborted`, `expired`, `expired_approved`, `expired_rejected`, `expired_aborted` | Checkpoint lifecycle states; `preparing` is framework-owned and transient |
 | `InterruptPoint` | `plan_generated`, `before_step`, `on_error` (implemented); `after_step`, `context_gathering` (reserved) | Where HITL can pause |
 | `RequestMode` | `streaming`, `non_streaming` | Determines expiry behavior |
-| `CommandType` | `approve`, `reject`, `edit`, `skip`, `abort`, `retry` | Human decision types |
+| `CommandType` | Default controller: `approve`, `reject`, `abort`; other declared values are unsupported | Human decision types |
 
 ### POST /hitl/command (Framework)
 
@@ -986,12 +956,10 @@ curl -X POST http://localhost:8352/hitl/command \
 |------|-------------|
 | `approve` | Proceed with the plan/step as-is |
 | `reject` | Stop execution |
-| `edit` | Proceed with modifications (provide `edited_plan`) |
-| `skip` | Skip current step, continue with next |
 | `abort` | Stop entire workflow immediately |
-| `retry` | Retry with new parameters |
+| `edit`, `skip`, `retry`, `respond` | Unsupported; HTTP 400 before any state change |
 
-> **Note:** Not all commands are valid for all interrupt points. For example, `skip` and `retry` are not available for `plan_generated`. See the [Command Types by Interrupt Point](../reference/API_REFERENCE.md#command-types-by-interrupt-point) table for the complete matrix.
+> **Note:** Only approve/reject/abort are implemented by the default controller. See [Supported default commands](../reference/API_REFERENCE.md#supported-default-commands).
 
 **Response:**
 ```json
@@ -1006,7 +974,7 @@ curl -X POST http://localhost:8352/hitl/command \
 
 Resume execution after approval. Returns SSE stream. See [Implementing Resume Handlers](#implementing-resume-handlers-agent-specific) above for the framework APIs to use.
 
-**Example implementation:** [handlers.go:238](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go#L238)
+**Example implementation:** `handleResumeSSE` in [handlers.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go).
 
 ```go
 func (t *HITLChatAgent) handleResumeSSE(w http.ResponseWriter, r *http.Request)
@@ -1015,17 +983,16 @@ func (t *HITLChatAgent) handleResumeSSE(w http.ResponseWriter, r *http.Request)
 **Request:**
 ```bash
 curl -X POST http://localhost:8352/hitl/resume/cp-dff21578-e9e1-40 \
-  -H "Accept: text/event-stream" \
-  -H "X-Truvag3-Original-Request-ID: orch-1769372315637984136"
+  -H "Accept: text/event-stream"
 ```
 
-The `X-Truvag3-Original-Request-ID` header is optional but recommended for trace correlation in Jaeger.
+Stored checkpoint lineage supplies trace correlation; the resume route does not use a client header override.
 
 ### POST /hitl/resume-sync/`{id}` (Agent)
 
 Resume execution after approval. Returns JSON response (for non-streaming clients). See [Implementing Resume Handlers](#implementing-resume-handlers-agent-specific) above for the framework APIs to use.
 
-**Example implementation:** [handlers.go:793](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go#L793)
+**Example implementation:** `handleResumeSyncJSON` in [handlers.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go).
 
 ```go
 func (t *HITLChatAgent) handleResumeSyncJSON(w http.ResponseWriter, r *http.Request)
@@ -1283,9 +1250,11 @@ callback := func(ctx context.Context, cp *orchestration.ExecutionCheckpoint, act
         "status":        cp.Status,
     })
 
-    // For auto-resume: trigger execution continuation
+    // This is a notification, not permission to bypass durable resume ownership.
     if action == orchestration.CommandApprove {
-        // Your auto-resume logic here
+        // Schedule a later check of durable expired_approved status.
+        // at_least_once delivery may run this callback before the status CAS.
+        // Do not call the coordinator with this notification snapshot.
         // See Auto-Resume section below
     }
 }
@@ -1392,36 +1361,21 @@ the composition and shutdown sequence above are the preferred framework path.
 
 ### Steps Re-executing After Resume
 
-**What you see:** Steps that already completed are running again.
+Use the coordinator and the same result-bearing processing path. Confirm the
+checkpoint contains the expected plan, completed results, and resolved
+parameters. An application calling only `WithResumeMode` or
+`BuildResumeContext` bypasses ownership and is not a valid resume route.
 
-**Why it happens:** The resume handler is missing one of the context helpers.
-
-**How to fix:** Make sure you're calling ALL of these:
-```go
-ctx = orchestration.WithResumeMode(ctx, checkpointID)
-ctx = orchestration.WithPlanOverride(ctx, checkpoint.Plan)  // Critical!
-ctx = orchestration.WithCompletedSteps(ctx, checkpoint.StepResults)
-ctx = orchestration.WithPreResolvedParams(ctx, checkpoint.ResolvedParameters, stepID)
-```
-
-The most common mistake is forgetting `WithPlanOverride`. Without it, the orchestrator generates a new plan with different step IDs.
+Resume fencing prevents stale checkpoint mutations; it does not make external
+tools exactly-once. If a process died after a tool acted but before progress
+was saved, inspect tool evidence and use application idempotency before replay.
 
 ### Trace Correlation Not Working
 
-**What you see:** Related traces show up as separate, unlinked entries in Jaeger.
-
-**Why it happens:** The `X-Truvag3-Original-Request-ID` header isn't being sent on resume.
-
-**How to fix:** Store the request_id from the first checkpoint and include it on all resumes:
-```javascript
-// On first checkpoint
-if (data.request_id && !originalRequestId) {
-    originalRequestId = data.request_id;
-}
-
-// On all resumes
-headers['X-Truvag3-Original-Request-ID'] = originalRequestId;
-```
+Check the stored original request/trace/span fields and the single
+`hitl.resume` span. The coordinator restores these fields; callers need not
+send an original-request header. A missing original span produces an unlinked
+resume span, not an invented trace relationship.
 
 ### Approval Dialog Not Appearing
 
@@ -1634,7 +1588,7 @@ async function checkForAutoResume(checkpointId) {
 
 The auto-resume handler uses the same framework APIs as the regular resume handlers. See [Implementing Resume Handlers](#implementing-resume-handlers-agent-specific) for details.
 
-**Example implementation:** [handlers_auto_resume.go:22](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers_auto_resume.go#L22)
+**Example implementation:** [handlers_auto_resume.go](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers_auto_resume.go).
 
 ```go
 func (t *HITLChatAgent) handleAutoResumeSSE(w http.ResponseWriter, r *http.Request)
@@ -1719,7 +1673,9 @@ When viewing search results, checkpoints may have different statuses:
 | `pending` | Active | Awaiting human response |
 | `approved` | Human-initiated | Human clicked "Approve" |
 | `rejected` | Human-initiated | Human clicked "Reject" |
-| `edited` | Human-initiated | Human modified plan and approved |
+| `edited` | Reserved | Not resumable; the default edit command is unsupported |
+| `resuming` | Framework-owned | An attempt owns the checkpoint; recovery requires lease expiry |
+| `continued` | Finished parent | Parent points to a new interruption checkpoint |
 | `aborted` | Human-initiated | Human clicked "Abort" |
 | `completed` | Finished | Execution completed after approval |
 | `expired` | Streaming expiry | Timed out, no action applied (implicit deny) |

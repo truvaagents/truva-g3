@@ -1352,8 +1352,8 @@ suspended does not fail resume. The difference is diagnostic, and the current
 behavior identity is used for new continuation/synthesis cache decisions.
 
 A legacy checkpoint with no skill state remains skill-free. Host code should
-always resume through the framework's `BuildResumeContext` path rather than
-reconstructing resume context manually.
+always resume through `ResumeCoordinator`, which calls `BuildResumeContext`
+after a durable claim, rather than reconstructing resume context manually.
 
 ---
 

@@ -317,7 +317,7 @@ func (*recordingCheckpointPersistence) SaveCheckpoint(context.Context, *orchestr
 func (*recordingCheckpointPersistence) LoadCheckpoint(context.Context, string) (*orchestration.ExecutionCheckpoint, error) {
 	return nil, nil
 }
-func (persistence *recordingCheckpointPersistence) UpdateCheckpointStatus(_ context.Context, _ string, status orchestration.CheckpointStatus) error {
+func (persistence *recordingCheckpointPersistence) UpdateCheckpointStatus(_ context.Context, _ string, _ orchestration.CheckpointStatus, status orchestration.CheckpointStatus) error {
 	persistence.updates <- status
 	return nil
 }

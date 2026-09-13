@@ -566,11 +566,11 @@ These endpoints manage Human-in-the-Loop checkpoints when the AI investigation r
 |----------|--------|---------|
 | `/hitl/checkpoints` | GET | List pending checkpoints (query params: `status`, `limit`, `offset`) |
 | `/hitl/checkpoints/{id}` | GET | Get full details for a single checkpoint (plan, current step, completed steps, decision) |
-| `/hitl/command` | POST | Submit `approve` / `reject` / `edit` / `abort` decision |
-| `/hitl/resume/{id}` | POST | Resume execution after approval — re-enqueues a `hitl_resume` task to the worker pool |
-| `/internal/hitl-webhook` | POST | **API mode only.** Worker pod POSTs here when a checkpoint fires; the API pod fans out the notification to the registry-viewer-app and any subscribed clients |
+| `/hitl/command` | POST | Submit `approve` / `reject` / `abort`; unsupported commands return 400 |
+| `/hitl/resume/{id}` | POST | Resume after approval: synchronous in embedded mode; API-only mode returns 202 after saving and enqueueing a `hitl_resume` worker task |
+| `/internal/hitl-webhook` | POST | API and embedded modes acknowledge a persisted checkpoint notification; this does not approve or resume execution |
 
-> **Split-mode note:** In split mode (separate API + Worker pods, see [Deployment Modes](#deployment-modes)), the K8s Service routes all `/hitl/*` requests to the **API pod**, so external clients (Registry Viewer App, curl, the chat-ui) always reach the API. The worker pod registers only `/internal/hitl-webhook` (as a receiver) and the standard `/hitl/*` endpoints serve from the API pod. `TRUVAG3_HITL_WEBHOOK_URL` on the worker points back at the API Service so checkpoint notifications cross the pod boundary.
+> **Split-mode note:** In split mode (separate API + Worker pods, see [Deployment Modes](#deployment-modes)), the K8s Service routes requests to the **API pod**. The worker exposes only health/readiness/metrics endpoints. Its `TRUVAG3_HITL_WEBHOOK_URL` points at the API Service. Clients read the saved checkpoint through the query endpoints; the webhook receiver is an acknowledgment, not a notification fan-out service.
 
 ### Example Requests
 
@@ -659,6 +659,63 @@ curl http://localhost:8372/api/capabilities
 ---
 
 ## Human-in-the-Loop (HITL)
+
+### Framework-owned resume
+
+All resume routes use `orchestration.ResumeCoordinator`. The application
+supplies its processing adapter; it no longer restores execution state, builds
+a resume context, or writes `completed` itself.
+
+In split mode, the API reads the checkpoint only for admission, then saves and
+queues a uniquely identified task. HTTP 202 means **accepted**, not resumed or
+completed. Poll `/api/v1/tasks/{task_id}` for the worker's actual result. The
+worker claims ownership after dequeue; a duplicate task can fail even though
+its submission was accepted. Failed admission returns an error instead of a
+task ID. The API installs its framework logger before creating helpers; the
+worker configures a production logger explicitly because it has no framework
+HTTP host.
+
+The coordinator claims durable approval, restores the saved plan/results/
+parameters/skills, renews ownership during execution, and saves the real
+terminal result. Concurrent ownership is a 409 `resume_in_progress`; ownership
+lost after work started is the distinct `resume_claim_lost`.
+Inspect execution evidence before retrying either an ambiguous failure or a
+disconnected stream.
+
+Only approve/reject/abort are supported by the default command endpoint.
+Edit/skip/retry/respond return 400 `unsupported_command` before state changes.
+The public checkpoint includes parent/successor navigation, not internal
+attempt IDs, lease deadlines, reservations, or process owners. Application
+payloads are preserved.
+
+A second interruption saves the parent as `continued` before announcing its
+successor. Final success requires a successful terminal execution **and**
+successful checkpoint finalization. Synthesis, hook, and in-execution callback
+errors cannot be reported as completion just because tool steps succeeded.
+The final response is sent after persistence; losing that acknowledgement
+does not undo completed work. Check durable state before retrying.
+
+In this example's own `.env`:
+
+```bash
+TRUVAG3_HITL_RESUME_CLAIM_LEASE=30s
+TRUVAG3_HITL_RESUME_CLEANUP_TIMEOUT=5s
+```
+
+The explicit startup loader reads these values. The lease accepts 3s–24h;
+cleanup must be positive, ≤1m, and ≤lease/3. They are separate from the human
+approval timeout and checkpoint storage TTL. Renewal does not extend retention.
+Use `./setup.sh rollout` for configuration changes and `./setup.sh rebuild`
+for source changes.
+
+HTTP resume in embedded mode is synchronous. API-only mode returns 202 with
+a queued task ID; this acknowledges queue admission, not completed execution.
+The worker uses its own context and the same coordinator, so closing the
+submitting HTTP request does not cancel accepted work. Worker deadline and
+shutdown still apply. Failed resumes remain failed tasks and are not
+automatically resubmitted.
+
+### Approval behavior
 
 By default, only **destructive Kubernetes write operations** (`rollout_restart`, `scale_deployment`, `delete_pod`) are gated by human-in-the-loop approval — these are the capabilities listed in the shipped `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES`. Notification capabilities (`create_ticket`, `send_message`, `send_rich_message`) and read-only investigation calls (`query_metrics`, `query_logs`, `get_pods`) run autonomously. When the orchestrator encounters a gated capability, execution pauses and a checkpoint is persisted to Redis for approval.
 
@@ -1006,8 +1063,8 @@ The agent emits comprehensive observability data — every alert, every investig
 
 - Every webhook arrival starts a root span; the worker pool's investigation runs link back to the original webhook trace
 - Tool execution timing is captured per step in the DAG
-- HITL wait spans (`hitl.checkpoint.loaded`, `hitl.resume_started`, `hitl.resume_completed`) — linked to the original investigation span so a multi-checkpoint workflow stitches together cleanly
-- Worker-to-API webhook delivery is traced across the pod boundary in split mode (worker writes `original_trace_id` into the checkpoint, API attaches it on resume)
+- The coordinator owns one `hitl.resume` span per claimed attempt, with `hitl.resume.claimed`, `hitl.resume.started`, and terminal lifecycle events. It links to the checkpoint's original trace context; API handlers do not create another resume span.
+- In split mode, the queued task carries the API submission trace context to the worker. The worker's coordinator restores the saved checkpoint lineage. Webhook acknowledgment remains separate from approval and resume.
 - Access at http://jaeger.localhost (or http://localhost:16686 via port-forward)
 
 ### LLM Debug Payload Store

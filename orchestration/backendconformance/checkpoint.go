@@ -33,7 +33,7 @@ func RunCheckpointConformance(t *testing.T, factory CheckpointFactory) {
 		if loaded.CheckpointID != checkpoint.CheckpointID || loaded.Status != orchestration.CheckpointStatusPending {
 			t.Fatalf("loaded checkpoint = %#v", loaded)
 		}
-		if err := fixture.Persistence.UpdateCheckpointStatus(t.Context(), checkpoint.CheckpointID, orchestration.CheckpointStatusApproved); err != nil {
+		if err := fixture.Persistence.UpdateCheckpointStatus(t.Context(), checkpoint.CheckpointID, orchestration.CheckpointStatusPending, orchestration.CheckpointStatusApproved); err != nil {
 			t.Fatal(err)
 		}
 		loaded, err = fixture.Persistence.LoadCheckpoint(t.Context(), checkpoint.CheckpointID)

@@ -1221,9 +1221,6 @@ func (c *recordingInterruptController) CheckOnError(context.Context, RoutingStep
 func (c *recordingInterruptController) ProcessCommand(context.Context, *Command) (*ResumeResult, error) {
 	return nil, nil
 }
-func (c *recordingInterruptController) ResumeExecution(context.Context, string) (*ExecutionResult, error) {
-	return nil, nil
-}
 func (c *recordingInterruptController) UpdateCheckpointProgress(context.Context, string, []StepResult) error {
 	return nil
 }

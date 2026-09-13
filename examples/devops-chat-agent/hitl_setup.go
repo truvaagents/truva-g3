@@ -16,6 +16,7 @@ type HITLInfrastructure struct {
 	CheckpointStore *orchestration.RedisCheckpointStore
 	CommandStore    *orchestration.RedisCommandStore
 	Controller      *orchestration.DefaultInterruptController
+	Resumer         *orchestration.ResumeCoordinator
 	Policy          *orchestration.RuleBasedPolicy
 }
 
@@ -60,8 +61,8 @@ func SetupHITL(redisClient redis.UniversalClient, keyspace core.RedisKeyspace, a
 			"action":        string(action),
 			"status":        string(cp.Status),
 		})
-		// TODO (Phase 8.2): Implement auto-resume for action="approve"
-		// TODO (Phase 8.2): Implement result storage for action="reject"
+		// This callback runs before the expiry transition is persisted. A later
+		// client request resumes only after the durable expired-approved status.
 	}); err != nil {
 		return nil, fmt.Errorf("set expiry callback: %w", err)
 	}

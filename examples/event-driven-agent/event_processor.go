@@ -263,279 +263,147 @@ type StepResultSummary struct {
 	Duration string `json:"duration"`
 }
 
-// HandleHITLResumeTask is the worker-pool task handler for async HITL resume.
-// The API pod enqueues a task with type "hitl_resume"; the worker picks it up
-// and re-enters the orchestrator via BuildResumeContext + ProcessRequest.
-//
-// Pipeline:
-//  1. Deserialize checkpoint_id from task input
-//  2. Load the checkpoint from the versioned DB-0 HITL keyspace
-//  3. Restore trace context via StartLinkedSpanWithOptions (consumer span)
-//  4. Build resume context (WithResumeMode, WithPlanOverride, WithCompletedSteps)
-//  5. Re-enter orchestrator with original request
-//  6. Handle nested HITL interrupts or completion
-func (a *EventDrivenAgent) HandleHITLResumeTask(
-	ctx context.Context,
-	task *core.Task,
-	reporter core.ProgressReporter,
-) error {
-	startTime := time.Now()
-
-	// 1. Extract checkpoint ID from task input
-	checkpointID, ok := task.Input["checkpoint_id"].(string)
-	if !ok || checkpointID == "" {
-		return fmt.Errorf("checkpoint_id is required in task input")
+// executeApprovedCheckpointResponse uses the same result-bearing orchestrator
+// entry point for HTTP and queue resumes. The coordinator supplies the restored
+// context and owns every checkpoint status transition.
+func (a *EventDrivenAgent) executeApprovedCheckpointResponse(ctx context.Context, checkpoint *orchestration.ExecutionCheckpoint) (*orchestration.OrchestratorResponse, *orchestration.ExecutionResult, error) {
+	orch := a.GetOrchestrator()
+	if orch == nil {
+		return nil, nil, errors.New("orchestrator not available")
 	}
+	return orch.ProcessRequestWithExecution(ctx, checkpoint.OriginalRequest, checkpoint.UserContext)
+}
 
+func (a *EventDrivenAgent) executeApprovedCheckpoint(ctx context.Context, checkpoint *orchestration.ExecutionCheckpoint) (*orchestration.ExecutionResult, error) {
+	_, execution, err := a.executeApprovedCheckpointResponse(ctx, checkpoint)
+	return execution, err
+}
+
+func (a *EventDrivenAgent) resumeCheckpoint(ctx context.Context, checkpointID string) (*orchestration.OrchestratorResponse, error) {
 	a.mu.RLock()
 	hitl := a.hitl
-	orch := a.orchestrator
 	a.mu.RUnlock()
-
-	if hitl == nil || orch == nil {
-		return fmt.Errorf("HITL or orchestrator not available")
+	if hitl == nil || hitl.Resumer == nil {
+		return nil, errors.New("HITL resume coordinator not available")
 	}
-
-	// 2. Load checkpoint
-	checkpoint, err := hitl.CheckpointStore.LoadCheckpoint(ctx, checkpointID)
-	if err != nil {
-		telemetry.Counter("event_agent.hitl_resume_completed", "status", "failed", "module", "agent")
-		return fmt.Errorf("failed to load checkpoint %s: %w", checkpointID, err)
-	}
-
-	// §3: Restore trace context across the async queue boundary.
-	// Same pattern as HandleAlertInvestigation (line 51-64).
-	traceID, _ := task.Input["trace_id"].(string)
-	parentSpanID, _ := task.Input["parent_span_id"].(string)
-	ctx, endConsumerSpan := telemetry.StartLinkedSpanWithOptions(
-		ctx,
-		"hitl.resume",
-		traceID,
-		parentSpanID,
-		map[string]string{
-			"task.id":       task.ID,
-			"checkpoint.id": checkpointID,
-			"link.type":     "hitl_resume_consumer",
-		},
-		trace.SpanKindConsumer,
-	)
-	defer endConsumerSpan()
-
-	// §1: Context-aware logging after checkpoint load
-	a.Logger.InfoWithContext(ctx, "HITL resume task started", map[string]interface{}{
-		"operation":     "hitl_resume",
-		"checkpoint_id": checkpointID,
-		"request_id":    checkpoint.RequestID,
-		"approved_by":   task.Input["approved_by"],
-		"task_id":       task.ID,
-	})
-
-	_ = reporter.Report(&core.TaskProgress{
-		CurrentStep: 1, TotalSteps: 3,
-		StepName:   "Resuming from checkpoint",
-		Percentage: 10,
-		Message:    fmt.Sprintf("Resuming execution from checkpoint %s", checkpointID),
-	})
-
-	// 3. Build resume context — sets WithResumeMode, WithPlanOverride, WithCompletedSteps,
-	// WithPreResolvedParams, WithRequestMode, and WithMetadata.
-	ctx, endLinkedSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
-	if err != nil {
-		telemetry.Counter("event_agent.hitl_resume_completed", "status", "failed", "module", "agent")
-		return fmt.Errorf("failed to build resume context: %w", err)
-	}
-	defer endLinkedSpan()
-
-	a.Logger.DebugWithContext(ctx, "Resume context built, re-entering orchestrator", map[string]interface{}{
-		"operation":       "hitl_resume",
-		"checkpoint_id":   checkpointID,
-		"interrupt_point": string(checkpoint.InterruptPoint),
-		"plan_id":         checkpoint.Plan.PlanID,
-		"step_results":    len(checkpoint.StepResults),
-	})
-
-	// Propagate approved_by metadata
-	if approvedBy, ok := task.Input["approved_by"].(string); ok {
-		ctx = orchestration.WithMetadata(ctx, map[string]interface{}{
-			"approved_by": approvedBy,
-		})
-	}
-
-	// 4. Re-enter orchestrator with original request
-	response, err := orch.ProcessRequest(ctx, checkpoint.Plan.OriginalRequest, checkpoint.UserContext)
-	if err != nil {
-		// Nested HITL interrupt (subsequent sensitive step)
-		if orchestration.IsInterrupted(err) {
-			newCheckpoint := orchestration.GetCheckpoint(err)
-			a.Logger.InfoWithContext(ctx, "HITL resume hit nested interrupt", map[string]interface{}{
-				"operation":         "hitl_resume",
-				"checkpoint_id":     checkpointID,
-				"new_checkpoint_id": newCheckpoint.CheckpointID,
-			})
-			telemetry.Counter("event_agent.hitl_resume_completed", "status", "nested_interrupt", "module", "agent")
-			task.Result = map[string]interface{}{
-				"status":        "pending_approval",
-				"checkpoint_id": newCheckpoint.CheckpointID,
-				"resumed_from":  checkpointID,
-				"message":       "Another step requires approval",
+	var response *orchestration.OrchestratorResponse
+	_, err := hitl.Resumer.ResumeWithExecutor(ctx, checkpointID,
+		orchestration.ResumeExecutorFunc(func(resumeCtx context.Context, checkpoint *orchestration.ExecutionCheckpoint) (*orchestration.ExecutionResult, error) {
+			var execution *orchestration.ExecutionResult
+			var executeErr error
+			response, execution, executeErr = a.executeApprovedCheckpointResponse(resumeCtx, checkpoint)
+			if executeErr == nil && response == nil {
+				executeErr = errors.New("resume produced no application response")
 			}
-			return nil
-		}
-		telemetry.Counter("event_agent.hitl_resume_completed", "status", "failed", "module", "agent")
-		return fmt.Errorf("resume orchestration failed: %w", err)
-	}
+			return execution, executeErr
+		}))
+	return response, err
+}
 
-	// 5. Mark original checkpoint as completed
-	checkpoint.Status = orchestration.CheckpointStatusCompleted
-	if err := hitl.CheckpointStore.SaveCheckpoint(ctx, checkpoint); err != nil {
-		a.Logger.WarnWithContext(ctx, "Checkpoint completion could not be persisted", map[string]interface{}{
-			"operation": "hitl_resume", "checkpoint_id": checkpointID, "error_type": "checkpoint_write_failure",
-		})
+// resumeSuccessor recognizes only a durably finalized continuation, not an
+// interrupt nested inside a finalization failure.
+func resumeSuccessor(err error) *orchestration.ExecutionCheckpoint {
+	var lifecycle *orchestration.ErrCheckpointResumeLifecycle
+	if err == nil || errors.As(err, &lifecycle) {
+		return nil
 	}
+	return orchestration.GetCheckpoint(err)
+}
 
-	// 6. Store result
-	duration := time.Since(startTime)
-	task.Result = map[string]interface{}{
-		"status":       "completed",
-		"resumed_from": checkpointID,
-		"response":     response.Response,
-		"tools_used":   response.AgentsInvolved,
-		"confidence":   response.Confidence,
-		"request_id":   response.RequestID,
-		"duration_ms":  duration.Milliseconds(),
+// HandleHITLResumeTask uses the worker's task context, not the submitting HTTP
+// request. A failed attempt is reported as a failed task, never auto-resubmitted:
+// tools may already have acted. A saved successor requires another decision.
+func (a *EventDrivenAgent) HandleHITLResumeTask(ctx context.Context, task *core.Task, reporter core.ProgressReporter) error {
+	started := time.Now()
+	checkpointID, _ := task.Input["checkpoint_id"].(string)
+	if checkpointID == "" {
+		return &orchestration.ErrInvalidResumeRequest{Field: "checkpoint_id"}
 	}
-
-	_ = reporter.Report(&core.TaskProgress{
-		CurrentStep: 3, TotalSteps: 3,
-		StepName:   "Complete",
-		Percentage: 100,
-		Message:    fmt.Sprintf("Resume completed. %d tools used.", len(response.AgentsInvolved)),
+	// Preserve queue-consumer observability without creating a second hitl.resume span.
+	ctx, endConsumer := telemetry.StartLinkedSpanWithOptions(ctx, "hitl.resume_task",
+		task.TraceID, task.ParentSpanID, map[string]string{"task.id": task.ID, "link.type": "task_queue_consumer"}, trace.SpanKindConsumer)
+	defer endConsumer()
+	a.Logger.InfoWithContext(ctx, "HITL resume task started", map[string]interface{}{
+		"operation": "hitl_resume_task", "checkpoint_id": checkpointID, "task_id": task.ID,
 	})
-
-	// §2: Emit metrics
+	_ = reporter.Report(&core.TaskProgress{CurrentStep: 1, TotalSteps: 3, StepName: "Resuming from checkpoint", Percentage: 10})
+	response, err := a.resumeCheckpoint(ctx, checkpointID)
+	if child := resumeSuccessor(err); child != nil {
+		task.Result = map[string]interface{}{
+			"status": "pending_approval", "checkpoint_id": child.CheckpointID,
+			"checkpoint":   orchestration.CheckpointResponseFrom(child),
+			"resumed_from": checkpointID, "message": "Another step requires approval",
+		}
+		telemetry.Counter("event_agent.hitl_resume_completed", "status", "nested_interrupt", "module", "agent")
+		return nil
+	}
+	if err != nil {
+		_, code, _ := orchestration.HITLErrorResponse(err)
+		task.Result = map[string]interface{}{"status": "failed", "code": code, "resumed_from": checkpointID, "retryable": false}
+		telemetry.Counter("event_agent.hitl_resume_completed", "status", "failed", "module", "agent")
+		return fmt.Errorf("resume task failed: %w", err)
+	}
+	if response == nil {
+		return &orchestration.ErrCheckpointExecutionFailed{}
+	}
+	duration := time.Since(started)
+	task.Result = map[string]interface{}{
+		"status": "completed", "resumed_from": checkpointID, "response": response.Response,
+		"tools_used": response.AgentsInvolved, "confidence": response.Confidence,
+		"request_id": response.RequestID, "duration_ms": duration.Milliseconds(),
+	}
+	_ = reporter.Report(&core.TaskProgress{CurrentStep: 3, TotalSteps: 3, StepName: "Complete", Percentage: 100,
+		Message: fmt.Sprintf("Resume completed. %d tools used.", len(response.AgentsInvolved))})
 	telemetry.Counter("event_agent.hitl_resume_completed", "status", "completed", "module", "agent")
 	telemetry.Histogram("event_agent.hitl_resume_duration_ms", float64(duration.Milliseconds()))
-
-	a.Logger.InfoWithContext(ctx, "HITL resume completed", map[string]interface{}{
-		"operation":     "hitl_resume",
-		"checkpoint_id": checkpointID,
-		"tools_used":    len(response.AgentsInvolved),
-		"confidence":    response.Confidence,
-		"request_id":    response.RequestID,
-		"duration_ms":   duration.Milliseconds(),
+	a.Logger.InfoWithContext(ctx, "HITL resume task completed", map[string]interface{}{
+		"operation": "hitl_resume_task", "checkpoint_id": checkpointID, "task_id": task.ID,
+		"request_id": response.RequestID, "duration_ms": duration.Milliseconds(),
 	})
-
 	return nil
 }
 
-// HandleHITLResume resumes an interrupted orchestration from a checkpoint.
-// POST /hitl/resume/{checkpoint_id}
-//
-// Unlike the generic HITLHandler.HandleResume (which only marks the checkpoint
-// completed), this re-enters the orchestrator with WithResumeMode so the
-// executor skips already-completed steps and continues from the interrupted step.
-func (a *EventDrivenAgent) HandleHITLResume(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func writeHITLResumeError(w http.ResponseWriter, err error) {
+	status, code, message := orchestration.HITLErrorResponse(err)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": message, "code": code, "retryable": false})
+}
 
+// HandleHITLResume is the synchronous embedded-mode transport. API-only mode
+// enqueues a task instead; both reach the same coordinator in an execution host.
+func (a *EventDrivenAgent) HandleHITLResume(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed, use POST", http.StatusMethodNotAllowed)
 		return
 	}
-
-	// Extract checkpoint ID from path: /hitl/resume/{checkpoint_id}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	if len(parts) < 3 || parts[2] == "" {
-		http.Error(w, "checkpoint_id is required in path", http.StatusBadRequest)
+	checkpointID := strings.TrimPrefix(r.URL.Path, "/hitl/resume/")
+	if checkpointID == "" || strings.Contains(checkpointID, "/") {
+		writeHITLResumeError(w, &orchestration.ErrInvalidResumeRequest{Field: "checkpoint_id"})
 		return
 	}
-	checkpointID := parts[2]
-
-	// Load checkpoint
-	a.mu.RLock()
-	hitl := a.hitl
-	orch := a.orchestrator
-	a.mu.RUnlock()
-
-	if hitl == nil || orch == nil {
-		http.Error(w, "HITL or orchestrator not available", http.StatusServiceUnavailable)
+	response, err := a.resumeCheckpoint(r.Context(), checkpointID)
+	if child := resumeSuccessor(err); child != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "interrupted", "interrupted": true, "checkpoint_id": child.CheckpointID,
+			"checkpoint": orchestration.CheckpointResponseFrom(child), "resumed_from": checkpointID,
+		})
 		return
 	}
-
-	checkpoint, err := hitl.CheckpointStore.LoadCheckpoint(ctx, checkpointID)
 	if err != nil {
-		a.Logger.ErrorWithContext(ctx, "Failed to load checkpoint", map[string]interface{}{
-			"checkpoint_id": checkpointID,
-			"error":         err.Error(),
-		})
-		http.Error(w, "checkpoint not found: "+err.Error(), http.StatusNotFound)
+		writeHITLResumeError(w, err)
 		return
 	}
-
-	// Build resume context — sets WithResumeMode, WithPlanOverride, WithCompletedSteps,
-	// WithPreResolvedParams, WithRequestMode, and WithMetadata in a single call.
-	// Also create a linked trace span so the resume is visible in Jaeger.
-	ctx, endLinkedSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
-	if err != nil {
-		a.Logger.ErrorWithContext(ctx, "Failed to build resume context", map[string]interface{}{
-			"checkpoint_id": checkpointID,
-			"error":         err.Error(),
-		})
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if response == nil {
+		writeHITLResumeError(w, &orchestration.ErrCheckpointExecutionFailed{})
 		return
 	}
-	defer endLinkedSpan()
-
-	a.Logger.InfoWithContext(ctx, "Resuming orchestration from checkpoint", map[string]interface{}{
-		"checkpoint_id":    checkpointID,
-		"request_id":       checkpoint.RequestID,
-		"interrupt_point":  checkpoint.InterruptPoint,
-		"original_request": checkpoint.Plan.OriginalRequest[:min(80, len(checkpoint.Plan.OriginalRequest))],
-	})
-
-	// Re-enter the orchestrator with the original request
-	response, err := orch.ProcessRequest(ctx, checkpoint.Plan.OriginalRequest, checkpoint.UserContext)
-	if err != nil {
-		// Another HITL interrupt (shouldn't happen for same step but possible for later steps)
-		if orchestration.IsInterrupted(err) {
-			newCheckpoint := orchestration.GetCheckpoint(err)
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"status":        "interrupted",
-				"checkpoint_id": newCheckpoint.CheckpointID,
-				"message":       "Another step requires approval",
-				"resumed_from":  checkpointID,
-			})
-			return
-		}
-
-		a.Logger.ErrorWithContext(ctx, "Resume orchestration failed", map[string]interface{}{
-			"checkpoint_id": checkpointID,
-			"error":         err.Error(),
-		})
-		http.Error(w, "resume failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Mark checkpoint as completed
-	checkpoint.Status = orchestration.CheckpointStatusCompleted
-	if err := hitl.CheckpointStore.SaveCheckpoint(ctx, checkpoint); err != nil {
-		a.Logger.WarnWithContext(ctx, "Checkpoint completion could not be persisted", map[string]interface{}{
-			"operation": "hitl_resume", "checkpoint_id": checkpointID, "error_type": "checkpoint_write_failure",
-		})
-	}
-
-	a.Logger.InfoWithContext(ctx, "Resume orchestration completed", map[string]interface{}{
-		"checkpoint_id": checkpointID,
-		"tools_used":    len(response.AgentsInvolved),
-		"confidence":    response.Confidence,
-	})
-
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "completed",
-		"resumed_from": checkpointID,
-		"response":     response.Response,
-		"tools_used":   response.AgentsInvolved,
-		"confidence":   response.Confidence,
+		"status": "completed", "resumed_from": checkpointID,
+		"response": response.Response, "tools_used": response.AgentsInvolved,
+		"confidence": response.Confidence, "request_id": response.RequestID,
 	})
 }

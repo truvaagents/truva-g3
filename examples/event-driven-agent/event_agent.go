@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -204,6 +205,17 @@ Phase 1 establishes whether the alert reflects a real incident. Phase 2 performs
 
 	// Wire HITL controller for write operations
 	if hitl != nil {
+		resumeConfig, configErr := orchestration.LoadResumeCoordinatorRuntimeConfigFromEnvironment(orchestration.DefaultResumeCoordinatorRuntimeConfig(), os.LookupEnv)
+		if configErr != nil {
+			return fmt.Errorf("HITL resume config: %w", configErr)
+		}
+		resumer, resumeErr := orchestration.NewResumeCoordinator(hitl.CheckpointStore,
+			orchestration.ResumeExecutorFunc(a.executeApprovedCheckpoint), resumeConfig,
+			orchestration.WithResumeLogger(a.Logger))
+		if resumeErr != nil {
+			return fmt.Errorf("HITL resume coordinator: %w", resumeErr)
+		}
+		hitl.Resumer = resumer
 		orch.SetInterruptController(hitl.Controller)
 		a.hitl = hitl
 		a.Logger.Info("HITL controller configured for write operations", map[string]interface{}{

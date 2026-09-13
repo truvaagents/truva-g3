@@ -568,7 +568,7 @@ func TestUpdateCheckpointStatus_Success(t *testing.T) {
 	}
 
 	// Update status
-	err := store.UpdateCheckpointStatus(ctx, "cp-123", CheckpointStatusApproved)
+	err := store.UpdateCheckpointStatus(ctx, "cp-123", CheckpointStatusPending, CheckpointStatusApproved)
 	if err != nil {
 		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
 	}
@@ -596,7 +596,7 @@ func TestUpdateCheckpointStatus_NotFound(t *testing.T) {
 	store := newCheckpointTestStore(t, client)
 	ctx := context.Background()
 
-	err := store.UpdateCheckpointStatus(ctx, "non-existent", CheckpointStatusApproved)
+	err := store.UpdateCheckpointStatus(ctx, "non-existent", CheckpointStatusPending, CheckpointStatusApproved)
 	if err == nil {
 		t.Fatal("Expected error for non-existent checkpoint")
 	}
@@ -1072,7 +1072,7 @@ func TestSaveUpdateAndListCheckpoints_Workflow(t *testing.T) {
 	}
 
 	// Update status to approved
-	if err := store.UpdateCheckpointStatus(ctx, "cp-workflow", CheckpointStatusApproved); err != nil {
+	if err := store.UpdateCheckpointStatus(ctx, "cp-workflow", CheckpointStatusPending, CheckpointStatusApproved); err != nil {
 		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
 	}
 

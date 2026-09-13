@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -34,9 +35,11 @@ import (
 //
 // Usage:
 //
-//	handler := NewHITLHandler(controller, store,
+//	handler, err := NewHITLHandler(controller, store,
 //	    WithHITLHandlerLogger(logger),
+//	    WithHITLResumer(coordinator),
 //	)
+//	if err != nil { return err }
 //
 //	// Register routes
 //	mux.HandleFunc("/hitl/command", handler.HandleCommand)
@@ -50,6 +53,7 @@ import (
 type HITLHandler struct {
 	controller InterruptController
 	store      CheckpointPersistence
+	resumer    HITLResumer
 
 	// Optional dependencies (injected per framework patterns)
 	logger    core.Logger    // Defaults to NoOp
@@ -58,26 +62,46 @@ type HITLHandler struct {
 
 // NewHITLHandler creates a new HITL HTTP handler.
 // Returns concrete type per Go idiom "return structs, accept interfaces".
-func NewHITLHandler(controller InterruptController, store CheckpointPersistence, opts ...HITLHandlerOption) *HITLHandler {
+func NewHITLHandler(controller InterruptController, store CheckpointPersistence, opts ...HITLHandlerOption) (*HITLHandler, error) {
+	if isNilBackendValue(controller) || isNilBackendValue(store) {
+		return nil, errors.New("orchestration: HITL controller and checkpoint persistence are required")
+	}
 	h := &HITLHandler{
 		controller: controller,
 		store:      store,
 		logger:     &core.NoOpLogger{}, // Safe default per framework
 	}
 	for _, opt := range opts {
-		opt(h)
+		if opt == nil {
+			return nil, errors.New("orchestration: HITL handler option cannot be nil")
+		}
+		if err := opt(h); err != nil {
+			return nil, err
+		}
 	}
-	return h
+	return h, nil
 }
 
 // HITLHandlerOption configures optional dependencies for HITLHandler.
-type HITLHandlerOption func(*HITLHandler)
+type HITLHandlerOption func(*HITLHandler) error
+
+// WithHITLResumer enables the resume route using the supplied lifecycle owner.
+// Omit this option for command and checkpoint APIs without execution resumption.
+func WithHITLResumer(resumer HITLResumer) HITLHandlerOption {
+	return func(h *HITLHandler) error {
+		if isNilBackendValue(resumer) {
+			return errors.New("orchestration: explicit HITL resumer cannot be nil")
+		}
+		h.resumer = resumer
+		return nil
+	}
+}
 
 // WithHITLHandlerLogger sets the logger for the HITL handler.
 func WithHITLHandlerLogger(logger core.Logger) HITLHandlerOption {
-	return func(h *HITLHandler) {
-		if logger == nil {
-			return
+	return func(h *HITLHandler) error {
+		if isNilBackendValue(logger) {
+			return nil
 		}
 		// Use ComponentAwareLogger for component-based log segregation (per LOGGING_IMPLEMENTATION_GUIDE.md)
 		if cal, ok := logger.(core.ComponentAwareLogger); ok {
@@ -85,13 +109,20 @@ func WithHITLHandlerLogger(logger core.Logger) HITLHandlerOption {
 		} else {
 			h.logger = logger
 		}
+		if isNilBackendValue(h.logger) {
+			h.logger = &core.NoOpLogger{}
+		}
+		return nil
 	}
 }
 
 // WithHITLHandlerTelemetry sets the telemetry provider for the HITL handler.
 func WithHITLHandlerTelemetry(t core.Telemetry) HITLHandlerOption {
-	return func(h *HITLHandler) {
-		h.telemetry = t
+	return func(h *HITLHandler) error {
+		if !isNilBackendValue(t) {
+			h.telemetry = t
+		}
+		return nil
 	}
 }
 
@@ -99,7 +130,8 @@ func WithHITLHandlerTelemetry(t core.Telemetry) HITLHandlerOption {
 // HTTP Handlers
 // -----------------------------------------------------------------------------
 
-// HandleCommand processes human command submissions (approve, reject, edit, etc.).
+// HandleCommand processes approve, reject, or abort. Other command types are
+// rejected before loading or modifying a checkpoint.
 //
 // Method: POST
 // Path: /hitl/command
@@ -154,6 +186,10 @@ func (h *HITLHandler) HandleCommand(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid command type: %s", command.Type))
 		return
 	}
+	if command.Type != CommandApprove && command.Type != CommandReject && command.Type != CommandAbort {
+		h.writeHITLError(w, http.StatusBadRequest, "unsupported_command", "only approve, reject, and abort commands are supported")
+		return
+	}
 
 	// Load checkpoint to get OriginalRequestID for trace correlation.
 	// This allows searching all traces in a HITL conversation by original_request_id.
@@ -197,6 +233,16 @@ func (h *HITLHandler) HandleCommand(w http.ResponseWriter, r *http.Request) {
 	// Process the command via controller (uses ctx with baggage for child span correlation)
 	result, err := h.controller.ProcessCommand(ctx, &command)
 	if err != nil {
+		var conflict *ErrCheckpointStatusConflict
+		var unsupported *ErrCheckpointCommandUnsupported
+		if errors.As(err, &conflict) {
+			h.writeHITLError(w, http.StatusConflict, "checkpoint_status_conflict", "checkpoint status changed; reload before deciding")
+			return
+		}
+		if errors.As(err, &unsupported) {
+			h.writeHITLError(w, http.StatusBadRequest, "unsupported_command", "only approve, reject, and abort commands are supported")
+			return
+		}
 		telemetry.RecordSpanError(ctx, err)
 
 		// Check for specific error types
@@ -323,8 +369,12 @@ func (h *HITLHandler) HandleListCheckpoints(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Build response
+	public := make([]*CheckpointResponse, len(checkpoints))
+	for i, checkpoint := range checkpoints {
+		public[i] = CheckpointResponseFrom(checkpoint)
+	}
 	response := &ListCheckpointsResponse{
-		Checkpoints: checkpoints,
+		Checkpoints: public,
 		Count:       len(checkpoints),
 		Limit:       filter.Limit,
 		Offset:      filter.Offset,
@@ -364,112 +414,49 @@ func (h *HITLHandler) HandleListCheckpoints(w http.ResponseWriter, r *http.Reque
 //   - 400 Bad Request: Invalid checkpoint state for resumption
 //   - 500 Internal Server Error: Execution error
 func (h *HITLHandler) HandleResume(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Only accept POST
+	if h.resumer == nil {
+		h.writeHITLError(w, http.StatusNotFound, "resume_unavailable", "resume is not configured")
+		return
+	}
 	if r.Method != http.MethodPost {
 		h.writeError(w, http.StatusMethodNotAllowed, "method not allowed, use POST")
 		return
 	}
-
-	// Extract checkpoint ID from path
-	// Expects path like /hitl/resume/{checkpoint_id}
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	if len(pathParts) < 3 || pathParts[2] == "" {
-		h.writeError(w, http.StatusBadRequest, "checkpoint_id is required in path")
+	id := strings.TrimPrefix(r.URL.Path, "/hitl/resume/")
+	if id == r.URL.Path || strings.Contains(id, "/") || validateResumeIdentity("checkpoint ID", id) != nil {
+		h.writeHITLError(w, http.StatusBadRequest, "invalid_resume_request", "a valid checkpoint_id is required in path")
 		return
 	}
-	checkpointID := pathParts[2]
-
-	// Add span event for tracing visibility
-	telemetry.AddSpanEvent(ctx, "hitl.api.resume.received",
-		attribute.String("checkpoint_id", checkpointID),
-	)
-
-	// Load checkpoint to get OriginalRequestID for trace correlation.
-	// This allows searching all traces in a HITL conversation by original_request_id.
-	checkpoint, loadErr := h.store.LoadCheckpoint(ctx, checkpointID)
-	if loadErr != nil {
-		if IsCheckpointNotFound(loadErr) {
-			h.writeError(w, http.StatusNotFound, loadErr.Error())
-			return
-		}
-		// Log warning but continue - ResumeExecution will handle the error
-		if h.logger != nil {
-			h.logger.WarnWithContext(ctx, "Failed to load checkpoint for trace correlation", map[string]interface{}{
-				"operation":     "hitl_api_resume",
-				"checkpoint_id": checkpointID,
-				"error":         loadErr.Error(),
-			})
-		}
-	} else if checkpoint.OriginalRequestID != "" {
-		// Set original_request_id for distributed trace correlation.
-		// 1. Set baggage so child spans (controller operations) inherit the attribute
-		// 2. Set span attribute on current span for direct searchability
-		ctx = telemetry.WithBaggage(ctx, "original_request_id", checkpoint.OriginalRequestID)
-		telemetry.SetSpanAttributes(ctx, attribute.String("original_request_id", checkpoint.OriginalRequestID))
-	}
-
-	// Log request
-	if h.logger != nil {
-		h.logger.InfoWithContext(ctx, "Resuming execution", map[string]interface{}{
-			"operation":     "hitl_api_resume",
-			"checkpoint_id": checkpointID,
-		})
-	}
-
-	// Resume execution via controller (uses ctx with baggage for child span correlation)
-	result, err := h.controller.ResumeExecution(ctx, checkpointID)
+	// The resumer owns claim/restoration/execution observations. This handler
+	// does not load a checkpoint for tracing or create a duplicate resume span.
+	requestID := telemetry.GetBaggage(r.Context())["request_id"]
+	telemetry.AddSpanEvent(r.Context(), "hitl.api.resume.received",
+		attribute.String("request_id", requestID), attribute.String("checkpoint_id", id))
+	result, err := h.resumer.ResumeExecution(r.Context(), id)
 	if err != nil {
-		telemetry.RecordSpanError(ctx, err)
-
-		// Check for specific error types
-		if IsCheckpointNotFound(err) {
-			h.writeError(w, http.StatusNotFound, err.Error())
+		var lifecycle *ErrCheckpointResumeLifecycle
+		if !errors.As(err, &lifecycle) && IsInterrupted(err) {
+			checkpoint := GetCheckpoint(err)
+			if checkpoint == nil || checkpoint.CheckpointID == "" || checkpoint.CheckpointID != GetCheckpointID(err) || checkpoint.Status == CheckpointStatusPreparing {
+				h.writeHITLError(w, http.StatusInternalServerError, "resume_failed", "resume returned invalid interruption evidence")
+				return
+			}
+			h.writeJSON(w, http.StatusAccepted, &ResumeInterruptedResponse{Interrupted: true, Checkpoint: CheckpointResponseFrom(checkpoint)})
 			return
 		}
-		if IsCheckpointExpired(err) {
-			h.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if IsInvalidCommand(err) {
-			h.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		if h.logger != nil {
-			h.logger.ErrorWithContext(ctx, "Failed to resume execution", map[string]interface{}{
-				"operation":     "hitl_api_resume",
-				"checkpoint_id": checkpointID,
-				"error":         err.Error(),
-			})
-		}
-		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to resume execution: %s", err.Error()))
+		status, code, message := HITLErrorResponse(err)
+		h.writeHITLError(w, status, code, message)
 		return
 	}
-
-	// Add span event for successful resumption
-	telemetry.AddSpanEvent(ctx, "hitl.api.resume.complete",
-		attribute.String("checkpoint_id", checkpointID),
-		attribute.Bool("success", result.Success),
-	)
-
-	// Record metric
-	telemetry.Counter("orchestration.hitl.api.execution_resumed",
-		"success", fmt.Sprintf("%t", result.Success),
-		"module", telemetry.ModuleOrchestration,
-	)
-
-	// Log success
-	if h.logger != nil {
-		h.logger.InfoWithContext(ctx, "Execution resumed successfully", map[string]interface{}{
-			"operation":     "hitl_api_resume_complete",
-			"checkpoint_id": checkpointID,
-			"success":       result.Success,
-			"steps_count":   len(result.Steps),
-		})
+	if result == nil || !result.Success {
+		h.writeHITLError(w, http.StatusInternalServerError, "resume_failed", "resume returned no successful execution result")
+		return
 	}
-
+	// Retain the API success instrument, but only for a validated completed
+	// result. Attempt and business outcome counters belong to the coordinator.
+	telemetry.Counter("orchestration.hitl.api.execution_resumed", "success", "true", "module", telemetry.ModuleOrchestration)
+	telemetry.AddSpanEvent(r.Context(), "hitl.api.resume.complete",
+		attribute.String("request_id", requestID), attribute.String("checkpoint_id", id), attribute.Bool("success", true))
 	h.writeJSON(w, http.StatusOK, result)
 }
 
@@ -557,7 +544,7 @@ func (h *HITLHandler) HandleGetCheckpoint(w http.ResponseWriter, r *http.Request
 		})
 	}
 
-	h.writeJSON(w, http.StatusOK, checkpoint)
+	h.writeJSON(w, http.StatusOK, CheckpointResponseFrom(checkpoint))
 }
 
 // -----------------------------------------------------------------------------
@@ -566,10 +553,10 @@ func (h *HITLHandler) HandleGetCheckpoint(w http.ResponseWriter, r *http.Request
 
 // ListCheckpointsResponse is the response for the list checkpoints endpoint.
 type ListCheckpointsResponse struct {
-	Checkpoints []*ExecutionCheckpoint `json:"checkpoints"`
-	Count       int                    `json:"count"`
-	Limit       int                    `json:"limit"`
-	Offset      int                    `json:"offset"`
+	Checkpoints []*CheckpointResponse `json:"checkpoints"`
+	Count       int                   `json:"count"`
+	Limit       int                   `json:"limit"`
+	Offset      int                   `json:"offset"`
 }
 
 // Note: ErrorResponse is defined in task_api.go and reused here
@@ -629,7 +616,9 @@ func isValidCommandType(t CommandType) bool {
 func (h *HITLHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/hitl/command", h.HandleCommand)
 	// Use prefix matching for resume (handles /hitl/resume/{checkpoint_id})
-	mux.HandleFunc("/hitl/resume/", h.HandleResume)
+	if h.resumer != nil {
+		mux.HandleFunc("/hitl/resume/", h.HandleResume)
+	}
 	mux.HandleFunc("/hitl/checkpoints", h.HandleListCheckpoints)
 	// Use prefix matching for checkpoint details (handles /hitl/checkpoints/{id})
 	mux.HandleFunc("/hitl/checkpoints/", h.HandleGetCheckpoint)

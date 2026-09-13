@@ -17,6 +17,7 @@ type HITLInfrastructure struct {
 	CommandStore    *orchestration.RedisCommandStore
 	Controller      *orchestration.DefaultInterruptController
 	Policy          *orchestration.RuleBasedPolicy
+	Resumer         *orchestration.ResumeCoordinator
 }
 
 // SetupHITL initializes HITL infrastructure.
@@ -60,8 +61,8 @@ func SetupHITL(redisClient redis.UniversalClient, keyspace core.RedisKeyspace, a
 			"action":        string(action),
 			"status":        string(cp.Status),
 		})
-		// TODO (Phase 8.2): Implement auto-resume for action="approve"
-		// TODO (Phase 8.2): Implement result storage for action="reject"
+		// Notification only. The UI/task path resumes after durable approval;
+		// at-least-once callbacks may run before that status is persisted.
 	}); err != nil {
 		return nil, fmt.Errorf("set expiry callback: %w", err)
 	}

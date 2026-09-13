@@ -2947,16 +2947,12 @@
             const resumeId = ++activeResumeId;
 
             try {
-                // Build headers - include original request_id for trace correlation
+                // Resume lineage is loaded from the stored checkpoint by the server.
                 const headers = {
                     'Content-Type': 'application/json',
                     'Accept': 'text/event-stream',
                     'X-User-ID': userId
                 };
-                // Send original request_id so all traces can be linked in Jaeger
-                if (originalRequestId) {
-                    headers['X-Truvag3-Original-Request-ID'] = originalRequestId;
-                }
 
                 const response = await fetch(`${backendUrl}/hitl/resume/${checkpointId}`, {
                     method: 'POST',
@@ -2964,14 +2960,27 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error: ${response.status}`);
+                    const failure = await response.json().catch(() => ({}));
+                    const error = new Error(failure.error || `HTTP error: ${response.status}`);
+                    error.code = failure.code || 'resume_error';
+                    throw error;
                 }
 
+                const contentType = response.headers.get('content-type') || '';
+                if (!contentType.includes('text/event-stream')) {
+                    const payload = await response.json();
+                    if (payload.interrupted && payload.checkpoint) {
+                        if (resumeId === activeResumeId) handleSSEEvent('checkpoint', payload.checkpoint);
+                        return;
+                    }
+                    throw new Error('The server did not return a resume stream or checkpoint.');
+                }
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
                 let eventType = null;
                 let eventData = null;
+            let receivedTerminal = false;
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -2993,6 +3002,7 @@
                                     // Only process events if this resume is still active
                                     if (resumeId === activeResumeId) {
                                         handleSSEEvent(eventType, data);
+                                    if (['done', 'checkpoint', 'error'].includes(eventType)) receivedTerminal = true;
                                     }
                                 } catch (e) {
                                     console.error('[resume-sse] Failed to parse SSE data:', e, 'raw:', eventData);
@@ -3003,11 +3013,15 @@
                         }
                     }
                 }
+                if (!receivedTerminal && resumeId === activeResumeId) {
+                    throw new Error('The stream ended without a confirmed outcome.');
+                }
             } catch (error) {
                 console.error('Resume error:', error);
                 if (currentMessageEl && resumeId === activeResumeId) {
-                    showErrorInMessage(currentMessageEl, 'resume_error',
-                        'Failed to resume execution: ' + error.message, true);
+                    showErrorInMessage(currentMessageEl, error.code || 'resume_error',
+                        'Resume did not complete: ' + error.message +
+                        ' Check the checkpoint and execution records before submitting another resume.', false);
                 }
             } finally {
                 // Only reset state if this is the most recent resume

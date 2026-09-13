@@ -179,8 +179,8 @@ func TestFoundationCharacterization_ShortCircuitPersistsTerminalHookEvidence(t *
 			} else {
 				response, err = orchestrator.ProcessRequest(t.Context(), "request", nil)
 			}
-			if err != nil {
-				t.Fatalf("request error = %v", err)
+			if !errors.Is(err, test.callbackErr) {
+				t.Fatalf("request error = %v, want callback cause %v", err, test.callbackErr)
 			}
 
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -270,7 +270,7 @@ func TestFoundationCharacterization_NativeShortCircuitStreamingUsesByteChunks(t 
 	}
 }
 
-func TestFoundationCharacterization_NativeShortCircuitIgnoresCallbackStop(t *testing.T) {
+func TestFoundationCharacterization_NativeShortCircuitPreservesCallbackStop(t *testing.T) {
 	client := &foundationStreamingCapabilityClient{MockAIClient: NewMockAIClient()}
 	orchestrator, _ := foundationShortCircuitOrchestrator(t, client, strings.Repeat("x", 120))
 	stopErr := errors.New("stop delivery")
@@ -288,8 +288,8 @@ func TestFoundationCharacterization_NativeShortCircuitIgnoresCallbackStop(t *tes
 			return nil
 		},
 	)
-	if err != nil {
-		t.Fatalf("ProcessRequestStreaming() error = %v", err)
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("ProcessRequestStreaming() lost callback cause: %v", err)
 	}
 	if callbackCalls != 1 {
 		t.Fatalf("callback calls = %d, want delivery to stop immediately", callbackCalls)
@@ -413,8 +413,8 @@ func TestFoundationLifecycle_SimulatedStreamingUsesOnePrefixedRequest(t *testing
 			nil,
 			func(core.StreamChunk) error { return stopErr },
 		)
-		if err != nil {
-			t.Fatalf("ProcessRequestStreaming() error = %v", err)
+		if !errors.Is(err, stopErr) {
+			t.Fatalf("ProcessRequestStreaming() lost callback cause: %v", err)
 		}
 		if !strings.HasPrefix(response.RequestID, "foundation-") {
 			t.Fatalf("stopped simulated request ID = %q, want outer configured prefix", response.RequestID)

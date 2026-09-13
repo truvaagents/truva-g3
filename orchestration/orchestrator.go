@@ -3004,38 +3004,11 @@ func (o *AIOrchestrator) synthesizeBuffered(state *executionRunState) (*Orchestr
 		synthesisSpan.End()
 	}
 	if err != nil {
-		// The phase-loop snapshot predates AfterExecution. Persist another
-		// snapshot before returning so a failed synthesis cannot hide hook
-		// outcomes from the execution-debug record. Use a shallow copy so the
-		// terminal snapshot is failed without mutating the result used by other
-		// request-lifecycle observers.
-		failedResult := *loopResult.CombinedResult
-		failedResult.Success = false
-		o.storeTerminalExecutionAsync(
-			ctx,
-			request,
-			requestID,
-			loopResult.LastPlan,
-			&failedResult,
-			nil,
-		)
 		return nil, fmt.Errorf("synthesis failed: %w", err)
 	}
 
 	// --- Pipeline hooks: after synthesis ---
 	synthesizedResponse = o.runAfterSynthesisHooks(ctx, pctx, synthesizedResponse)
-
-	// Second store: persist result_trim metadata written by Synthesize into StepResult.Metadata.
-	// The first store (inside executePhaseLoop) fires before synthesis runs, so result_trim is absent.
-	// This second fire-and-forget write picks up the metadata without blocking the response path.
-	o.storeExecutionWithFinalResponseAsync(
-		ctx,
-		request,
-		requestID,
-		loopResult.LastPlan,
-		loopResult.CombinedResult,
-		synthesizedResponse,
-	)
 
 	// --- Build response ---
 	totalUsage, usageByPhase := usageAcc.Snapshot()
@@ -3228,9 +3201,6 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 				}
 				synthesisSpan.End()
 			}
-			partialResult := *loopResult.CombinedResult
-			partialResult.Success = false
-			o.storeTerminalExecutionAsync(ctx, request, requestID, loopResult.LastPlan, &partialResult, nil)
 			partialUsage, partialByPhase := usageAcc.Snapshot()
 			return &StreamingOrchestratorResponse{
 				OrchestratorResponse: OrchestratorResponse{
@@ -3278,9 +3248,6 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 			synthesisSpan.SetAttribute("synthesis.duration_ms", time.Since(synthesisStart).Milliseconds())
 			synthesisSpan.End()
 		}
-		failedResult := *loopResult.CombinedResult
-		failedResult.Success = false
-		o.storeTerminalExecutionAsync(ctx, request, requestID, loopResult.LastPlan, &failedResult, nil)
 		return nil, fmt.Errorf("synthesis streaming failed: %w", err)
 	}
 
@@ -3322,19 +3289,6 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 		}()
 		return o.runAfterSynthesisHooks(ctx, pctx, aiResponse.Content)
 	}()
-
-	// The terminal native-streaming snapshot is recorded only after synthesis
-	// and AfterSynthesis hooks reach their terminal outcome. Request-local
-	// ordering prevents this view from being overwritten by an earlier phase
-	// snapshot.
-	o.storeExecutionWithFinalResponseAsync(
-		ctx,
-		request,
-		requestID,
-		loopResult.LastPlan,
-		loopResult.CombinedResult,
-		finalContent,
-	)
 
 	// Build final response with all enhanced fields
 	totalUsage, usageByPhase := usageAcc.Snapshot()

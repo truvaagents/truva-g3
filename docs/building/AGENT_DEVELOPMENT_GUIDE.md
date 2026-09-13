@@ -2231,33 +2231,46 @@ The orchestrator will automatically pause before executing any step that uses a 
 
 ### 15.2 Resume Context: The Critical Contract
 
-When a human approves a checkpoint, your resume handler must rebuild the orchestrator's context from the stored checkpoint. The framework provides `BuildResumeContext` for this — **always use it**:
+Resume through `ResumeCoordinator`. It claims the approved checkpoint,
+restores context, renews ownership during work, and saves the actual terminal
+outcome. The application supplies its normal processing adapter:
 
 ```go
-func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
-    ctx := r.Context()
-    checkpointID := extractCheckpointID(r)
+executor := orchestration.ResumeExecutorFunc(func(
+    ctx context.Context, checkpoint *orchestration.ExecutionCheckpoint,
+) (*orchestration.ExecutionResult, error) {
+    // Use the real terminal result; successful tool steps alone are not success.
+    _, execution, err := orchestrator.ProcessRequestWithExecution(
+        ctx, checkpoint.OriginalRequest, checkpoint.UserContext,
+    )
+    return execution, err
+})
+config, err := orchestration.LoadResumeCoordinatorRuntimeConfigFromEnvironment(
+    orchestration.DefaultResumeCoordinatorRuntimeConfig(), os.LookupEnv,
+)
+if err != nil { return err }
+coordinator, err := orchestration.NewResumeCoordinator(
+    checkpointStore, executor, config, orchestration.WithResumeLogger(logger),
+)
+if err != nil { return err }
 
-    // 1. Load checkpoint from store
-    checkpoint, err := a.checkpointStore.LoadCheckpoint(ctx, checkpointID)
-    if err != nil {
-        http.Error(w, "Checkpoint not found", http.StatusNotFound)
-        return
-    }
-
-    // 2. Build resume context — single call handles the full contract
-    resumeCtx, endResumeSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-    defer endResumeSpan()
-
-    // 3. Re-enter the orchestrator with the original request
-    result, err := a.orchestrator.ProcessRequest(resumeCtx, checkpoint.OriginalRequest, checkpoint.UserContext)
-    // ...
-}
+// At the request boundary:
+_, err = coordinator.ResumeExecution(ctx, checkpointID)
+return err
 ```
+
+For streaming, call `ResumeWithExecutor` with a request-local callback and
+`ProcessRequestStreamingWithExecution`. Forward progress, but send `done`
+or a new checkpoint only after the coordinator finalizes. Before SSE headers,
+return the status/code from `HITLErrorResponse`; afterward send an error event
+with `retryable: false`. Never infer success from a nil error alone.
+
+HTTP/SSE work follows caller cancellation. Accepted tasks use their worker
+context independently of the submitting HTTP request. A failed task is not
+automatically re-enqueued; inspect effects before an explicit retry.
+
+The coordinator calls the following context helper once; applications do not
+call it a second time or use it to bypass claims.
 
 `BuildResumeContext` ([hitl_helpers.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_helpers.go)) sets up the full resume contract in a single call:
 
@@ -2272,7 +2285,7 @@ func (a *MyAgent) handleResume(w http.ResponseWriter, r *http.Request) {
 | Validated conversation context | Restores canonical `conversation_id` to core context, checkpoint metadata, and metric-ineligible W3C Baggage when present |
 | `WithMetadata(ctx, userContext)` | Preserves session metadata (session ID, user info, etc.) |
 
-It also validates that the checkpoint has a resumable status (`approved`, `edited`, or `expired_approved`), returning an error for terminal or pending checkpoints.
+It also validates that the checkpoint has a resumable status (`approved` or `expired_approved`), returning an error for terminal or pending checkpoints.
 
 ### 15.3 Common Pitfall: Manual Context Setup
 

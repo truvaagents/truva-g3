@@ -26,6 +26,9 @@ const (
 	MetricWebhookSent        = "orchestration.hitl.webhook_sent_total"
 	MetricCommandPublished   = "orchestration.hitl.command_published_total"
 	MetricNotificationFailed = "orchestration.hitl.notification_failed_total"
+	MetricResumeAttempt      = "orchestration.hitl.resume_attempt_total"
+	MetricResumeRenewal      = "orchestration.hitl.resume_renewal_total"
+	MetricResumeOutcome      = "orchestration.hitl.resume_outcome_total"
 
 	// Expiry processor counters
 	MetricCheckpointExpired = "orchestration.hitl.checkpoint_expired_total"
@@ -57,7 +60,8 @@ func RecordCheckpointCreated(interruptPoint InterruptPoint, reason InterruptReas
 	)
 }
 
-// RecordCheckpointStatus records checkpoint status transitions.
+// RecordCheckpointStatus counts successfully persisted command-driven status
+// transitions. Resume ownership, expiry, and transaction retries are not counted.
 // Labels: from_status, to_status, module
 func RecordCheckpointStatus(fromStatus, toStatus CheckpointStatus) {
 	telemetry.Counter(MetricCheckpointStatus,

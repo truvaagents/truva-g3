@@ -531,6 +531,15 @@ interfaces.
 | Default timeout action | reject | `TRUVAG3_HITL_DEFAULT_ACTION` | — |
 | Expiry claim lease | 30s | `TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` | `WithCheckpointExpiryRuntimeConfig(config)` |
 | Expiry claim owner identifier | 128 characters maximum | — (`maxCheckpointClaimOwnerLen`) | `WithCheckpointExpiryOwner(owner)` |
+| Resume ownership lease | 30s; accepts 3s–24h | `TRUVAG3_HITL_RESUME_CLAIM_LEASE` | `ResumeCoordinatorRuntimeConfig.ClaimLease` |
+| Resume finalization/release timeout | 5s; positive, at most 1m and lease/3 | `TRUVAG3_HITL_RESUME_CLEANUP_TIMEOUT` | `ResumeCoordinatorRuntimeConfig.CleanupTimeout` |
+| Resume owner identifier | Generated per process; 128 bytes maximum | — | `WithResumeOwner(owner)` |
+
+Resume environment settings are read by the explicit
+`LoadResumeCoordinatorRuntimeConfigFromEnvironment` loader. The coordinator
+constructor validates its supplied config without reading environment variables.
+The resume lease is separate from the human approval timeout and checkpoint
+retention. Renewing ownership does not extend storage TTL.
 
 The expiry claim-owner cap is a coordination-protocol invariant: bounded owner
 values keep backend claim records and diagnostic dimensions predictable. It is

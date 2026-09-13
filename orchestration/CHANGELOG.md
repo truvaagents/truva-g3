@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — framework-owned HITL resume
+
+- Add `ResumeCoordinator`, `ResumeExecutor`, and the optional
+  `CheckpointResumePersistence` backend capability. Claim, renewal, release,
+  and finalization use backend-time fencing and preserve checkpoint retention.
+- Add `resuming` and `continued` states, durable successor provenance, guarded
+  deletion, and expected-status CAS for human decisions. Keep the existing
+  Redis/Valkey DB-0 keyspace, borrowed clients, and expiry callback behavior.
+- Add result-bearing sync and streaming processing methods so adapters return
+  the actual terminal result, including synthesis, hook, and callback failures.
+- Remove the controller's unimplemented resume method. `NewHITLHandler` now
+  returns an error and accepts `WithHITLResumer`; without it, no resume route is
+  registered. Current workspace callers migrate directly, without compatibility
+  wrappers, under the development-stage no-external-users policy.
+- Default commands support approve/reject/abort only. Public checkpoint DTOs
+  omit internal attempt ownership while preserving application payloads.
+- Add correlated lifecycle events/logs and bounded resume counters. Status
+  transition metrics count only successfully persisted command transitions.
+
 ## Unreleased — canonical Redis adapters
 
 - Remove role-specific DB routing and `redisprovider.WithRoleDatabase`.

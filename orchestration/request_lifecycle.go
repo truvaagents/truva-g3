@@ -37,8 +37,11 @@ type responseDeliveryState struct {
 }
 
 type requestRunResult struct {
-	Response OrchestratorResponse
-	Delivery responseDeliveryState
+	Response            OrchestratorResponse
+	Delivery            responseDeliveryState
+	Execution           *ExecutionResult
+	ResponseAvailable   bool
+	FinalResponseSource string
 }
 
 type requestCorrelation struct {
@@ -287,14 +290,19 @@ func (c synthesisCoordinator) Run(state *executionRunState) (*requestRunResult, 
 		if response == nil {
 			return nil, err
 		}
-		return &requestRunResult{Response: *response}, err
+		return &requestRunResult{Response: *response, FinalResponseSource: FinalResponseSourceAfterSynthesisHooks}, err
 	case deliverNativeStream:
 		response, err := c.orchestrator.synthesizeNativeStreaming(state)
 		if response == nil {
 			return nil, err
 		}
+		source := ""
+		if response.StreamCompleted {
+			source = FinalResponseSourceAfterSynthesisHooks
+		}
 		return &requestRunResult{
-			Response: response.OrchestratorResponse,
+			Response:            response.OrchestratorResponse,
+			FinalResponseSource: source,
 			Delivery: responseDeliveryState{
 				ChunksDelivered: response.ChunksDelivered,
 				StreamCompleted: response.StreamCompleted,
@@ -312,7 +320,7 @@ func (c synthesisCoordinator) Run(state *executionRunState) (*requestRunResult, 
 		if deliveryErr != nil {
 			response.Errors = append(response.Errors, "stream callback stopped delivery")
 		}
-		return &requestRunResult{Response: *response, Delivery: deliveryState}, err
+		return &requestRunResult{Response: *response, Delivery: deliveryState, FinalResponseSource: FinalResponseSourceAfterSynthesisHooks}, errors.Join(err, deliveryErr)
 	default:
 		return nil, ErrInvalidOrchestratorConfig
 	}
@@ -345,6 +353,7 @@ type executionRunState struct {
 	completionReason      string
 	spanFailed            bool
 	streamChunksDelivered int
+	postExecutionStarted  bool
 }
 
 func (s *executionRunState) setSkillState(state SkillExecutionState) {
@@ -393,14 +402,27 @@ func (o *AIOrchestrator) ProcessRequest(
 	request string,
 	metadata map[string]interface{},
 ) (*OrchestratorResponse, error) {
+	response, _, err := o.ProcessRequestWithExecution(ctx, request, metadata)
+	return response, err
+}
+
+// ProcessRequestWithExecution returns the actual terminal execution alongside
+// the application response and error. A partial execution can accompany a nil
+// response; no result is invented when execution never produced one.
+func (o *AIOrchestrator) ProcessRequestWithExecution(
+	ctx context.Context, request string, metadata map[string]interface{},
+) (*OrchestratorResponse, *ExecutionResult, error) {
 	result, err := o.runRequest(ctx, requestRunInput{
 		Request: request, Metadata: metadata, Delivery: deliverBuffered,
 	})
 	if result == nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if !result.ResponseAvailable {
+		return nil, result.Execution, err
 	}
 	response := result.Response
-	return &response, err
+	return &response, result.Execution, err
 }
 
 // ProcessRequestStreaming selects delivery capability before creating request
@@ -412,6 +434,15 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 	metadata map[string]interface{},
 	callback core.StreamCallback,
 ) (*StreamingOrchestratorResponse, error) {
+	response, _, err := o.ProcessRequestStreamingWithExecution(ctx, request, metadata, callback)
+	return response, err
+}
+
+// ProcessRequestStreamingWithExecution uses the same request lifecycle and
+// preserves its terminal execution, including synthesis and delivery failures.
+func (o *AIOrchestrator) ProcessRequestStreamingWithExecution(
+	ctx context.Context, request string, metadata map[string]interface{}, callback core.StreamCallback,
+) (*StreamingOrchestratorResponse, *ExecutionResult, error) {
 	delivery := deliverSimulatedStream
 	fallbackReason := "strategy_non_llm"
 	if o.config.SynthesisStrategy == StrategyLLM && supportsNativeStreaming(o.aiClient) {
@@ -425,7 +456,10 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 		DeliveryFallbackReason: fallbackReason, Callback: callback,
 	})
 	if result == nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if !result.ResponseAvailable {
+		return nil, result.Execution, err
 	}
 	return &StreamingOrchestratorResponse{
 		OrchestratorResponse: result.Response,
@@ -434,7 +468,7 @@ func (o *AIOrchestrator) ProcessRequestStreaming(
 		PartialContent:       result.Delivery.PartialContent,
 		StepResults:          result.Delivery.StepResults,
 		FinishReason:         result.Delivery.FinishReason,
-	}, err
+	}, result.Execution, err
 }
 
 func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) (runResult *requestRunResult, runErr error) {
@@ -449,11 +483,13 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 			// Named return values are not assigned while a panic unwinds. Use
 			// the phase coordinator's last diagnostic state before propagating.
 			state.completionReason = "panic"
+			o.finishRequestExecution(state, nil, errors.New("orchestration request panic"))
 			o.ensureTerminalPipelineHookSnapshot(state, fmt.Errorf("orchestration request panic: %v", value))
 			recordRunSpanFailure(state)
 			o.completeFailedRun(state, nil)
 			panic(value)
 		}
+		runResult = o.finishRequestExecution(state, runResult, runErr)
 		if runErr != nil {
 			o.ensureTerminalPipelineHookSnapshot(state, runErr)
 		}
@@ -581,16 +617,7 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 				Success:       true,
 				TotalDuration: time.Since(state.StartedAt),
 			}
-			o.storeExecutionWithFinalResponseSourceAsync(
-				state.Context,
-				state.Input.Request,
-				state.Correlation.RequestID,
-				nil,
-				executionResult,
-				response.Response,
-				FinalResponseSourceBeforePlanningShortCircuit,
-			)
-			result := &requestRunResult{Response: *response}
+			result := &requestRunResult{Response: *response, Execution: executionResult, FinalResponseSource: FinalResponseSourceBeforePlanningShortCircuit}
 			o.completeRun(state, result)
 			return result, nil
 		}
@@ -602,18 +629,9 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 			Success:       callbackErr == nil && !deliveryState.PartialContent,
 			TotalDuration: time.Since(state.StartedAt),
 		}
-		o.storeExecutionWithFinalResponseSourceAsync(
-			state.Context,
-			state.Input.Request,
-			state.Correlation.RequestID,
-			nil,
-			executionResult,
-			response.Response,
-			FinalResponseSourceBeforePlanningShortCircuit,
-		)
-		result := &requestRunResult{Response: *response, Delivery: deliveryState}
+		result := &requestRunResult{Response: *response, Delivery: deliveryState, Execution: executionResult, FinalResponseSource: FinalResponseSourceBeforePlanningShortCircuit}
 		o.completeRun(state, result)
-		return result, nil
+		return result, callbackErr
 	}
 	state.Context = core.WithPipelineEnrichments(state.Context, state.Pipeline.Enrichments)
 
@@ -638,6 +656,7 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 		return nil, err
 	}
 
+	state.postExecutionStarted = true
 	o.runAfterExecutionHooks(state.Context, state.Pipeline, state.Phase.Result.CombinedResult)
 	o.markRunSynthesizing(state)
 
@@ -648,6 +667,50 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 	}
 	o.completeRun(state, result)
 	return result, err
+}
+
+// finishRequestExecution is the single terminal-result boundary for response
+// adapters and debug persistence. It never mutates the admitted phase result.
+func (o *AIOrchestrator) finishRequestExecution(state *executionRunState, result *requestRunResult, runErr error) *requestRunResult {
+	var base *ExecutionResult
+	var plan *RoutingPlan
+	if result != nil {
+		result.ResponseAvailable = true
+		base = result.Execution
+	}
+	if state.Phase.Result != nil {
+		plan = state.Phase.Result.LastPlan
+		if base == nil {
+			base = state.Phase.Result.CombinedResult
+		}
+	}
+	if base == nil {
+		return result
+	}
+	if result == nil {
+		result = &requestRunResult{}
+	}
+	terminal := *base
+	terminal.TotalDuration = time.Since(state.StartedAt)
+	if runErr != nil || result.Delivery.PartialContent || len(result.Response.Errors) != 0 {
+		terminal.Success = false
+	}
+	result.Execution = &terminal
+	if !state.postExecutionStarted && (state.completionReason == "execution_failed" || state.completionReason == "interrupted") {
+		if holder, ok := pipelineHookExecutionHolderFromContext(state.Context); ok && holder.HasTerminalPublisher() {
+			// The phase boundary already published its failed/interrupted result.
+			// Preserve that publisher and its admitted-work evidence.
+			return result
+		}
+	}
+	if result.ResponseAvailable && result.FinalResponseSource != "" {
+		// An application response can be known even if its delivery fails.
+		// Preserve the response while keeping execution success false.
+		o.storeExecutionWithFinalResponseSourceAsync(state.Context, state.Input.Request, state.Correlation.RequestID, plan, &terminal, result.Response.Response, result.FinalResponseSource)
+	} else {
+		o.storeTerminalExecutionAsync(state.Context, state.Input.Request, state.Correlation.RequestID, plan, &terminal, GetCheckpoint(runErr))
+	}
+	return result
 }
 
 // ensureTerminalPipelineHookSnapshot closes the uncommon error paths that end
@@ -728,6 +791,7 @@ func (o *AIOrchestrator) beginRequestRun(ctx context.Context, input requestRunIn
 	}
 	startedAt := time.Now()
 	requestID := o.newRequestID()
+	reportResumeRequestID(ctx, requestID)
 	ctx = telemetry.WithBaggage(ctx, "request_id", requestID)
 
 	ctx, conversationID, metadata := o.resolveConversationContext(ctx, input.Metadata)

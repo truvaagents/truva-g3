@@ -807,6 +807,7 @@ For sensitive operations, the orchestration module supports pausing execution an
 requirements, _ := orchestration.RequirementsForFeatures(
     nil,
     orchestration.BackendFeatureCrossInstanceHITL,
+    orchestration.BackendFeatureHITLResume,
 )
 if err := backends.ValidateFor(requirements); err != nil {
     return err
@@ -831,9 +832,24 @@ policy := orchestration.NewRuleBasedPolicy(orchestration.HITLConfig{
 
 // 4. Create controller and attach to orchestrator
 controller := orchestration.NewInterruptController(policy, checkpointStore, handler)
-orchestrator := orchestration.NewAIOrchestrator(config, discovery, aiClient,
-    orchestration.WithHITL(controller),
+orchestrator := orchestration.NewAIOrchestrator(config, discovery, aiClient)
+orchestrator.SetInterruptController(controller)
+
+// 5. Resume ownership is separate from interruption policy.
+resumer, err := orchestration.NewResumeCoordinator(
+    backends.CheckpointResume(),
+    orchestration.ResumeExecutorFunc(func(ctx context.Context, cp *orchestration.ExecutionCheckpoint) (*orchestration.ExecutionResult, error) {
+        _, execution, err := orchestrator.ProcessRequestWithExecution(ctx, cp.OriginalRequest, cp.UserContext)
+        return execution, err
+    }),
+    orchestration.DefaultResumeCoordinatorRuntimeConfig(),
 )
+if err != nil { return err }
+httpHandler, err := orchestration.NewHITLHandler(
+    controller, checkpointStore, orchestration.WithHITLResumer(resumer),
+)
+if err != nil { return err }
+httpHandler.RegisterRoutes(mux)
 ```
 
 ### Four Interrupt Points
@@ -842,9 +858,9 @@ HITL can pause execution at different stages:
 
 | Interrupt Point | Triggered When | Use Case |
 |-----------------|----------------|----------|
-| `before_plan_execution` | AI generates a plan | Approve overall strategy |
+| `plan_generated` | AI generates a plan | Approve overall strategy |
 | `before_step` | Before each tool call | Approve individual operations |
-| `after_step` | After tool returns | Validate output before proceeding |
+| `after_step` | Reserved, not an active gate | Future output validation |
 | `on_error` | Errors exceed retry threshold | Human escalation |
 
 ### Approval Flow
@@ -854,11 +870,25 @@ HITL can pause execution at different stages:
 2. Webhook notification sent to your system
 3. Human reviews and responds:
    POST /hitl/command
-   {"checkpoint_id": "...", "type": "approve"} // or "reject", "abort", "modify"
+   {"checkpoint_id": "...", "type": "approve"} // or "reject", "abort"
 4. Resume execution:
    POST /hitl/resume/{checkpoint_id}
-5. Orchestrator continues or stops based on command
+5. Coordinator claims ownership, invokes the adapter, and saves its real outcome
 ```
+
+Only saved terminal success becomes HTTP 200 or SSE `done`. A second
+interruption saves a parent-to-successor `continued` relationship before
+returning JSON 202 or an SSE checkpoint event. Concurrent owners receive 409
+`resume_in_progress`; ownership lost during work is the distinct
+`resume_claim_lost`. Neither implies safe automatic retry.
+
+SSE uses a request-local executor and `ProcessRequestStreamingWithExecution`.
+HTTP/SSE disconnects cancel active work; accepted tasks use independent worker
+contexts. Bounded detached cleanup follows settlement. The coordinator borrows
+its dependencies and has no persistent background worker or `Close()`.
+Explicit startup configuration may load
+`TRUVAG3_HITL_RESUME_CLAIM_LEASE` (30s) and
+`TRUVAG3_HITL_RESUME_CLEANUP_TIMEOUT` (5s). Neither changes checkpoint retention.
 
 ### Auto-Resume on Timeout
 

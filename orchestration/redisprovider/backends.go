@@ -70,6 +70,7 @@ func NewOrchestrationBackends(
 		backendOptions = append(backendOptions,
 			orchestration.WithCheckpointPersistence(checkpoints),
 			orchestration.WithCheckpointExpiry(checkpoints),
+			orchestration.WithCheckpointResume(checkpoints),
 			orchestration.WithCommandBackend(commands),
 		)
 	}

@@ -397,7 +397,7 @@ func (processor *CheckpointExpiryProcessor) processCheckpoint(ctx context.Contex
 }
 
 func (processor *CheckpointExpiryProcessor) updateStatus(ctx context.Context, checkpoint *ExecutionCheckpoint, status CheckpointStatus) bool {
-	if err := processor.persistence.UpdateCheckpointStatus(ctx, checkpoint.CheckpointID, status); err != nil {
+	if err := processor.persistence.UpdateCheckpointStatus(ctx, checkpoint.CheckpointID, checkpoint.Status, status); err != nil {
 		telemetry.SetSpanAttributes(ctx,
 			attribute.String("status", "error"),
 			attribute.String("error_type", "store_write"),

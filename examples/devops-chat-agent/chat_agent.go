@@ -422,6 +422,11 @@ func (t *DevOpsChatAgent) addConversationHistoryMetadata(metadata map[string]int
 // It uses true streaming when the orchestrator supports it, falling back to
 // simulated streaming (chunking the complete response) otherwise.
 func (t *DevOpsChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, query string, callback StreamCallback) error {
+	_, err := t.processWithStreamingExecution(ctx, sessionID, query, callback)
+	return err
+}
+
+func (t *DevOpsChatAgent) processWithStreamingExecution(ctx context.Context, sessionID, query string, callback StreamCallback) (*orchestration.ExecutionResult, error) {
 	startTime := time.Now()
 
 	t.mu.RLock()
@@ -429,7 +434,7 @@ func (t *DevOpsChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, q
 	t.mu.RUnlock()
 
 	if orch == nil {
-		return fmt.Errorf("orchestrator not initialized")
+		return nil, fmt.Errorf("orchestrator not initialized")
 	}
 
 	// Detect if this is a HITL resume (skip "Analyzing..." status)
@@ -492,7 +497,7 @@ func (t *DevOpsChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, q
 	})
 
 	// Pass raw query + metadata (history auto-promoted to enrichments by orchestrator)
-	result, err := orch.ProcessRequestStreaming(ctx, query, metadata, func(chunk core.StreamChunk) error {
+	result, execution, err := orch.ProcessRequestStreamingWithExecution(ctx, query, metadata, func(chunk core.StreamChunk) error {
 		// Phase-complete chunks are transient progress indicators, not response content.
 		// Send them as status events so the UI shows them temporarily during processing
 		// rather than accumulating them into the final response text.
@@ -505,7 +510,12 @@ func (t *DevOpsChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, q
 		if chunk.Content != "" {
 			callback.SendChunk(chunk.Content)
 		}
-		return nil
+		if delivery, ok := callback.(interface{ Err() error }); ok {
+			if err := delivery.Err(); err != nil {
+				return err
+			}
+		}
+		return ctx.Err()
 	})
 	if err != nil {
 		// Check for HITL interrupt — execution paused for human approval
@@ -514,7 +524,7 @@ func (t *DevOpsChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, q
 			if checkpoint != nil {
 				callback.SendCheckpoint(checkpoint)
 			}
-			return err // Signal interrupt to caller
+			return execution, err // Preserve the real interrupted execution result.
 		}
 
 		t.Logger.ErrorWithContext(ctx, "Streaming orchestration failed", map[string]interface{}{
@@ -523,9 +533,12 @@ func (t *DevOpsChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, q
 			"duration_ms": time.Since(startTime).Milliseconds(),
 		})
 		telemetry.RecordSpanError(ctx, err)
-		return fmt.Errorf("streaming orchestration failed: %w", err)
+		return execution, fmt.Errorf("streaming orchestration failed: %w", err)
 	}
 
+	if result == nil || execution == nil || !execution.Success {
+		return execution, &orchestration.ErrCheckpointExecutionFailed{}
+	}
 	response := result.Response
 	requestID := result.RequestID
 	agentsInvolved := result.AgentsInvolved
@@ -610,7 +623,7 @@ func (t *DevOpsChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, q
 		"status":      "success",
 	})
 
-	return nil
+	return execution, nil
 }
 
 // ProcessQuery handles a non-streaming query for agent-to-agent delegation.
@@ -661,8 +674,12 @@ func (t *DevOpsChatAgent) ProcessQuery(ctx context.Context, sessionID, query str
 	// Loop handles multi-gate HITL: a resumed plan may hit a second gate.
 	currentCtx := ctx
 	currentQuery := query
-	result, err := orch.ProcessRequest(currentCtx, currentQuery, metadata)
+	result, execution, err := orch.ProcessRequestWithExecution(currentCtx, currentQuery, metadata)
 	for err != nil && orchestration.IsInterrupted(err) {
+		var lifecycle *orchestration.ErrCheckpointResumeLifecycle
+		if errors.As(err, &lifecycle) {
+			break // A nested interruption does not override failed finalization.
+		}
 		checkpoint := orchestration.GetCheckpoint(err)
 		if checkpoint == nil {
 			noCheckpointErr := fmt.Errorf("HITL interrupted but no checkpoint available")
@@ -730,6 +747,9 @@ func (t *DevOpsChatAgent) ProcessQuery(ctx context.Context, sessionID, query str
 			}, nil
 		}
 
+		if cmd == nil {
+			return nil, fmt.Errorf("HITL command subscription closed without a decision")
+		}
 		telemetry.AddSpanEvent(currentCtx, "hitl.delegation.wait_completed",
 			attribute.String("request_id", checkpoint.RequestID),
 			attribute.String("outcome", string(cmd.Type)),
@@ -737,38 +757,28 @@ func (t *DevOpsChatAgent) ProcessQuery(ctx context.Context, sessionID, query str
 		)
 
 		// Rejected — return structured response, not error
-		if cmd.Type == orchestration.CommandReject {
+		if cmd.Type == orchestration.CommandReject || cmd.Type == orchestration.CommandAbort {
 			return &orchestration.OrchestratorResponse{
 				RequestID: checkpoint.RequestID,
 				Response:  fmt.Sprintf("HITL rejected: %s", cmd.Feedback),
 			}, nil
 		}
 
-		// Approved — resume execution from checkpoint
-		checkpoint.Status = orchestration.CheckpointStatusApproved
-		resumeCtx, endSpan, buildErr := orchestration.BuildResumeContext(currentCtx, checkpoint)
-		if buildErr != nil {
-			telemetry.RecordSpanError(currentCtx, buildErr)
-			return nil, fmt.Errorf("failed to build resume context: %w", buildErr)
+		if cmd.Type != orchestration.CommandApprove {
+			return nil, &orchestration.ErrCheckpointCommandUnsupported{CommandType: cmd.Type}
 		}
-
-		result, err = orch.ProcessRequest(resumeCtx, checkpoint.OriginalRequest, nil)
-
-		// Mark checkpoint completed (or failed) regardless of outcome
-		if err == nil || !orchestration.IsInterrupted(err) {
-			checkpoint.Status = orchestration.CheckpointStatusCompleted
-			if saveErr := hitl.CheckpointStore.SaveCheckpoint(resumeCtx, checkpoint); saveErr != nil {
-				t.Logger.WarnWithContext(resumeCtx, "Failed to mark checkpoint completed", map[string]interface{}{
-					"operation":     "process_query",
-					"request_id":    checkpoint.RequestID,
-					"checkpoint_id": checkpoint.CheckpointID,
-					"error":         saveErr.Error(),
-				})
-			}
+		if hitl.Resumer == nil {
+			return nil, fmt.Errorf("HITL resume coordinator not configured")
 		}
-
-		endSpan()
-		currentCtx = resumeCtx
+		// The command handler persisted approval before publishing. Only the
+		// coordinator may claim that durable state and finalize the result.
+		execution, err = hitl.Resumer.ResumeWithExecutor(currentCtx, checkpoint.CheckpointID,
+			orchestration.ResumeExecutorFunc(func(resumeCtx context.Context, approved *orchestration.ExecutionCheckpoint) (*orchestration.ExecutionResult, error) {
+				var resumeErr error
+				var resumed *orchestration.ExecutionResult
+				result, resumed, resumeErr = t.executeApprovedCheckpointResponse(resumeCtx, approved)
+				return resumed, resumeErr
+			}))
 		// Loop continues if err is another ErrInterrupted (multi-gate plan)
 	}
 	if err != nil {
@@ -780,6 +790,10 @@ func (t *DevOpsChatAgent) ProcessQuery(ctx context.Context, sessionID, query str
 		})
 		telemetry.RecordSpanError(currentCtx, err)
 		return nil, fmt.Errorf("orchestration failed: %w", err)
+	}
+
+	if result == nil || execution == nil || !execution.Success {
+		return nil, &orchestration.ErrCheckpointExecutionFailed{}
 	}
 
 	// Store response in session for continuity (only when session was provided)

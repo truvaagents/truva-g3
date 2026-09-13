@@ -170,3 +170,108 @@ func IsHITLDisabled(err error) bool {
 	var disabled *ErrHITLDisabled
 	return errors.As(err, &disabled)
 }
+
+// ErrInvalidResumeRequest rejects invalid per-call input before acquiring ownership.
+type ErrInvalidResumeRequest struct{ Field string }
+
+func (e *ErrInvalidResumeRequest) Error() string { return "invalid HITL resume request: " + e.Field }
+
+// ErrCheckpointResumeLifecycle retains both an execution cause and an ownership
+// or persistence failure. An embedded interruption does not make it a successful
+// continuation: transports must handle this failure before ErrInterrupted.
+type ErrCheckpointResumeLifecycle struct {
+	Stage          string
+	Cause          error
+	ExecutionError error
+}
+
+func (e *ErrCheckpointResumeLifecycle) Error() string {
+	return fmt.Sprintf("HITL resume %s failed: %v", e.Stage, errors.Join(e.Cause, e.ExecutionError))
+}
+
+func (e *ErrCheckpointResumeLifecycle) Unwrap() []error {
+	var causes []error
+	if e.Cause != nil {
+		causes = append(causes, e.Cause)
+	}
+	if e.ExecutionError != nil {
+		causes = append(causes, e.ExecutionError)
+	}
+	return causes
+}
+
+// ErrCheckpointNotResumable rejects a checkpoint before application execution.
+type ErrCheckpointNotResumable struct {
+	CheckpointID string
+	Status       CheckpointStatus
+}
+
+func (e *ErrCheckpointNotResumable) Error() string {
+	return fmt.Sprintf("checkpoint %s is not resumable (status: %s)", e.CheckpointID, e.Status)
+}
+
+// ErrCheckpointResumeInProgress means another live attempt owns this checkpoint.
+type ErrCheckpointResumeInProgress struct{ CheckpointID string }
+
+func (e *ErrCheckpointResumeInProgress) Error() string {
+	return fmt.Sprintf("checkpoint %s has an active resume attempt", e.CheckpointID)
+}
+
+// ErrCheckpointResumeClaimLost means work may have executed, but ownership is no
+// longer valid. Callers must not infer that replaying external effects is safe.
+type ErrCheckpointResumeClaimLost struct{ CheckpointID string }
+
+func (e *ErrCheckpointResumeClaimLost) Error() string {
+	return fmt.Sprintf("resume ownership lost for checkpoint %s; work may have executed", e.CheckpointID)
+}
+
+// ErrCheckpointStatusConflict rejects stale or unauthorized lifecycle writes.
+type ErrCheckpointStatusConflict struct {
+	CheckpointID string
+	Expected     CheckpointStatus
+	Actual       CheckpointStatus
+	Next         CheckpointStatus
+}
+
+func (e *ErrCheckpointStatusConflict) Error() string {
+	return fmt.Sprintf("checkpoint %s status conflict: expected %s, found %s, requested %s", e.CheckpointID, e.Expected, e.Actual, e.Next)
+}
+
+// ErrCheckpointDeletionConflict preserves active or recovery-pending ownership.
+type ErrCheckpointDeletionConflict struct {
+	CheckpointID string
+	Status       CheckpointStatus
+}
+
+func (e *ErrCheckpointDeletionConflict) Error() string {
+	return fmt.Sprintf("checkpoint %s cannot be deleted while %s", e.CheckpointID, e.Status)
+}
+
+// ErrCheckpointSuccessorConflict means continuation identity is unverified.
+type ErrCheckpointSuccessorConflict struct{ CheckpointID string }
+
+func (e *ErrCheckpointSuccessorConflict) Error() string {
+	return fmt.Sprintf("checkpoint %s has inconsistent successor evidence", e.CheckpointID)
+}
+
+// ErrCheckpointCASExhausted reports bounded transaction contention, not proof
+// that another attempt owns the checkpoint.
+type ErrCheckpointCASExhausted struct{ CheckpointID string }
+
+func (e *ErrCheckpointCASExhausted) Error() string {
+	return fmt.Sprintf("checkpoint %s transaction retry limit reached", e.CheckpointID)
+}
+
+// ErrCheckpointExecutionFailed rejects absent or unsuccessful terminal results.
+type ErrCheckpointExecutionFailed struct{}
+
+func (*ErrCheckpointExecutionFailed) Error() string {
+	return "resume executor did not produce a successful terminal result"
+}
+
+// ErrCheckpointCommandUnsupported rejects commands without durable application.
+type ErrCheckpointCommandUnsupported struct{ CommandType CommandType }
+
+func (e *ErrCheckpointCommandUnsupported) Error() string {
+	return fmt.Sprintf("default HITL controller does not support command %s", e.CommandType)
+}

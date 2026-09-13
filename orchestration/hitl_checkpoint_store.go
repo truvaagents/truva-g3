@@ -299,7 +299,9 @@ func NewRedisCheckpointStoreWithClient(client redis.UniversalClient, opts ...Red
 // SaveCheckpoint persists execution state with trace correlation.
 // Redis failures retain their cause; the enclosing operation owns span-error recording.
 func (s *RedisCheckpointStore) SaveCheckpoint(ctx context.Context, cp *ExecutionCheckpoint) error {
-	key := s.keys.checkpoint(cp.CheckpointID)
+	if cp == nil {
+		return errors.New("orchestration: checkpoint is required")
+	}
 
 	// Stamp the physical agent identity onto the checkpoint.
 	// Only set if not already populated — allow callers to override if needed.
@@ -310,26 +312,46 @@ func (s *RedisCheckpointStore) SaveCheckpoint(ctx context.Context, cp *Execution
 		cp.AgentAddress = s.agentAddress
 	}
 
-	data, err := json.Marshal(cp)
-	if err != nil {
-		return fmt.Errorf("failed to marshal checkpoint %s: %w (check checkpoint data for non-serializable fields)", cp.CheckpointID, err)
+	ids := []string{cp.CheckpointID}
+	if cp.ParentCheckpointID != "" {
+		ids = append(ids, cp.ParentCheckpointID)
 	}
-
-	_, err = s.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Set(ctx, key, data, s.ttl)
-		if cp.Status == CheckpointStatusPending {
-			pipe.SAdd(ctx, s.keys.pending(), cp.CheckpointID)
-			pipe.Expire(ctx, s.keys.pending(), s.ttl)
-		} else {
-			pipe.SRem(ctx, s.keys.pending(), cp.CheckpointID)
+	err := s.checkpointTransaction(ctx, ids, func(tx *redis.Tx) error {
+		current, err := s.readWatchedCheckpoint(ctx, tx, cp.CheckpointID)
+		if err != nil && !IsCheckpointNotFound(err) {
+			return err
 		}
-		if cp.RequestID != "" {
-			pipe.SAdd(ctx, s.keys.request(cp.RequestID), cp.CheckpointID)
-			pipe.Expire(ctx, s.keys.request(cp.RequestID), s.ttl)
+		if cp.ResumeState != nil || cp.Status == CheckpointStatusResuming || cp.Status == CheckpointStatusContinued {
+			return &ErrCheckpointStatusConflict{CheckpointID: cp.CheckpointID, Next: cp.Status}
 		}
-		return nil
+		if current != nil {
+			allowed := (current.Status == CheckpointStatusPreparing && (cp.Status == CheckpointStatusPreparing || cp.Status == CheckpointStatusPending)) ||
+				(current.Status == CheckpointStatusPending && cp.Status == CheckpointStatusPending && current.ParentCheckpointID == "")
+			if !allowed || current.RequestID != cp.RequestID || current.ParentCheckpointID != cp.ParentCheckpointID || current.ParentResumeAttemptID != cp.ParentResumeAttemptID {
+				return &ErrCheckpointStatusConflict{CheckpointID: cp.CheckpointID, Expected: cp.Status, Actual: current.Status, Next: cp.Status}
+			}
+		}
+		var deadline time.Time
+		if cp.ParentCheckpointID != "" {
+			parent, err := s.readOwnedCheckpoint(ctx, tx, cp.ParentCheckpointID, cp.ParentResumeAttemptID)
+			if err != nil {
+				return err
+			}
+			if parent.ResumeState.ReservedSuccessorCheckpointID != cp.CheckpointID || parent.ResumeState.ReservedSuccessorAttemptID != cp.ParentResumeAttemptID || (cp.Status != CheckpointStatusPreparing && cp.Status != CheckpointStatusPending) {
+				return &ErrCheckpointSuccessorConflict{CheckpointID: cp.CheckpointID}
+			}
+			deadline = parent.ResumeState.LeaseExpiresAt
+		} else if cp.ParentResumeAttemptID != "" {
+			return &ErrCheckpointSuccessorConflict{CheckpointID: cp.CheckpointID}
+		}
+		return s.writeWatchedCheckpoint(ctx, tx, cp, current == nil, deadline)
 	})
 	if err != nil {
+		var conflict *ErrCheckpointStatusConflict
+		var lost *ErrCheckpointResumeClaimLost
+		if errors.As(err, &conflict) || errors.As(err, &lost) {
+			return err
+		}
 		if s.logger != nil {
 			s.logger.ErrorWithContext(ctx, "Failed to save checkpoint", map[string]interface{}{
 				"error_type":    "backend_operation",
@@ -434,19 +456,23 @@ func (s *RedisCheckpointStore) LoadCheckpoint(ctx context.Context, checkpointID 
 	return &cp, nil
 }
 
-// UpdateCheckpointStatus updates the status of a checkpoint.
-func (s *RedisCheckpointStore) UpdateCheckpointStatus(ctx context.Context, checkpointID string, status CheckpointStatus) error {
-	// Load existing checkpoint
-	cp, err := s.LoadCheckpoint(ctx, checkpointID)
+// UpdateCheckpointStatus persists a decision only if the expected pending
+// state still exists. Resume-owned and terminal state require their own methods.
+func (s *RedisCheckpointStore) UpdateCheckpointStatus(ctx context.Context, checkpointID string, expected, status CheckpointStatus) error {
+	var cp *ExecutionCheckpoint
+	err := s.checkpointTransaction(ctx, []string{checkpointID}, func(tx *redis.Tx) error {
+		var err error
+		cp, err = s.readWatchedCheckpoint(ctx, tx, checkpointID)
+		if err != nil {
+			return err
+		}
+		if cp.Status != expected || expected != CheckpointStatusPending || !isCheckpointDecisionStatus(status) {
+			return &ErrCheckpointStatusConflict{CheckpointID: checkpointID, Expected: expected, Actual: cp.Status, Next: status}
+		}
+		cp.Status = status
+		return s.writeWatchedCheckpoint(ctx, tx, cp, false, time.Time{})
+	})
 	if err != nil {
-		return err
-	}
-
-	oldStatus := cp.Status
-	cp.Status = status
-
-	// Save updated checkpoint
-	if err := s.SaveCheckpoint(ctx, cp); err != nil {
 		return err
 	}
 
@@ -456,7 +482,7 @@ func (s *RedisCheckpointStore) UpdateCheckpointStatus(ctx context.Context, check
 			"operation":     "hitl_checkpoint_status_update",
 			"checkpoint_id": checkpointID,
 			"request_id":    cp.RequestID,
-			"old_status":    oldStatus,
+			"old_status":    expected,
 			"new_status":    status,
 		})
 	}
@@ -528,22 +554,39 @@ func (s *RedisCheckpointStore) ListPendingCheckpoints(ctx context.Context, filte
 
 // DeleteCheckpoint removes a checkpoint after completion.
 func (s *RedisCheckpointStore) DeleteCheckpoint(ctx context.Context, checkpointID string) error {
-	// Load checkpoint to get request_id for index cleanup
-	cp, err := s.LoadCheckpoint(ctx, checkpointID)
-	if err != nil && !IsCheckpointNotFound(err) {
-		return err
-	}
-
-	key := s.keys.checkpoint(checkpointID)
-	_, err = s.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Del(ctx, key)
-		pipe.SRem(ctx, s.keys.pending(), checkpointID)
-		if cp != nil && cp.RequestID != "" {
-			pipe.SRem(ctx, s.keys.request(cp.RequestID), checkpointID)
+	err := s.checkpointTransaction(ctx, []string{checkpointID}, func(tx *redis.Tx) error {
+		cp, err := s.readWatchedCheckpoint(ctx, tx, checkpointID)
+		if IsCheckpointNotFound(err) {
+			return nil
 		}
-		return nil
+		if err != nil {
+			return err
+		}
+		if cp.Status == CheckpointStatusResuming {
+			return &ErrCheckpointDeletionConflict{CheckpointID: checkpointID, Status: cp.Status}
+		}
+		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.Del(ctx, s.keys.checkpoint(checkpointID))
+			pipe.SRem(ctx, s.keys.pending(), checkpointID)
+			if cp.RequestID != "" {
+				pipe.SRem(ctx, s.keys.request(cp.RequestID), checkpointID)
+			}
+			return nil
+		})
+		return err
 	})
 	if err != nil {
+		var conflict *ErrCheckpointDeletionConflict
+		if errors.As(err, &conflict) {
+			return err
+		}
+		if s.logger != nil {
+			s.logger.ErrorWithContext(ctx, "Failed to delete checkpoint", map[string]interface{}{
+				"operation": "hitl_checkpoint_delete", "request_id": core.GetRequestID(ctx),
+				"checkpoint_id": checkpointID, "error_type": "backend_operation",
+				"error": "redis checkpoint backend_operation failed",
+			})
+		}
 		return fmt.Errorf("failed to delete checkpoint %s: %w", checkpointID, err)
 	}
 
@@ -1117,7 +1160,7 @@ func (s *RedisCheckpointStore) processExpiredCheckpoint(ctx context.Context, che
 		}
 
 		// Callback succeeded (or no callback) - now update status
-		if err := s.UpdateCheckpointStatus(ctx, checkpoint.CheckpointID, newStatus); err != nil {
+		if err := s.UpdateCheckpointStatus(ctx, checkpoint.CheckpointID, checkpoint.Status, newStatus); err != nil {
 			if s.logger != nil {
 				s.logger.WarnWithContext(ctx, "Failed to update expired checkpoint after successful callback", map[string]interface{}{
 					"error_type":    "backend_operation",
@@ -1138,7 +1181,7 @@ func (s *RedisCheckpointStore) processExpiredCheckpoint(ctx context.Context, che
 		// └────────────────────────────────────────────────────────────────┘
 
 		// Update checkpoint status (removes from pending index)
-		if err := s.UpdateCheckpointStatus(ctx, checkpoint.CheckpointID, newStatus); err != nil {
+		if err := s.UpdateCheckpointStatus(ctx, checkpoint.CheckpointID, checkpoint.Status, newStatus); err != nil {
 			if s.logger != nil {
 				s.logger.WarnWithContext(ctx, "Failed to update expired checkpoint", map[string]interface{}{
 					"error_type":    "backend_operation",

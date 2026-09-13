@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — framework-owned HITL resume
+
+Orchestration now owns approved-checkpoint claims, renewal, recovery, and
+finalization. The human-approval, DevOps, and event-driven examples supply
+thin processing adapters for their HTTP, SSE, delegation, and task transports.
+See the [orchestration changelog](orchestration/CHANGELOG.md) for the direct API
+migration, supported commands, and observability changes. No release or version
+tag is implied.
+
 ## Unreleased — Redis/Valkey development cleanup
 
 The framework has no external users. The author approved direct removal of

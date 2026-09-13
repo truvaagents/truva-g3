@@ -3034,16 +3034,12 @@
             const resumeId = ++activeResumeId;
 
             try {
-                // Build headers - include original request_id for trace correlation
+                // Resume lineage is loaded from the stored checkpoint by the server.
                 const headers = {
                     'Content-Type': 'application/json',
                     'Accept': 'text/event-stream',
                     'X-User-ID': userId
                 };
-                // Send original request_id so all traces can be linked in Jaeger
-                if (originalRequestId) {
-                    headers['X-Truvag3-Original-Request-ID'] = originalRequestId;
-                }
 
                 const response = await fetch(`${backendUrl}/hitl/resume/${checkpointId}`, {
                     method: 'POST',
@@ -3051,7 +3047,10 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error: ${response.status}`);
+                    const failure = await response.json().catch(() => ({}));
+                    const error = new Error(failure.error || `HTTP error: ${response.status}`);
+                    error.code = failure.code || 'resume_error';
+                    throw error;
                 }
 
                 const contentType = response.headers.get('content-type') || '';
@@ -3068,6 +3067,8 @@
                                 'Resume task enqueued. Waiting for worker to process...');
                         }
                         await pollResumeTask(result.task_id, resumeId);
+                    } else if (result.interrupted && result.checkpoint) {
+                        if (resumeId === activeResumeId) handleSSEEvent('checkpoint', result.checkpoint);
                     } else if (result.status === 'completed') {
                         // Sync completion (e.g., already finished)
                         if (currentMessageEl) {
@@ -3081,8 +3082,9 @@
             } catch (error) {
                 console.error('Resume error:', error);
                 if (currentMessageEl && resumeId === activeResumeId) {
-                    showErrorInMessage(currentMessageEl, 'resume_error',
-                        'Failed to resume execution: ' + error.message, true);
+                    showErrorInMessage(currentMessageEl, error.code || 'resume_error',
+                        'Resume did not complete: ' + error.message +
+                        ' Check the checkpoint and execution records before submitting another resume.', false);
                 }
             } finally {
                 // Only reset state if this is the most recent resume
@@ -3100,6 +3102,7 @@
             let buffer = '';
             let eventType = null;
             let eventData = null;
+            let receivedTerminal = false;
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -3120,6 +3123,7 @@
                                 const data = JSON.parse(eventData);
                                 if (resumeId === activeResumeId) {
                                     handleSSEEvent(eventType, data);
+                                    if (['done', 'checkpoint', 'error'].includes(eventType)) receivedTerminal = true;
                                 }
                             } catch (e) {
                                 console.error('[resume-sse] Failed to parse SSE data:', e, 'raw:', eventData);
@@ -3129,6 +3133,9 @@
                         }
                     }
                 }
+            }
+            if (!receivedTerminal && resumeId === activeResumeId) {
+                throw new Error('The stream ended without a confirmed outcome.');
             }
         }
 
@@ -3152,7 +3159,7 @@
                         clearInterval(pollInterval);
                         if (currentMessageEl) {
                             showErrorInMessage(currentMessageEl, 'poll_timeout',
-                                'Resume task is still processing. Check back later or refresh.', true);
+                                'Resume task is still processing. Check its status before submitting another resume.', false);
                         }
                         resolve();
                         return;
@@ -3189,7 +3196,8 @@
                             } else if (task.status === 'failed') {
                                 if (currentMessageEl) {
                                     showErrorInMessage(currentMessageEl, 'resume_failed',
-                                        'Resume task failed: ' + (task.error || 'unknown error'), true);
+                                        'Resume task failed: ' + (task.error || 'unknown error') +
+                                        '. Check execution evidence before submitting another resume.', false);
                                 }
                             }
                             resolve();

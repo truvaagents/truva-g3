@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
@@ -104,6 +105,24 @@ func runAPIMode(redisConnection core.RedisConnectionConfig, redisKeyspace core.R
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+	// Construct the host before helpers capture the initially no-op agent logger.
+	fw, err := core.NewFramework(agent.BaseAgent,
+		core.WithName("event-driven-agent-api"),
+		core.WithPort(port),
+		core.WithNamespace(os.Getenv("NAMESPACE")),
+		core.WithRedisConnection(redisConnection),
+		core.WithDiscovery(true, "redis"),
+		core.WithCORS([]string{"*"}, true),
+		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
+		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("event-driven-agent",
+			&telemetry.TracingMiddlewareConfig{
+				ExcludedPaths: []string{"/health", "/metrics", "/ready", "/api/capabilities"},
+			},
+		)),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create framework: %v", err)
+	}
 
 	// Create Task API handler
 	taskAPI := orchestration.NewTaskAPIHandler(taskQueue, taskStore, agent.Logger)
@@ -137,11 +156,14 @@ func runAPIMode(redisConnection core.RedisConnectionConfig, redisKeyspace core.R
 		}
 		defer func() { _ = hitl.Close() }()
 
-		hitlHandler := orchestration.NewHITLHandler(
+		hitlHandler, handlerErr := orchestration.NewHITLHandler(
 			hitl.Controller,
 			hitl.CheckpointStore,
 			orchestration.WithHITLHandlerLogger(agent.Logger),
 		)
+		if handlerErr != nil {
+			log.Fatalf("HITL handler setup failed: %v", handlerErr)
+		}
 
 		// Query endpoints (UI polling)
 		if err := agent.HandleFunc("/hitl/checkpoints", hitlHandler.HandleListCheckpoints); err != nil {
@@ -164,7 +186,7 @@ func runAPIMode(redisConnection core.RedisConnectionConfig, redisKeyspace core.R
 
 			// Extract checkpoint ID from path: /hitl/resume/{checkpoint_id}
 			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-			if len(parts) < 3 || parts[2] == "" {
+			if len(parts) != 3 || parts[2] == "" {
 				http.Error(w, "checkpoint_id required in path", http.StatusBadRequest)
 				return
 			}
@@ -173,31 +195,22 @@ func runAPIMode(redisConnection core.RedisConnectionConfig, redisKeyspace core.R
 			// Load and validate checkpoint
 			cp, loadErr := hitl.CheckpointStore.LoadCheckpoint(r.Context(), checkpointID)
 			if loadErr != nil {
-				http.Error(w, "checkpoint not found: "+loadErr.Error(), http.StatusNotFound)
+				writeHITLResumeError(w, loadErr)
 				return
 			}
 
-			// Compliance §5: Handle expired checkpoints explicitly
-			if strings.HasPrefix(string(cp.Status), "expired") {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusGone) // 410
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{
-					"error":  "checkpoint expired",
-					"status": string(cp.Status),
-				})
-				return
-			}
-
-			if cp.Status != orchestration.CheckpointStatusApproved &&
-				cp.Status != orchestration.CheckpointStatusPending {
-				http.Error(w, fmt.Sprintf("checkpoint status is %s, cannot resume", cp.Status),
-					http.StatusConflict)
+			// This read is queue admission only, never ownership. The worker claims
+			// the current durable status after dequeue; duplicate tasks cannot
+			// execute concurrently. Pending/edited/terminal checkpoints are rejected.
+			if !orchestration.IsResumableStatus(cp.Status) && cp.Status != orchestration.CheckpointStatusResuming {
+				writeHITLResumeError(w, &orchestration.ErrCheckpointNotResumable{CheckpointID: checkpointID, Status: cp.Status})
 				return
 			}
 
 			// Create resume task for worker to pick up
+			traceContext := telemetry.GetTraceContext(r.Context())
 			resumeTask := &core.Task{
-				ID:     fmt.Sprintf("hitl-resume-%s-%d", checkpointID, time.Now().UnixMilli()),
+				ID:     "hitl-resume-" + uuid.NewString(),
 				Type:   "hitl_resume",
 				Status: core.TaskStatusQueued,
 				Input: map[string]interface{}{
@@ -207,14 +220,21 @@ func runAPIMode(redisConnection core.RedisConnectionConfig, redisKeyspace core.R
 					"trace_id":       cp.OriginalTraceID,
 					"parent_span_id": cp.OriginalSpanID,
 				},
-				CreatedAt: time.Now(),
+				CreatedAt:    time.Now(),
+				TraceID:      traceContext.TraceID,
+				ParentSpanID: traceContext.SpanID,
 			}
 
-			if enqErr := taskQueue.Enqueue(r.Context(), resumeTask); enqErr != nil {
-				http.Error(w, "failed to enqueue resume task: "+enqErr.Error(),
+			if enqErr := admitResumeTask(r.Context(), taskQueue, taskStore, resumeTask); enqErr != nil {
+				agent.Logger.ErrorWithContext(r.Context(), "Failed to admit HITL resume task", map[string]interface{}{
+					"operation": "hitl_resume_enqueue", "checkpoint_id": checkpointID,
+					"task_id": resumeTask.ID, "error": enqErr.Error(),
+				})
+				http.Error(w, "failed to admit resume task",
 					http.StatusInternalServerError)
 				return
 			}
+			orchestration.EmitTaskSubmitted(r.Context(), resumeTask)
 
 			agent.Logger.InfoWithContext(r.Context(), "HITL resume task enqueued", map[string]interface{}{
 				"operation":     "hitl_resume_enqueue",
@@ -224,6 +244,7 @@ func runAPIMode(redisConnection core.RedisConnectionConfig, redisKeyspace core.R
 			})
 
 			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"status":  "enqueued",
 				"task_id": resumeTask.ID,
@@ -239,26 +260,6 @@ func runAPIMode(redisConnection core.RedisConnectionConfig, redisKeyspace core.R
 		agent.Logger.Info("HITL endpoints registered (API mode)", map[string]interface{}{
 			"endpoints": []string{"/hitl/checkpoints", "/hitl/checkpoints/{id}", "/hitl/command", "/hitl/resume/{id}", "/internal/hitl-webhook"},
 		})
-	}
-
-	// Create framework (HTTP server only)
-	fw, err := core.NewFramework(agent.BaseAgent,
-		core.WithName("event-driven-agent-api"),
-		core.WithPort(port),
-		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisConnection(redisConnection),
-		core.WithDiscovery(true, "redis"),
-		core.WithCORS([]string{"*"}, true),
-		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
-		// Distributed tracing middleware — excludes health endpoints to reduce noise
-		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("event-driven-agent",
-			&telemetry.TracingMiddlewareConfig{
-				ExcludedPaths: []string{"/health", "/metrics", "/ready", "/api/capabilities"},
-			},
-		)),
-	)
-	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
 	}
 
 	// Log startup
@@ -324,6 +325,27 @@ func runWorkerMode(redisKeyspace core.RedisKeyspace, redisClient redis.Universal
 	agent, err := NewEventDrivenAgent(redisClient, redisKeyspace)
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
+	}
+	// This mode has no framework HTTP host to install a logger. Configure one
+	// before the worker, HITL coordinator, and memory helpers borrow it.
+	workerConfig, err := core.NewConfig(
+		core.WithName("event-driven-agent-worker"),
+		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to configure worker logging: %v", err)
+	}
+	agent.Logger = core.NewProductionLogger(workerConfig.Logging, workerConfig.Development, workerConfig.Name)
+	if production, ok := agent.Logger.(*core.ProductionLogger); ok {
+		// Telemetry is already initialized. A directly constructed logger is not
+		// registered by NewFramework, so enable its metrics/context bridge here.
+		production.EnableMetrics()
+	}
+	if scoped, ok := agent.Logger.(core.ComponentAwareLogger); ok {
+		agent.Logger = scoped.WithComponent("agent/event-driven-agent")
+	}
+	if loggable, ok := agent.AI.(interface{ SetLogger(core.Logger) }); ok {
+		loggable.SetLogger(agent.Logger)
 	}
 	skillRegistry, skillClients, err := newSkillRegistry(agent.Logger)
 	if err != nil {
@@ -561,11 +583,14 @@ func runEmbeddedMode(redisConnection core.RedisConnectionConfig, redisKeyspace c
 		defer func() { _ = hitl.Close() }()
 
 		// Register HITL API routes for approval/rejection via HTTP
-		hitlHandler := orchestration.NewHITLHandler(
+		hitlHandler, handlerErr := orchestration.NewHITLHandler(
 			hitl.Controller,
 			hitl.CheckpointStore,
 			orchestration.WithHITLHandlerLogger(agent.Logger),
 		)
+		if handlerErr != nil {
+			log.Fatalf("HITL handler setup failed: %v", handlerErr)
+		}
 		if err := agent.HandleFunc("/hitl/command", hitlHandler.HandleCommand); err != nil {
 			log.Fatalf("Failed to register HITL command handler: %v", err)
 		}
