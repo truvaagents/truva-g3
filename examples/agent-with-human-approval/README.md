@@ -213,6 +213,50 @@ This agent demonstrates:
 - **Redis-backed State**: Checkpoints, commands, and sessions stored in Redis for durability
 - **Auto-action on timeout**: non-streaming requests apply the policy's `DefaultAction` (auto-approve for plan checkpoints, auto-reject for step checkpoints) when the human doesn't respond in time
 
+### Framework-owned resume
+
+All resume routes use `orchestration.ResumeCoordinator`. The application
+supplies its processing adapter; it no longer loads a checkpoint, builds a
+resume context, or writes `completed` itself.
+
+The coordinator claims durable approval, restores the saved plan/results/
+parameters/skills, renews ownership during execution, and saves the real
+terminal result. Concurrent ownership is a 409 `resume_in_progress`; ownership
+lost after work started is the distinct `resume_claim_lost`.
+Inspect execution evidence before retrying either an ambiguous failure or a
+disconnected stream.
+
+Only approve/reject/abort are supported by the default command endpoint.
+Edit/skip/retry/respond return 400 `unsupported_command` before state changes.
+The public checkpoint includes parent/successor navigation, not internal
+attempt IDs, lease deadlines, reservations, or process owners. Application
+payloads are preserved.
+
+A second interruption saves the parent as `continued` before announcing its
+successor. Final success requires a successful terminal execution **and**
+successful checkpoint finalization. Synthesis, hooks, and delivery errors
+cannot be reported as completion just because tool steps succeeded.
+
+In this example's own `.env`:
+
+```bash
+TRUVAG3_HITL_RESUME_CLAIM_LEASE=30s
+TRUVAG3_HITL_RESUME_CLEANUP_TIMEOUT=5s
+```
+
+The explicit startup loader reads these values. The lease accepts 3s–24h;
+cleanup must be positive, ≤1m, and ≤lease/3. They are separate from the human
+approval timeout and checkpoint storage TTL. Renewal does not extend retention.
+Use `./setup.sh rollout` for configuration changes and `./setup.sh rebuild`
+for source changes.
+
+Streaming resume uses a request-local executor. Progress remains live, but
+`done` and checkpoint events wait for durable finalization. A 200 SSE
+handshake or a `finish` event is not completion. Before streaming starts,
+errors use coded JSON; afterward they are error events with
+`retryable: false`. HTTP/SSE disconnects cancel active work; bounded cleanup
+can still save the outcome after execution settles.
+
 ## Key Features
 
 ### HITL Modes (Configurable)
@@ -390,18 +434,14 @@ curl -X POST http://localhost:8352/hitl/command \
 |------|-------------|-----------------|
 | `approve` | Proceed with the plan/step as-is | Yes |
 | `reject` | Stop execution, optionally provide feedback | No |
-| `edit` | Proceed with modifications (provide `edited_plan`) | Yes |
-| `skip` | Skip current step, continue with next | Yes |
 | `abort` | Stop entire workflow immediately | No |
-| `retry` | Retry with new parameters | Yes |
+| `edit`, `skip`, `retry`, `respond` | Unsupported (HTTP 400) | No |
 
 **Optional Fields:**
 | Field | Type | Description |
 |-------|------|-------------|
 | `feedback` | string | Reason for rejection (used with `reject`) |
 | `user_id` | string | Audit trail identifier |
-| `edited_plan` | object | Modified plan (used with `edit`) |
-| `new_parameters` | object | New parameters (used with `retry`) |
 
 ---
 
@@ -613,7 +653,7 @@ curl -X POST http://localhost:8352/hitl/resume/cp-abc12345 \
   -H "Accept: text/event-stream"
 ```
 
-**SSE Events:** Same as `/chat/stream` — `status`, `step`, `chunk`, `checkpoint` (when a downstream step also gates), `usage`, `finish`, `done`, `error`. Note that `session` is not re-emitted on resume since the session is already established by this point.
+**SSE Events:** Same as `/chat/stream` — `status`, `step`, `chunk`, `checkpoint` (when a downstream step also gates), `usage`, `finish`, `done`, `error`. A `session` event is emitted only if the saved checkpoint had no session and a new one was created.
 
 ---
 

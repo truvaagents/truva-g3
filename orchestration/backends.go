@@ -19,6 +19,7 @@ const (
 	BackendLLMDebug         BackendCapability = "llm_debug"
 	BackendCheckpoints      BackendCapability = "checkpoints"
 	BackendCheckpointExpiry BackendCapability = "checkpoint_expiry"
+	BackendCheckpointResume BackendCapability = "checkpoint_resume"
 	// BackendCheckpointExpiryProcessor is the application-owned lifecycle
 	// component that polls BackendCheckpointExpiry and updates BackendCheckpoints.
 	BackendCheckpointExpiryProcessor BackendCapability = "checkpoint_expiry_processor"
@@ -54,6 +55,7 @@ const (
 	BackendFeatureCheckpointPersistence BackendFeature = "checkpoint_persistence"
 	BackendFeatureCrossInstanceHITL     BackendFeature = "cross_instance_hitl"
 	BackendFeatureCheckpointExpiry      BackendFeature = "checkpoint_expiry"
+	BackendFeatureHITLResume            BackendFeature = "hitl_resume"
 	BackendFeatureWorkflow              BackendFeature = "workflow"
 	BackendFeatureSchedulerProducer     BackendFeature = "scheduler_producer"
 	BackendFeatureScheduledWorker       BackendFeature = "scheduled_worker"
@@ -68,6 +70,7 @@ var knownBackendFeatures = map[BackendFeature][]BackendCapability{
 	BackendFeatureCheckpointPersistence: {BackendCheckpoints},
 	BackendFeatureCrossInstanceHITL:     {BackendCheckpoints, BackendCommands},
 	BackendFeatureCheckpointExpiry:      {BackendCheckpoints, BackendCheckpointExpiry, BackendCheckpointExpiryProcessor},
+	BackendFeatureHITLResume:            {BackendCheckpoints, BackendCheckpointResume},
 	BackendFeatureWorkflow:              {BackendWorkflowState},
 	BackendFeatureSchedulerProducer:     {BackendSchedules, BackendTasks, BackendTaskDispatcher, BackendLock},
 	BackendFeatureScheduledWorker:       {BackendTaskConsumer},
@@ -153,6 +156,7 @@ type OrchestrationBackends struct {
 	llmDebug                  LLMDebugStore
 	checkpoints               CheckpointPersistence
 	checkpointExpiry          ExpiredCheckpointSource
+	checkpointResume          CheckpointResumePersistence
 	checkpointExpiryProcessor core.Runnable
 	commands                  CommandStore
 	workflow                  WorkflowStateStore
@@ -175,6 +179,7 @@ type OrchestrationBackends struct {
 // and validation together prevents an added capability from being accepted by
 // NewBackendRequirements but silently rejected by ValidateFor.
 var backendCapabilityChecks = map[BackendCapability]func(*OrchestrationBackends) bool{
+	BackendCheckpointResume:          func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.checkpointResume) },
 	BackendExecutionDebug:            func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.execution) },
 	BackendLLMDebug:                  func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.llmDebug) },
 	BackendCheckpoints:               func(b *OrchestrationBackends) bool { return !isNilBackendValue(b.checkpoints) },
@@ -278,6 +283,7 @@ func WithLLMDebugBackend(value LLMDebugStore) OrchestrationBackendOption {
 func WithCheckpointPersistence(value CheckpointPersistence) OrchestrationBackendOption {
 	return backendOptionWithKind("checkpoint persistence", value, backendOptionCheckpointPersistence, func(b *OrchestrationBackends, v CheckpointPersistence) {
 		b.checkpoints = v
+		b.checkpointResume = nil
 		// A previously composed processor may still be bound to the old store.
 		// Require it to be supplied again after either dependency changes.
 		b.checkpointExpiryProcessor = nil
@@ -288,6 +294,12 @@ func WithCheckpointExpiry(value ExpiredCheckpointSource) OrchestrationBackendOpt
 		b.checkpointExpiry = v
 		b.checkpointExpiryProcessor = nil
 	})
+}
+
+// WithCheckpointResume composes the resume capability for the current logical
+// checkpoint dataset. Replacing persistence invalidates this capability.
+func WithCheckpointResume(value CheckpointResumePersistence) OrchestrationBackendOption {
+	return backendOption("checkpoint resume", value, func(b *OrchestrationBackends, v CheckpointResumePersistence) { b.checkpointResume = v })
 }
 
 // WithCheckpointExpiryProcessor supplies the lifecycle component bound to the
@@ -376,6 +388,14 @@ func (b *OrchestrationBackends) CheckpointExpiry() ExpiredCheckpointSource {
 		return nil
 	}
 	return b.checkpointExpiry
+}
+
+// CheckpointResume returns optional atomic resume persistence.
+func (b *OrchestrationBackends) CheckpointResume() CheckpointResumePersistence {
+	if b == nil {
+		return nil
+	}
+	return b.checkpointResume
 }
 
 // CheckpointExpiryProcessor returns the lifecycle component for canonical

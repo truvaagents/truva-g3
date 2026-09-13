@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.27
+**Version**: 1.28
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -452,7 +452,10 @@ When Layer 3 cannot fix the error (lacks source data context), the `ContextualRe
 
 #### Layer 5: Human-in-the-Loop (HITL)
 
-When a step reaches a HITL checkpoint, parameters are presented to a human for approval. The human may approve as-is or provide corrected values. On resume, these user-provided parameters bypass all other resolution layers.
+When a step reaches a HITL checkpoint, resolved parameters are presented for
+approval. The default controller supports approve/reject/abort, not
+edit/skip/retry/respond. The stored approved parameters bypass other resolution
+layers during resume.
 
 **Implementation**: `InterruptController` in `interrupt_controller.go`
 
@@ -2656,6 +2659,57 @@ until cancellation even when disabled, and obtains atomic claims through
 The claim lease is operational runtime configuration, while the claim-owner
 length cap is a fixed coordination-protocol invariant.
 
+### Framework-owned resume lifecycle
+
+`HITLResumer`, `ResumeExecutor`, and `CheckpointResumePersistence` belong to
+orchestration. `ResumeCoordinator` borrows persistence and an application
+adapter; it imports no Redis types and creates no clients.
+`BackendFeatureHITLResume` requires persistence plus atomic resume support.
+The Redis provider exposes both through the same checkpoint adapter, existing
+DB-0 keyspace, and agent hash slot.
+
+The controller saves pending decisions using expected-status CAS. Publication
+and `RecordCheckpointStatus` follow successful persistence, not a lost race.
+Resume is no longer a controller method. The coordinator claims approved or
+expiry-approved work, then calls `BuildResumeContext` exactly once. Durable
+state is `resuming`; the adapter receives an isolated snapshot retaining the
+preceding approval status and restored plan, parameters, results, and skills.
+
+`ProcessRequestWithExecution` and `ProcessRequestStreamingWithExecution`
+expose the actual terminal result through the existing shared runner and
+terminal recorder. Partial results, synthesis/hook/delivery errors, and panics
+are preserved. Successful tool steps alone cannot become resume success.
+
+Renewal is per-call and joined on every exit. No resources survive between
+calls, so the coordinator needs no `Close()` or `Start()`. HTTP/SSE follows
+caller cancellation; queued work uses its worker context. Only cleanup after
+execution settles uses a bounded detached context. Hosts drain calls before
+closing borrowed dependencies. Defaults are a 30-second lease and 5-second
+cleanup timeout; environment loading is explicit, outside construction.
+
+Backend time and fencing govern ownership. The Redis adapter uses WATCH and
+one same-slot transactional script, checking the lease again at commit. Only
+optimistic contention is retried. Record/index retention is preserved; missing
+records are not recreated, and generic saves/deletion cannot defeat ownership.
+Renewal does not extend the human approval window or storage TTL.
+
+Each attempt reserves a stable successor ID. Child persistence validates parent
+ownership and records producing-attempt provenance. Continued finalization
+verifies that child and marks its parent terminal `continued`. Recovery of an
+expired claim returns a saved child without replaying the parent. Completion
+requires successful terminal execution and persistence. Ordinary failure with
+no child releases the previous approval; claim loss, ambiguous persistence
+failure, and panic require inspection/recovery, not automatic replay. External
+tool idempotency remains the application's responsibility.
+
+The HTTP handler's optional resumer controls route registration; invalid
+explicit dependencies fail construction. HTTP/SSE/task terminal success follows
+durable finalization. `CheckpointResponse` exposes original payload fields and
+parent/successor navigation without framework ownership fields. It does not
+scan or alter application data. Attempt/owner IDs remain internal log/trace
+fields, never metric labels or added baggage. Existing linked-trace,
+conversation, skill restoration, and expiry-delivery contracts are retained.
+
 The optional `redisprovider` package owns Redis-specific client/preset
 composition plus the skills and distributed-lock adapters; root orchestration
 continues to own the Redis adapters that remain colocated with their backend
@@ -3004,6 +3058,7 @@ modularity and flexibility.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.28 | 2026-09-11 | Added provider-neutral fenced HITL resume coordination, real terminal-result access, expected-status decisions, public checkpoint projection, and explicit transport/cancellation ownership |
 | 1.27 | 2026-09-11 | Added panic-safe per-hook completion, partial-state transfer to the existing request recorder, and phase/native-synthesis span cleanup while preserving the original panic and asynchronous effect semantics |
 | 1.26 | 2026-09-10 | Preserved failed terminal results for invalid early decisions and partial work for later planning errors, using existing retention/publisher semantics without changing HITL suspension |
 | 1.25 | 2026-09-10 | Added normal-return hook decisions to existing execution records and spans, distinguishing invocation status from pipeline consequence while preserving ordered effect publication and backend contracts |

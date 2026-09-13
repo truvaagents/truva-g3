@@ -34,6 +34,7 @@ var clientRoleCapabilities = map[ClientRole][]orchestration.BackendCapability{
 	ClientRoleHITL: {
 		orchestration.BackendCheckpoints,
 		orchestration.BackendCheckpointExpiry,
+		orchestration.BackendCheckpointResume,
 		orchestration.BackendCommands,
 	},
 	ClientRoleWorkflow: {orchestration.BackendWorkflowState},

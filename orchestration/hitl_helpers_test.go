@@ -27,7 +27,7 @@ func TestIsResumableStatus(t *testing.T) {
 	}{
 		// Resumable statuses
 		{"approved is resumable", CheckpointStatusApproved, true},
-		{"edited is resumable", CheckpointStatusEdited, true},
+		{"edited is not resumable", CheckpointStatusEdited, false},
 		{"expired_approved is resumable", CheckpointStatusExpiredApproved, true},
 
 		// Non-resumable statuses
@@ -167,11 +167,11 @@ func TestBuildResumeContext_Success(t *testing.T) {
 			},
 		},
 		{
-			name: "edited checkpoint with step results",
+			name: "approved checkpoint with step results",
 			checkpoint: &ExecutionCheckpoint{
 				CheckpointID: "cp-124",
 				RequestID:    "req-457",
-				Status:       CheckpointStatusEdited,
+				Status:       CheckpointStatusApproved,
 				StepResults: map[string]*StepResult{
 					"step-1": {StepID: "step-1", Success: true},
 				},
@@ -310,7 +310,7 @@ func TestStatusRelationships_Exclusive(t *testing.T) {
 					status, isPending, isResumable, isTerminal)
 			}
 
-			// Special case: approved/edited/expired_approved are resumable but not terminal
+			// Approval statuses are resumable but not terminal.
 			// Special case: pending is pending but not terminal or resumable
 			// All statuses should match exactly one category or be in a valid "in-progress" state
 		})
@@ -775,7 +775,7 @@ func TestBuildResumeContext_TraceLinking(t *testing.T) {
 				RequestID:       "req-456",
 				OriginalTraceID: "abc789",
 				OriginalSpanID:  "def012",
-				Status:          CheckpointStatusEdited,
+				Status:          CheckpointStatusApproved,
 				InterruptPoint:  InterruptPointBeforeStep,
 			},
 			expectedRequestID: "req-456",

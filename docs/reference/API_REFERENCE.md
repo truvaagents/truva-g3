@@ -6215,7 +6215,7 @@ type InterruptPolicy interface {
 type CheckpointPersistence interface {
     SaveCheckpoint(ctx context.Context, checkpoint *ExecutionCheckpoint) error
     LoadCheckpoint(ctx context.Context, checkpointID string) (*ExecutionCheckpoint, error)
-    UpdateCheckpointStatus(ctx context.Context, checkpointID string, status CheckpointStatus) error
+    UpdateCheckpointStatus(ctx context.Context, checkpointID string, expected, status CheckpointStatus) error
     ListPendingCheckpoints(ctx context.Context, filter CheckpointFilter) ([]*ExecutionCheckpoint, error)
     DeleteCheckpoint(ctx context.Context, checkpointID string) error
 }
@@ -6252,7 +6252,6 @@ type InterruptController interface {
     CheckAfterStep(ctx context.Context, step RoutingStep, result *StepResult) (*ExecutionCheckpoint, error)
     CheckOnError(ctx context.Context, step RoutingStep, err error, attempts int) (*ExecutionCheckpoint, error)
     ProcessCommand(ctx context.Context, command *Command) (*ResumeResult, error)
-    ResumeExecution(ctx context.Context, checkpointID string) (*ExecutionResult, error)
     UpdateCheckpointProgress(ctx context.Context, checkpointID string, completedSteps []StepResult) error
 }
 
@@ -6393,15 +6392,153 @@ func WithHandlerTelemetry(telemetry core.Telemetry) WebhookHandlerOption
 
 **HITLHandler (HTTP API):**
 ```go
-func NewHITLHandler(controller InterruptController, store CheckpointPersistence, opts ...HITLHandlerOption) *HITLHandler
+func NewHITLHandler(controller InterruptController, store CheckpointPersistence, opts ...HITLHandlerOption) (*HITLHandler, error)
 
 // Options
 func WithHITLHandlerLogger(logger core.Logger) HITLHandlerOption
 func WithHITLHandlerTelemetry(t core.Telemetry) HITLHandlerOption
+func WithHITLResumer(resumer HITLResumer) HITLHandlerOption
 
 // Register all routes
 func (h *HITLHandler) RegisterRoutes(mux *http.ServeMux)
 ```
+
+**Framework-owned resume:**
+
+```go
+type HITLResumer interface {
+    ResumeExecution(context.Context, string) (*ExecutionResult, error)
+}
+type ResumeExecutor interface {
+    ExecuteResume(context.Context, *ExecutionCheckpoint) (*ExecutionResult, error)
+}
+type ResumeExecutorFunc func(context.Context, *ExecutionCheckpoint) (*ExecutionResult, error)
+
+type CheckpointResumePersistence interface {
+    LoadCheckpoint(context.Context, string) (*ExecutionCheckpoint, error)
+    ClaimCheckpointForResume(context.Context, ResumeClaimRequest) (*CheckpointResumeClaim, error)
+    RenewCheckpointResumeClaim(ctx context.Context, checkpointID, attemptID string, lease time.Duration) error
+    ReleaseCheckpointResumeClaim(ctx context.Context, checkpointID, attemptID string) error
+    FinalizeCheckpointResume(context.Context, ResumeFinalization) error
+}
+type ResumeClaimRequest struct {
+    CheckpointID          string
+    AttemptID             string
+    Owner                 string
+    Lease                 time.Duration
+    SuccessorCheckpointID string
+}
+type CheckpointResumeClaim struct {
+    Checkpoint     *ExecutionCheckpoint
+    AttemptID      string
+    PreviousStatus CheckpointStatus
+    LeaseExpiresAt time.Time
+}
+type ResumeFinalizationOutcome string
+const (
+    ResumeFinalizationCompleted ResumeFinalizationOutcome = "completed"
+    ResumeFinalizationContinued ResumeFinalizationOutcome = "continued"
+)
+type ResumeFinalization struct {
+    CheckpointID          string
+    AttemptID             string
+    Outcome               ResumeFinalizationOutcome
+    SuccessorCheckpointID string
+}
+type ResumeCoordinatorRuntimeConfig struct {
+    ClaimLease     time.Duration
+    CleanupTimeout time.Duration
+}
+func DefaultResumeCoordinatorRuntimeConfig() ResumeCoordinatorRuntimeConfig
+func (c ResumeCoordinatorRuntimeConfig) Validate() error
+func LoadResumeCoordinatorRuntimeConfigFromEnvironment(
+    base ResumeCoordinatorRuntimeConfig, lookup func(string) (string, bool),
+) (ResumeCoordinatorRuntimeConfig, error)
+
+func NewResumeCoordinator(
+    store CheckpointResumePersistence, executor ResumeExecutor,
+    config ResumeCoordinatorRuntimeConfig, opts ...ResumeCoordinatorOption,
+) (*ResumeCoordinator, error)
+func WithResumeLogger(logger core.Logger) ResumeCoordinatorOption
+func WithResumeOwner(owner string) ResumeCoordinatorOption
+func (r *ResumeCoordinator) ResumeExecution(ctx context.Context, checkpointID string) (*ExecutionResult, error)
+func (r *ResumeCoordinator) ResumeWithExecutor(ctx context.Context, checkpointID string, executor ResumeExecutor) (*ExecutionResult, error)
+
+func WithCheckpointResume(value CheckpointResumePersistence) OrchestrationBackendOption
+func (b *OrchestrationBackends) CheckpointResume() CheckpointResumePersistence
+
+func CheckpointResponseFrom(cp *ExecutionCheckpoint) *CheckpointResponse
+func HITLErrorResponse(err error) (status int, code, message string)
+```
+
+`BackendFeatureHITLResume` requires ordinary checkpoint persistence plus the
+`BackendCheckpointResume` capability. The Redis provider supplies both from
+the same adapter and keyspace. Runtime contracts remain provider-neutral.
+
+Constructors reject invalid configuration and nil/typed-nil dependencies.
+`WithHITLResumer(nil)` is invalid; omitting it is valid and registers no resume
+route. The coordinator borrows dependencies, joins its per-call renewal
+goroutine, and has no `Close()` or permanent background worker.
+
+The lease defaults to 30 seconds (valid: 3 seconds–24 hours). Cleanup defaults
+to 5 seconds (positive, ≤1 minute, ≤lease/3). The explicit loader recognizes
+`TRUVAG3_HITL_RESUME_CLAIM_LEASE` and
+`TRUVAG3_HITL_RESUME_CLEANUP_TIMEOUT`; construction itself reads no environment.
+These durations do not extend checkpoint retention or human approval time.
+
+`ExecutionCheckpoint` persists `ResumeState *CheckpointResumeState`,
+`ParentCheckpointID string`, and `ParentResumeAttemptID string`.
+The ownership state retains attempt/owner, previous approval status, lease
+deadline, outcome, and reserved/finalized successor identities.
+`CheckpointResponse` maps the original public fields and parent/successor
+navigation, excluding internal ownership. Nested application data is unchanged.
+
+A claim returns an isolated snapshot with its preceding approval status while
+the stored record is `resuming`. Only `approved` and `expired_approved`
+start new attempts; an expired owned attempt may be recovered. `continued`
+is terminal for the parent and points to a new checkpoint. `edited` is not
+resumable. State updates use expected-status CAS; owned records cannot be
+overwritten or deleted by generic persistence calls.
+
+| Resume outcome | Default HTTP response |
+|---|---|
+| Persisted successful terminal result | 200, execution result |
+| Persisted successor | 202, `ResumeInterruptedResponse{Interrupted: true, Checkpoint: ...}` |
+| Another live owner | 409, `resume_in_progress` |
+| Not approved / already terminal | 409, `resume_not_resumable` |
+| Ownership lost after claiming | 409, `resume_claim_lost`; work may have executed |
+| Missing target / invalid input | 404 `checkpoint_not_found` / 400 `invalid_resume_request` |
+| Execution, restoration, recovery, or finalization failure | 500, `resume_failed` |
+
+`ErrCheckpointResumeLifecycle` preserves execution and lifecycle causes through
+`errors.Is/As`. Check it before interpreting a nested `ErrInterrupted`.
+`HITLErrorResponse` distinguishes pre-claim rejection from post-claim failure.
+No response implies automatic retry. Deletion conflicts use
+`checkpoint_deletion_conflict`; a pending-decision CAS conflict uses
+`checkpoint_status_conflict`.
+
+Application HTTP/SSE contexts cancel active work on disconnect. Accepted queue
+tasks use their independent worker context. Bounded detached finalization occurs
+only after execution settles. An SSE adapter uses `ResumeWithExecutor`, sends
+progress normally, and holds `done`/checkpoint until finalization. After stream
+headers, failures are error events with `retryable: false`, not appended JSON.
+
+**Actual terminal result access:**
+
+```go
+func (o *AIOrchestrator) ProcessRequestWithExecution(
+    ctx context.Context, request string, metadata map[string]interface{},
+) (*OrchestratorResponse, *ExecutionResult, error)
+func (o *AIOrchestrator) ProcessRequestStreamingWithExecution(
+    ctx context.Context, request string, metadata map[string]interface{},
+    callback core.StreamCallback,
+) (*StreamingOrchestratorResponse, *ExecutionResult, error)
+```
+
+These share the existing processing and terminal-recording lifecycle, including
+synthesis, hooks, and delivery errors. Partial results and original errors are
+preserved; no result is invented before execution produces one. Response-only
+entry points continue to use that same lifecycle.
 
 **Orchestrator Integration:**
 ```go
@@ -6416,8 +6553,8 @@ The framework provides these endpoints via `HITLHandler.RegisterRoutes`:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `POST /hitl/command` | POST | Submit approval command (approve, reject, edit, skip, abort, retry) |
-| `POST /hitl/resume/{checkpoint_id}` | POST | Resume workflow execution after approval |
+| `POST /hitl/command` | POST | Submit approve, reject, or abort; other commands return 400 |
+| `POST /hitl/resume/{checkpoint_id}` | POST | Resume through the injected resumer; route absent when none is configured |
 | `GET /hitl/checkpoints` | GET | List pending checkpoints |
 | `GET /hitl/checkpoints/{id}` | GET | Get checkpoint details |
 
@@ -6443,21 +6580,23 @@ curl -X POST http://agent:8080/hitl/command \
 |-----------------|---------|----------|
 | `plan_generated` | After AI creates execution plan | Review full plan before any execution |
 | `before_step` | Before executing each tool/agent | Approve individual high-risk operations |
-| `on_error` | When a step fails and is recoverable | Human decides whether to retry, skip, or abort |
+| `on_error` | When a step fails and is recoverable | Human approves another attempt, rejects, or aborts |
 | `after_step` | After step completes (reserved) | Output validation before proceeding |
 | `context_gathering` | During context collection (reserved) | Approve data access requests |
 
-#### Command Types by Interrupt Point
+#### Supported default commands
 
-| Command | Description | `plan_generated` | `before_step` | `after_step` | `on_error` |
-|---------|-------------|------------------|---------------|--------------|------------|
-| `approve` | Proceed with execution | Yes | Yes | Yes | No |
-| `reject` | Cancel and stop execution | Yes | Yes | Yes | No |
-| `edit` | Modify parameters and proceed | Yes | Yes | Yes | No |
-| `skip` | Skip this step, continue with next | No | Yes | Yes | Yes |
-| `abort` | Abort entire execution | Yes | Yes | Yes | Yes |
-| `retry` | Retry the failed step | No | Yes | No | Yes |
-| `respond` | Provide requested information | No | No | No | No |
+| Command | Default controller behavior |
+|---|---|
+| `approve` | CAS pending → approved; caller may request resume |
+| `reject` | CAS pending → rejected; no resume |
+| `abort` | CAS pending → aborted; no resume |
+| `edit`, `skip`, `retry`, `respond` | 400 `unsupported_command`, before state writes, publication, or success callbacks |
+
+The supported decisions apply to pending checkpoints, including `on_error`.
+Approval there permits the interrupted step to run again. Reserved interrupt
+points and declared enum values do not implement additional command protocols.
+A stale decision returns 409 `checkpoint_status_conflict`.
 
 #### Key Types
 
@@ -6500,6 +6639,8 @@ const (
     CheckpointStatusRejected  CheckpointStatus = "rejected"
     CheckpointStatusEdited    CheckpointStatus = "edited"
     CheckpointStatusCompleted CheckpointStatus = "completed"
+    CheckpointStatusResuming  CheckpointStatus = "resuming"
+    CheckpointStatusContinued CheckpointStatus = "continued"
     CheckpointStatusAborted   CheckpointStatus = "aborted"
 
     // Framework-owned transient state while the durable run snapshot is
@@ -6574,11 +6715,11 @@ func GetMetadata(ctx context.Context) map[string]interface{}
 
 **Resume Context:**
 ```go
-// Recommended: one-call context setup. The returned func() releases any
-// resources held by the resume context — defer it immediately.
+// Lower-level helper called and cleaned up by ResumeCoordinator after claim.
+// Calling this alone does not acquire or finalize ownership.
 func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (context.Context, func(), error)
 
-// Manual context building (for more control)
+// Individual context helpers are not alternatives to the resume coordinator.
 func WithResumeMode(ctx context.Context, checkpointID string) context.Context
 func WithPlanOverride(ctx context.Context, plan *RoutingPlan) context.Context
 func WithCompletedSteps(ctx context.Context, results map[string]*StepResult) context.Context
@@ -6590,8 +6731,11 @@ func WithPreResolvedParams(ctx context.Context, params map[string]interface{}, s
 #### Error Handling
 
 ```go
-// Check if execution was interrupted (not a failure)
-if orchestration.IsInterrupted(err) {
+// A failed finalization may wrap an interruption. Preserve that failure first.
+var lifecycle *orchestration.ErrCheckpointResumeLifecycle
+if errors.As(err, &lifecycle) {
+    // Handle failure; inspect effects before retrying.
+} else if orchestration.IsInterrupted(err) {
     checkpoint := orchestration.GetCheckpoint(err)
     checkpointID := orchestration.GetCheckpointID(err)
     // Handle checkpoint - workflow is paused, not failed
@@ -6609,12 +6753,12 @@ if orchestration.IsHITLDisabled(err) { /* HITL not enabled */ }
 ```go
 // Check if checkpoint can be resumed
 if orchestration.IsResumableStatus(checkpoint.Status) {
-    // Status is: approved, edited, or expired_approved
+    // Status is: approved or expired_approved
 }
 
 // Check if checkpoint is in terminal state
 if orchestration.IsTerminalStatus(checkpoint.Status) {
-    // Status is: completed, rejected, aborted, expired, expired_rejected, expired_aborted
+    // Status is: continued, completed, rejected, aborted, expired, expired_rejected, expired_aborted
 }
 
 // Check if checkpoint is awaiting response

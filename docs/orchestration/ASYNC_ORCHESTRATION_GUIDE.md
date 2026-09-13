@@ -63,7 +63,7 @@ Welcome to the complete guide on async tasks in TruvaG3! Think of this as your f
 12. [Combining Async Tasks with HITL Approval](#12-combining-async-tasks-with-hitl-approval)
     - 12.1 [Why Async + HITL?](#121-why-async--hitl)
     - 12.2 [Architecture: How They Fit Together](#122-architecture-how-they-fit-together)
-    - 12.3 [Resume Context: Using BuildResumeContext](#123-resume-context-using-buildresumecontext)
+    - 12.3 [Resume Context: Using ResumeCoordinator](#123-resume-context-using-resumecoordinator)
     - 12.4 [Key Points](#124-key-points)
 13. [Scheduled Task Execution](#13-scheduled-task-execution)
 14. [Best Practices](#14-best-practices)
@@ -2558,45 +2558,58 @@ The async task system handles the "when" (background processing, worker pools, p
                                                               │
 ┌──────────┐   ┌──────────────┐                     ┌─────────▼──────────┐
 │  Human   │──▶│  Approve/    │────────────────────▶│  Resume Handler    │
-│  (UI/API)│   │  Reject API  │                     │  BuildResumeContext│
+│  (UI/API)│   │  Reject API  │                     │  ResumeCoordinator │
 └──────────┘   └──────────────┘                     │  → ProcessRequest  │
                                                     └────────────────────┘
 ```
 
-The task handler calls `orchestrator.ProcessRequest()`. If a step triggers a HITL checkpoint, the framework automatically saves the checkpoint to Redis and the orchestrator returns an `InterruptedError`. Your handler detects this and can update task status or notify the caller. When the human approves via the HITL API, your resume handler rebuilds the context from the stored checkpoint and re-enters the orchestrator.
+The task handler calls `orchestrator.ProcessRequest()`. If a step triggers a HITL checkpoint, the framework automatically saves the checkpoint to Redis and the orchestrator returns an `InterruptedError`. Your handler detects this and can update task status or notify the caller. When the human approves via the HITL API, your resume handler calls the coordinator, which claims the checkpoint and invokes the application adapter.
 
-### 12.3 Resume Context: Using BuildResumeContext
+### 12.3 Resume Context: Using ResumeCoordinator
 
-The most critical part of HITL integration is the **resume handler**. When a human approves a checkpoint, you must rebuild the orchestrator's context from the stored execution state. The framework provides `BuildResumeContext` for this:
+Resume through `ResumeCoordinator`. It claims the approved checkpoint,
+restores context, renews ownership during work, and saves the actual terminal
+outcome. The application supplies its normal processing adapter:
 
 ```go
-func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) error {
-    // 1. Load the checkpoint
-    checkpoint, err := a.checkpointStore.LoadCheckpoint(ctx, checkpointID)
-    if err != nil {
-        return fmt.Errorf("checkpoint not found: %w", err)
-    }
-
-    // 2. Build resume context — single call, full contract
-    resumeCtx, endResumeSpan, err := orchestration.BuildResumeContext(ctx, checkpoint)
-    if err != nil {
-        return fmt.Errorf("invalid checkpoint state: %w", err)
-    }
-    defer endResumeSpan()
-
-    // 3. Re-enter the orchestrator with the original request
-    result, err := a.orchestrator.ProcessRequest(
-        resumeCtx,
-        checkpoint.OriginalRequest,
-        checkpoint.UserContext,
+executor := orchestration.ResumeExecutorFunc(func(
+    ctx context.Context, checkpoint *orchestration.ExecutionCheckpoint,
+) (*orchestration.ExecutionResult, error) {
+    // Use the real terminal result; successful tool steps alone are not success.
+    _, execution, err := orchestrator.ProcessRequestWithExecution(
+        ctx, checkpoint.OriginalRequest, checkpoint.UserContext,
     )
-    // ... handle result, chained interrupts, errors
-    return nil
-}
+    return execution, err
+})
+config, err := orchestration.LoadResumeCoordinatorRuntimeConfigFromEnvironment(
+    orchestration.DefaultResumeCoordinatorRuntimeConfig(), os.LookupEnv,
+)
+if err != nil { return err }
+coordinator, err := orchestration.NewResumeCoordinator(
+    checkpointStore, executor, config, orchestration.WithResumeLogger(logger),
+)
+if err != nil { return err }
+
+// At the request boundary:
+_, err = coordinator.ResumeExecution(ctx, checkpointID)
+return err
 ```
 
-`BuildResumeContext` ([hitl_helpers.go:141](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_helpers.go#L141)) handles the full resume contract:
-- **Validates** the checkpoint status is resumable (`approved`, `edited`, `expired_approved`)
+For streaming, call `ResumeWithExecutor` with a request-local callback and
+`ProcessRequestStreamingWithExecution`. Forward progress, but send `done`
+or a new checkpoint only after the coordinator finalizes. Before SSE headers,
+return the status/code from `HITLErrorResponse`; afterward send an error event
+with `retryable: false`. Never infer success from a nil error alone.
+
+HTTP/SSE work follows caller cancellation. Accepted tasks use their worker
+context independently of the submitting HTTP request. A failed task is not
+automatically re-enqueued; inspect effects before an explicit retry.
+
+The coordinator calls the following context helper once; applications do not
+call it a second time or use it to bypass claims.
+
+`BuildResumeContext` ([hitl_helpers.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/hitl_helpers.go)) handles the full resume contract:
+- **Validates** the checkpoint status is resumable (`approved`, `expired_approved`)
 - **Restores plan** — the stored plan with matching step IDs, so the orchestrator skips re-planning
 - **Restores completed steps** — already-executed step results, so the executor skips them
 - **Restores parameters** — human-approved parameter values for step-level resume
@@ -2605,15 +2618,18 @@ func (a *MyAgent) HandleHITLResume(ctx context.Context, checkpointID string) err
 - **Restores conversation correlation** — validates any canonical
   `conversation_id`, scrubs rejected identity, and restores accepted identity
   to core context, checkpoint metadata, and metric-ineligible W3C Baggage
-- **Links traces** — starts `hitl.resume` linked to the original trace; callers
-  must invoke the returned cleanup function
+- **Links traces** — starts `hitl.resume` linked to the original trace; the
+  coordinator invokes the returned cleanup function
 
-**Do not manually call individual `With*` helpers** (`WithResumeMode`, `WithPlanOverride`, `WithCompletedSteps`, etc.) in your resume handler. The resume contract has grown from 3 to 6 context values, and missing any one of them causes the orchestrator to replay the entire pipeline from scratch. `BuildResumeContext` is the single source of truth and will automatically include new helpers as the framework evolves.
+**Do not assemble resume context in application handlers.** Call the
+coordinator, which invokes `BuildResumeContext` after acquiring ownership.
+Individual `With*` helpers cannot replace the complete context, ownership,
+renewal, and finalization lifecycle.
 
 ### 12.4 Key Points
 
 1. **Enable HITL in your `.env`** — set `TRUVAG3_HITL_ENABLED=true` and list sensitive capabilities in `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES`
-2. **Always use `BuildResumeContext`** — never manually assemble the resume context
+2. **Always use `ResumeCoordinator`** — never bypass claims or manually assemble resume context
 3. **Handle chained interrupts** — a resumed execution may hit another sensitive step, producing a new checkpoint
 4. **Expiry callbacks** — pass auto-approve or auto-reject behavior to `NewCheckpointExpiryProcessor`, then register that `core.Runnable` with the framework
 5. **Backend isolation** — use distinct provider clients or key namespaces when HITL and execution-debug data need separate operational boundaries; orchestration runtime does not assume Redis DB numbers

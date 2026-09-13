@@ -821,15 +821,7 @@ func TestProcessCommand_Edit(t *testing.T) {
 
 	result, err := controller.ProcessCommand(context.Background(), command)
 
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if !result.ShouldResume {
-		t.Error("ShouldResume should be true for edit")
-	}
-	if result.ModifiedPlan != editedPlan {
-		t.Error("ModifiedPlan should be set")
-	}
+	assertUnsupportedCheckpointCommand(t, store, command, result, err)
 }
 
 func TestProcessCommand_Skip(t *testing.T) {
@@ -848,15 +840,7 @@ func TestProcessCommand_Skip(t *testing.T) {
 
 	result, err := controller.ProcessCommand(context.Background(), command)
 
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if !result.ShouldResume {
-		t.Error("ShouldResume should be true for skip")
-	}
-	if !result.SkipStep {
-		t.Error("SkipStep should be true")
-	}
+	assertUnsupportedCheckpointCommand(t, store, command, result, err)
 }
 
 func TestProcessCommand_Abort(t *testing.T) {
@@ -903,12 +887,7 @@ func TestProcessCommand_Retry(t *testing.T) {
 
 	result, err := controller.ProcessCommand(context.Background(), command)
 
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if !result.ShouldResume {
-		t.Error("ShouldResume should be true for retry")
-	}
+	assertUnsupportedCheckpointCommand(t, store, command, result, err)
 }
 
 func TestProcessCommand_Respond(t *testing.T) {
@@ -928,11 +907,17 @@ func TestProcessCommand_Respond(t *testing.T) {
 
 	result, err := controller.ProcessCommand(context.Background(), command)
 
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
+	assertUnsupportedCheckpointCommand(t, store, command, result, err)
+}
+
+func assertUnsupportedCheckpointCommand(t *testing.T, store *mockCheckpointStore, command *Command, result *ResumeResult, err error) {
+	t.Helper()
+	var unsupported *ErrCheckpointCommandUnsupported
+	if !errors.As(err, &unsupported) || unsupported.CommandType != command.Type || result != nil {
+		t.Fatalf("unsupported command returned result=%#v, error=%v", result, err)
 	}
-	if !result.ShouldResume {
-		t.Error("ShouldResume should be true for respond")
+	if checkpoint := store.checkpoints[command.CheckpointID]; checkpoint.Status != CheckpointStatusPending || checkpoint.Plan != nil {
+		t.Fatalf("unsupported command changed checkpoint: %#v", checkpoint)
 	}
 }
 
@@ -977,8 +962,9 @@ func TestProcessCommand_NotPending(t *testing.T) {
 	if err == nil {
 		t.Fatal("Should return error for non-pending checkpoint")
 	}
-	if !IsInvalidCommand(err) {
-		t.Errorf("Error should be ErrInvalidCommand, got: %v", err)
+	var conflict *ErrCheckpointStatusConflict
+	if !errors.As(err, &conflict) {
+		t.Errorf("Error should be ErrCheckpointStatusConflict, got: %v", err)
 	}
 }
 
@@ -1016,82 +1002,10 @@ func TestProcessCommand_NilStore(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// ResumeExecution Tests
-// =============================================================================
-
-func TestResumeExecution_Success(t *testing.T) {
-	store := newMockCheckpointStore()
-	store.checkpoints["cp-resume"] = &ExecutionCheckpoint{
-		CheckpointID:   "cp-resume",
-		RequestID:      "req-1",
-		Status:         CheckpointStatusApproved,
-		InterruptPoint: InterruptPointPlanGenerated,
-		Plan:           &RoutingPlan{PlanID: "plan-1"},
-	}
-	controller := NewInterruptController(&mockPolicy{}, store, &mockInterruptHandler{})
-
-	result, err := controller.ResumeExecution(context.Background(), "cp-resume")
-
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("Result should not be nil")
-	}
-	if !result.Success {
-		t.Error("Success should be true")
-	}
-	if result.Metadata["resumed_from_checkpoint"] != "cp-resume" {
-		t.Error("Metadata should contain checkpoint ID")
-	}
-}
-
-func TestResumeExecution_EditedStatus(t *testing.T) {
-	store := newMockCheckpointStore()
-	store.checkpoints["cp-edited"] = &ExecutionCheckpoint{
-		CheckpointID: "cp-edited",
-		Status:       CheckpointStatusEdited,
-		Plan:         &RoutingPlan{PlanID: "plan-1"},
-	}
-	controller := NewInterruptController(&mockPolicy{}, store, &mockInterruptHandler{})
-
-	result, err := controller.ResumeExecution(context.Background(), "cp-edited")
-
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("Result should not be nil")
-	}
-}
-
-func TestResumeExecution_NotResumableStatus(t *testing.T) {
-	store := newMockCheckpointStore()
-	store.checkpoints["cp-rejected"] = &ExecutionCheckpoint{
-		CheckpointID: "cp-rejected",
-		Status:       CheckpointStatusRejected,
-	}
-	controller := NewInterruptController(&mockPolicy{}, store, &mockInterruptHandler{})
-
-	_, err := controller.ResumeExecution(context.Background(), "cp-rejected")
-
-	if err == nil {
-		t.Fatal("Should return error for non-resumable status")
-	}
-	if !containsSubstring(err.Error(), "not in a resumable state") {
-		t.Errorf("Error should mention not resumable, got: %s", err.Error())
-	}
-}
-
-func TestResumeExecution_NotFound(t *testing.T) {
-	store := newMockCheckpointStore()
-	controller := NewInterruptController(&mockPolicy{}, store, &mockInterruptHandler{})
-
-	_, err := controller.ResumeExecution(context.Background(), "cp-not-exists")
-
-	if err == nil {
-		t.Fatal("Should return error for non-existent checkpoint")
+func TestInterruptControllerDoesNotExposePlaceholderResume(t *testing.T) {
+	controller := NewInterruptController(nil, newMockCheckpointStore(), nil)
+	if _, ok := any(controller).(HITLResumer); ok {
+		t.Fatal("interrupt controller still exposes execution resumption")
 	}
 }
 

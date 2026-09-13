@@ -65,7 +65,6 @@ func GetRequestMode(ctx context.Context) RequestMode {
 // IsResumableStatus checks if a checkpoint status allows resumption.
 // Returns true for statuses that indicate the workflow can continue:
 //   - approved: Human explicitly approved
-//   - edited: Human modified and approved
 //   - expired_approved: Auto-approved on timeout
 //
 // This helper prevents status check bugs and ensures consistent resume logic
@@ -73,7 +72,6 @@ func GetRequestMode(ctx context.Context) RequestMode {
 func IsResumableStatus(status CheckpointStatus) bool {
 	switch status {
 	case CheckpointStatusApproved,
-		CheckpointStatusEdited,
 		CheckpointStatusExpiredApproved:
 		return true
 	default:
@@ -92,6 +90,7 @@ func IsResumableStatus(status CheckpointStatus) bool {
 func IsTerminalStatus(status CheckpointStatus) bool {
 	switch status {
 	case CheckpointStatusCompleted,
+		CheckpointStatusContinued,
 		CheckpointStatusRejected,
 		CheckpointStatusAborted,
 		CheckpointStatusExpired,
@@ -121,29 +120,14 @@ func IsPendingStatus(status CheckpointStatus) bool {
 //   - WithCompletedSteps(ctx, checkpoint.StepResults)
 //   - WithPreResolvedParams(ctx, checkpoint.ResolvedParameters, stepID)
 //
-// The framework prepares the context; the application uses it with its own processing method.
-// This keeps the framework decoupled from application-specific execution patterns.
+// ResumeCoordinator calls this helper once after acquiring durable ownership
+// and ends the returned linked span when the attempt settles. Application
+// adapters receive its context through ResumeExecutor; they must not call the
+// helper again or use it as an alternative to claiming the checkpoint.
 //
-// Usage in expiry callback:
-//
-//	checkpointStore.SetExpiryCallback(func(ctx context.Context, cp *ExecutionCheckpoint, action CommandType) {
-//	    // Application decides: should we resume?
-//	    if !orchestration.IsResumableStatus(cp.Status) || action != CommandApprove {
-//	        return
-//	    }
-//
-//	    // Framework prepares the context and creates a linked trace span.
-//	    resumeCtx, endSpan, err := orchestration.BuildResumeContext(ctx, cp)
-//	    if err != nil {
-//	        log.Error("Failed to build resume context", "error", err)
-//	        return
-//	    }
-//	    defer endSpan()
-//
-//	    // Application executes the resume using its own method
-//	    sessionID := cp.UserContext["session_id"].(string)
-//	    agent.ProcessWithStreaming(resumeCtx, sessionID, cp.OriginalRequest, callback)
-//	})
+// This lower-level helper alone does not acquire, renew, or finalize a claim.
+// Expiry callbacks may run before a durable decision is saved; they must not
+// resume directly from their notification snapshot.
 func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (context.Context, func(), error) {
 	noop := func() {}
 
@@ -153,7 +137,7 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 	// Validate checkpoint is resumable
 	if !IsResumableStatus(checkpoint.Status) {
 		return nil, noop, fmt.Errorf("checkpoint %s has non-resumable status %q "+
-			"(only approved, edited, or expired_approved checkpoints can be resumed)",
+			"(only approved or expired_approved checkpoints can be resumed)",
 			checkpoint.CheckpointID, checkpoint.Status)
 	}
 	if checkpoint.SkillState == nil && checkpoint.SkillCacheContext != nil {
@@ -216,6 +200,13 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 
 	// Build resume context using existing helpers from orchestrator.go
 	resumeCtx = WithResumeMode(resumeCtx, checkpoint.CheckpointID)
+	if checkpoint.ResumeState != nil {
+		resumeCtx = context.WithValue(resumeCtx, resumeLineageKey{}, resumeLineage{
+			CheckpointID:          checkpoint.CheckpointID,
+			AttemptID:             checkpoint.ResumeState.AttemptID,
+			SuccessorCheckpointID: checkpoint.ResumeState.ReservedSuccessorCheckpointID,
+		})
+	}
 	if checkpoint.SkillState != nil {
 		resumeCtx = withCheckpointSkillState(
 			resumeCtx,

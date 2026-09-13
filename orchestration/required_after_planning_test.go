@@ -584,12 +584,6 @@ func (*requiredBoundaryInterruptController) ProcessCommand(
 ) (*ResumeResult, error) {
 	return nil, nil
 }
-func (*requiredBoundaryInterruptController) ResumeExecution(
-	context.Context,
-	string,
-) (*ExecutionResult, error) {
-	return nil, nil
-}
 func (*requiredBoundaryInterruptController) UpdateCheckpointProgress(
 	context.Context,
 	string,

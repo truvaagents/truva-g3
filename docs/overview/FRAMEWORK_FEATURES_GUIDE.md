@@ -653,7 +653,9 @@ See [Async Orchestration Guide](../orchestration/ASYNC_ORCHESTRATION_GUIDE.md#7-
 
 #### Human-in-the-Loop Approval
 
-HITL checkpoints pause execution until a human approves, rejects, edits, or lets the checkpoint expire.
+HITL checkpoints pause execution until a human approves, rejects, aborts, or
+lets the checkpoint expire. The default command endpoint rejects unsupported
+edit, skip, retry, and respond commands before changing state.
 
 Supported interrupt points include:
 
@@ -661,7 +663,11 @@ Supported interrupt points include:
 - before-step approval
 - error escalation
 
-HITL supports Redis-backed checkpoint storage, webhook-style notification patterns, command handling, expiry processing, and resume flows.
+HITL supports Redis-backed checkpoint storage, webhook-style notifications,
+command handling, expiry processing, and framework-owned resume. Applications
+provide a processing adapter to `ResumeCoordinator`; the framework claims
+ownership, renews it during execution, and finalizes the actual outcome.
+Another interruption saves the parent as `continued` and exposes its successor.
 
 See [Human-in-the-Loop User Guide](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md).
 

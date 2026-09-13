@@ -30,6 +30,16 @@ func newMockInterruptController() *mockInterruptController {
 	return &mockInterruptController{}
 }
 
+func newHITLTestHandler(t *testing.T, controller *mockInterruptController, store CheckpointPersistence, opts ...HITLHandlerOption) *HITLHandler {
+	t.Helper()
+	opts = append(opts, WithHITLResumer(controller))
+	handler, err := NewHITLHandler(controller, store, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
 func (m *mockInterruptController) SetPolicy(policy InterruptPolicy) {}
 
 func (m *mockInterruptController) SetHandler(handler InterruptHandler) {}
@@ -103,13 +113,17 @@ func (m *mockCheckpointStore) LoadCheckpoint(ctx context.Context, checkpointID s
 	if !exists {
 		return nil, &ErrCheckpointNotFound{CheckpointID: checkpointID}
 	}
-	return cp, nil
+	copy := *cp
+	return &copy, nil
 }
 
-func (m *mockCheckpointStore) UpdateCheckpointStatus(ctx context.Context, checkpointID string, status CheckpointStatus) error {
+func (m *mockCheckpointStore) UpdateCheckpointStatus(ctx context.Context, checkpointID string, expected, status CheckpointStatus) error {
 	cp, exists := m.checkpoints[checkpointID]
 	if !exists {
 		return &ErrCheckpointNotFound{CheckpointID: checkpointID}
+	}
+	if cp.Status != expected {
+		return &ErrCheckpointStatusConflict{CheckpointID: checkpointID, Expected: expected, Actual: cp.Status, Next: status}
 	}
 	cp.Status = status
 	return nil
@@ -325,7 +339,7 @@ func TestHITLHandler_HandleCommand(t *testing.T) {
 			tt.setupMocks(ctrl, store)
 
 			// Create handler
-			handler := NewHITLHandler(ctrl, store)
+			handler := newHITLTestHandler(t, ctrl, store)
 
 			// Create request
 			req := httptest.NewRequest(tt.method, "/hitl/command", bytes.NewBufferString(tt.requestBody))
@@ -480,7 +494,7 @@ func TestHITLHandler_HandleListCheckpoints(t *testing.T) {
 			tt.setupMocks(store)
 
 			// Create handler
-			handler := NewHITLHandler(ctrl, store)
+			handler := newHITLTestHandler(t, ctrl, store)
 
 			// Create request
 			req := httptest.NewRequest(tt.method, "/hitl/checkpoints"+tt.queryParams, nil)
@@ -584,7 +598,7 @@ func TestHITLHandler_HandleGetCheckpoint(t *testing.T) {
 			tt.setupMocks(store)
 
 			// Create handler
-			handler := NewHITLHandler(ctrl, store)
+			handler := newHITLTestHandler(t, ctrl, store)
 
 			// Create request
 			req := httptest.NewRequest(tt.method, tt.path, nil)
@@ -616,7 +630,7 @@ func TestHITLHandler_RegisterRoutes(t *testing.T) {
 		Status:       CheckpointStatusPending,
 	}
 
-	handler := NewHITLHandler(ctrl, store)
+	handler := newHITLTestHandler(t, ctrl, store)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
@@ -695,7 +709,7 @@ func TestNewHITLHandler_WithOptions(t *testing.T) {
 	store := newMockCheckpointStore()
 
 	// Test with logger option
-	handler := NewHITLHandler(ctrl, store, WithHITLHandlerLogger(nil))
+	handler := newHITLTestHandler(t, ctrl, store, WithHITLHandlerLogger(nil))
 	if handler == nil {
 		t.Fatal("Expected handler to be created")
 	}
@@ -779,7 +793,7 @@ func TestHITLHandler_HandleResume(t *testing.T) {
 					},
 				}
 			},
-			expectedStatus: http.StatusOK,
+			expectedStatus: http.StatusInternalServerError,
 			checkResponse: func(t *testing.T, rr *httptest.ResponseRecorder) {
 				var result ExecutionResult
 				if err := json.NewDecoder(rr.Body).Decode(&result); err != nil {
@@ -812,12 +826,12 @@ func TestHITLHandler_HandleResume(t *testing.T) {
 					OriginalRequestID: "orig-req-expired",
 					Status:            CheckpointStatusExpiredRejected,
 				}
-				ctrl.resumeErr = &ErrCheckpointExpired{CheckpointID: "cp-expired"}
+				ctrl.resumeErr = &ErrCheckpointNotResumable{CheckpointID: "cp-expired", Status: CheckpointStatusExpiredRejected}
 			},
-			expectedStatus: http.StatusBadRequest,
+			expectedStatus: http.StatusConflict,
 		},
 		{
-			name:   "invalid command error",
+			name:   "checkpoint not approved",
 			method: http.MethodPost,
 			path:   "/hitl/resume/cp-invalid",
 			setupMocks: func(ctrl *mockInterruptController, store *mockCheckpointStore) {
@@ -828,9 +842,9 @@ func TestHITLHandler_HandleResume(t *testing.T) {
 					OriginalRequestID: "orig-req-invalid",
 					Status:            CheckpointStatusPending,
 				}
-				ctrl.resumeErr = &ErrInvalidCommand{CommandType: CommandApprove, Reason: "checkpoint not approved"}
+				ctrl.resumeErr = &ErrCheckpointNotResumable{CheckpointID: "cp-invalid", Status: CheckpointStatusPending}
 			},
-			expectedStatus: http.StatusBadRequest,
+			expectedStatus: http.StatusConflict,
 		},
 		{
 			name:   "internal error",
@@ -879,7 +893,7 @@ func TestHITLHandler_HandleResume(t *testing.T) {
 			tt.setupMocks(ctrl, store)
 
 			// Create handler
-			handler := NewHITLHandler(ctrl, store)
+			handler := newHITLTestHandler(t, ctrl, store)
 
 			// Create request
 			req := httptest.NewRequest(tt.method, tt.path, nil)
@@ -919,7 +933,7 @@ func TestHITLHandler_RegisterRoutes_IncludesResume(t *testing.T) {
 		Success: true,
 	}
 
-	handler := NewHITLHandler(ctrl, store)
+	handler := newHITLTestHandler(t, ctrl, store)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)

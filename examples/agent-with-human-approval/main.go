@@ -1,10 +1,10 @@
 // Package main provides a HITL-enabled chat agent demonstration.
 //
 // This agent demonstrates Human-in-the-Loop (HITL) human oversight for AI orchestration.
-// It runs on port 8098 (different from travel-chat-agent on 8095).
+// It runs on port 8352.
 //
 // HITL is ALWAYS enabled in this agent - no environment variable toggle needed.
-// All execution plans require human approval before proceeding.
+// The configured policy selects plan-level or sensitive-step approval.
 package main
 
 import (
@@ -54,6 +54,24 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+	// Construct the host before borrowing agent.Logger for long-lived helpers.
+	// NewBaseAgent starts with a no-op logger; NewFramework installs the real one.
+	middlewareConfig := &telemetry.TracingMiddlewareConfig{
+		ExcludedPaths: []string{"/health", "/metrics", "/ready", "/live", "/api/capabilities"},
+		RequestFilter: func(r *http.Request) bool { return r.URL.Query().Get("poll") != "true" },
+	}
+	framework, err := core.NewFramework(agent,
+		core.WithName("agent-with-human-approval"),
+		core.WithPort(getPort()),
+		core.WithNamespace(os.Getenv("NAMESPACE")),
+		core.WithRedisConnection(redisConnection),
+		core.WithDiscovery(true, "redis"),
+		core.WithCORSDefaults(),
+		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("agent-with-human-approval", middlewareConfig)),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create framework: %v", err)
+	}
 
 	// ┌────────────────────────────────────────────────────────────────┐
 	// │  HITL Configuration from Environment Variables                 │
@@ -65,7 +83,7 @@ func main() {
 	//   TRUVAG3_HITL_DEFAULT_TIMEOUT=5m
 	//   TRUVAG3_HITL_ESCALATE_AFTER_RETRIES=3
 	//
-	// See orchestration/HUMAN_IN_THE_LOOP_PROPOSAL.md for full env var reference.
+	// See docs/orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md for configuration.
 	hitlConfig := orchestration.DefaultConfig().HITL
 
 	// Validate HITL is enabled (required for this agent)
@@ -84,35 +102,22 @@ func main() {
 		log.Fatalf("HITL setup failed: %v", err)
 	}
 	defer func() { _ = hitl.Close() }()
+	resumeConfig, err := orchestration.LoadResumeCoordinatorRuntimeConfigFromEnvironment(orchestration.DefaultResumeCoordinatorRuntimeConfig(), os.LookupEnv)
+	if err != nil {
+		log.Fatalf("HITL resume configuration failed: %v", err)
+	}
+	hitl.Resumer, err = orchestration.NewResumeCoordinator(hitl.CheckpointStore,
+		orchestration.ResumeExecutorFunc(agent.executeApprovedCheckpoint), resumeConfig,
+		orchestration.WithResumeLogger(agent.Logger))
+	if err != nil {
+		log.Fatalf("HITL resume setup failed: %v", err)
+	}
 
 	agent.Logger.Info("HITL infrastructure initialized", map[string]interface{}{
 		"sensitive_capabilities": hitlConfig.SensitiveCapabilities,
 		"require_plan_approval":  hitlConfig.RequirePlanApproval,
 		"default_timeout":        hitlConfig.DefaultTimeout.String(),
 	})
-
-	// 6. Create framework with tracing middleware
-	middlewareConfig := &telemetry.TracingMiddlewareConfig{
-		ExcludedPaths: []string{"/health", "/metrics", "/ready", "/live", "/api/capabilities"},
-		// Exclude HITL polling requests from tracing to reduce noise in Jaeger
-		// UI polls checkpoint status every 5 seconds with ?poll=true
-		RequestFilter: func(r *http.Request) bool {
-			return r.URL.Query().Get("poll") != "true"
-		},
-	}
-
-	framework, err := core.NewFramework(agent,
-		core.WithName("agent-with-human-approval"),
-		core.WithPort(getPort()),
-		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisConnection(redisConnection),
-		core.WithDiscovery(true, "redis"),
-		core.WithCORSDefaults(), // Allows all headers including X-Truvag3-Original-Request-ID
-		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("agent-with-human-approval", middlewareConfig)),
-	)
-	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
-	}
 
 	// 7. Initialize orchestrator with HITL in background (after discovery is ready)
 	go func() {
@@ -150,11 +155,15 @@ func main() {
 	// ┌────────────────────────────────────────────────────────────────┐
 	// │  HITL API HANDLERS: Always registered in this agent            │
 	// └────────────────────────────────────────────────────────────────┘
-	hitlHandler := orchestration.NewHITLHandler(
+	hitlHandler, err := orchestration.NewHITLHandler(
 		hitl.Controller,
 		hitl.CheckpointStore,
 		orchestration.WithHITLHandlerLogger(agent.Logger),
+		orchestration.WithHITLResumer(hitl.Resumer),
 	)
+	if err != nil {
+		log.Fatalf("HITL handler setup failed: %v", err)
+	}
 
 	// Register HITL-specific routes
 	agent.RegisterHITLCapabilities(hitlHandler)

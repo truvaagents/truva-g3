@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -44,6 +45,8 @@ type ChatRequest struct {
 
 // SSECallback implements StreamCallback for SSE responses.
 type SSECallback struct {
+	mu      sync.Mutex
+	err     error
 	w       http.ResponseWriter
 	flusher http.Flusher
 	logger  core.Logger
@@ -128,47 +131,51 @@ func (c *SSECallback) SendFinish(reason string) {
 // SendCheckpoint sends a HITL checkpoint event.
 // This is sent when execution is paused for human approval.
 func (c *SSECallback) SendCheckpoint(checkpoint *orchestration.ExecutionCheckpoint) {
+	public := orchestration.CheckpointResponseFrom(checkpoint)
+	if public == nil {
+		return
+	}
 	data := map[string]interface{}{
-		"checkpoint_id":   checkpoint.CheckpointID,
-		"request_id":      checkpoint.RequestID,
-		"interrupt_point": checkpoint.InterruptPoint,
-		"expires_at":      checkpoint.ExpiresAt,
-		"status":          checkpoint.Status,
+		"checkpoint_id":   public.CheckpointID,
+		"request_id":      public.RequestID,
+		"interrupt_point": public.InterruptPoint,
+		"expires_at":      public.ExpiresAt,
+		"status":          public.Status,
 	}
 
-	if checkpoint.Decision != nil {
-		data["reason"] = checkpoint.Decision.Reason
-		data["message"] = checkpoint.Decision.Message
-		if checkpoint.Decision.Metadata != nil {
+	if public.Decision != nil {
+		data["reason"] = public.Decision.Reason
+		data["message"] = public.Decision.Message
+		if public.Decision.Metadata != nil {
 			data["decision"] = map[string]interface{}{
-				"reason":   checkpoint.Decision.Reason,
-				"message":  checkpoint.Decision.Message,
-				"priority": checkpoint.Decision.Priority,
-				"metadata": checkpoint.Decision.Metadata,
+				"reason":   public.Decision.Reason,
+				"message":  public.Decision.Message,
+				"priority": public.Decision.Priority,
+				"metadata": public.Decision.Metadata,
 			}
 		}
 	}
 
-	if checkpoint.CurrentStep != nil {
+	if public.CurrentStep != nil {
 		currentStepData := map[string]interface{}{
-			"step_id":     checkpoint.CurrentStep.StepID,
-			"agent_name":  checkpoint.CurrentStep.AgentName,
-			"instruction": checkpoint.CurrentStep.Instruction,
-			"namespace":   checkpoint.CurrentStep.Namespace,
+			"step_id":     public.CurrentStep.StepID,
+			"agent_name":  public.CurrentStep.AgentName,
+			"instruction": public.CurrentStep.Instruction,
+			"namespace":   public.CurrentStep.Namespace,
 		}
-		if checkpoint.CurrentStep.Metadata != nil {
-			currentStepData["metadata"] = checkpoint.CurrentStep.Metadata
+		if public.CurrentStep.Metadata != nil {
+			currentStepData["metadata"] = public.CurrentStep.Metadata
 		}
 		data["current_step"] = currentStepData
 	}
 
-	if len(checkpoint.ResolvedParameters) > 0 {
-		data["resolved_parameters"] = checkpoint.ResolvedParameters
+	if len(public.ResolvedParameters) > 0 {
+		data["resolved_parameters"] = public.ResolvedParameters
 	}
 
-	if len(checkpoint.CompletedSteps) > 0 {
-		completedSteps := make([]map[string]interface{}, len(checkpoint.CompletedSteps))
-		for i, step := range checkpoint.CompletedSteps {
+	if len(public.CompletedSteps) > 0 {
+		completedSteps := make([]map[string]interface{}, len(public.CompletedSteps))
+		for i, step := range public.CompletedSteps {
 			completedSteps[i] = map[string]interface{}{
 				"step_id":    step.StepID,
 				"agent_name": step.AgentName,
@@ -178,9 +185,9 @@ func (c *SSECallback) SendCheckpoint(checkpoint *orchestration.ExecutionCheckpoi
 		data["completed_steps"] = completedSteps
 	}
 
-	if checkpoint.Plan != nil {
-		steps := make([]map[string]interface{}, len(checkpoint.Plan.Steps))
-		for i, step := range checkpoint.Plan.Steps {
+	if public.Plan != nil {
+		steps := make([]map[string]interface{}, len(public.Plan.Steps))
+		for i, step := range public.Plan.Steps {
 			steps[i] = map[string]interface{}{
 				"step_id":     step.StepID,
 				"tool":        step.AgentName,
@@ -192,8 +199,8 @@ func (c *SSECallback) SendCheckpoint(checkpoint *orchestration.ExecutionCheckpoi
 			}
 		}
 		data["plan"] = map[string]interface{}{
-			"plan_id":          checkpoint.Plan.PlanID,
-			"original_request": checkpoint.Plan.OriginalRequest,
+			"plan_id":          public.Plan.PlanID,
+			"original_request": public.Plan.OriginalRequest,
 			"steps":            steps,
 			"step_count":       len(steps),
 		}
@@ -204,13 +211,39 @@ func (c *SSECallback) SendCheckpoint(checkpoint *orchestration.ExecutionCheckpoi
 
 // sendEvent sends a generic SSE event.
 func (c *SSECallback) sendEvent(eventType string, data interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	if c.ctx != nil && c.ctx.Err() != nil {
+		c.err = c.ctx.Err()
+		return
+	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
+		c.err = err
 		return
 	}
 
-	_, _ = fmt.Fprintf(c.w, "event: %s\ndata: %s\n\n", eventType, jsonData)
-	c.flusher.Flush()
+	if _, err := fmt.Fprintf(c.w, "event: %s\ndata: %s\n\n", eventType, jsonData); err != nil {
+		c.err = err
+		return
+	}
+	c.err = http.NewResponseController(c.w).Flush()
+}
+
+// Err exposes delivery failure to the normal orchestration callback.
+func (c *SSECallback) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return c.err
+	}
+	if c.ctx != nil {
+		return c.ctx.Err()
+	}
+	return nil
 }
 
 // ServeHTTP handles the SSE streaming endpoint.

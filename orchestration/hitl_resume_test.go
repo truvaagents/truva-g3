@@ -4,7 +4,26 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
+
+func TestClaimedResumeContextReservesSuccessorIdentity(t *testing.T) {
+	claim := stubResumeClaim(ResumeClaimRequest{CheckpointID: "parent", AttemptID: "attempt", Owner: "owner", Lease: time.Minute, SuccessorCheckpointID: "reserved-child"})
+	ctx, end, err := BuildResumeContext(t.Context(), claim.Checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer end()
+	controller := NewInterruptController(nil, nil, nil)
+	child := controller.createCheckpoint(ctx, nil, nil, nil, &InterruptDecision{}, InterruptPointBeforeStep)
+	if child.CheckpointID != "reserved-child" || child.ParentCheckpointID != "parent" || child.ParentResumeAttemptID != "attempt" {
+		t.Fatalf("child provenance = %+v", child)
+	}
+	plain := controller.createCheckpoint(WithResumeMode(t.Context(), "parent"), nil, nil, nil, &InterruptDecision{}, InterruptPointBeforeStep)
+	if plain.CheckpointID == "reserved-child" || plain.ParentCheckpointID != "" || plain.ParentResumeAttemptID != "" {
+		t.Fatal("WithResumeMode fabricated ownership")
+	}
+}
 
 // =============================================================================
 // Unit tests for HITL resume plan validation and checkpoint enrichment.

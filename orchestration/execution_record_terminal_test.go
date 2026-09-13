@@ -239,12 +239,13 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 			orchestrator.executionStore = store
 
 			var requestErr error
+			var actualExecution *ExecutionResult
 			if test.streaming {
-				_, requestErr = orchestrator.ProcessRequestStreaming(t.Context(), "request", nil, func(core.StreamChunk) error {
+				_, actualExecution, requestErr = orchestrator.ProcessRequestStreamingWithExecution(t.Context(), "request", nil, func(core.StreamChunk) error {
 					return nil
 				})
 			} else {
-				_, requestErr = orchestrator.ProcessRequest(t.Context(), "request", nil)
+				_, actualExecution, requestErr = orchestrator.ProcessRequestWithExecution(t.Context(), "request", nil)
 			}
 			if (requestErr != nil) != test.wantError {
 				t.Fatalf("request error = %v, wantError=%v", requestErr, test.wantError)
@@ -283,6 +284,9 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 			}
 			if terminalRecord.Result == nil || terminalRecord.Result.Success != test.wantSuccess {
 				t.Fatalf("terminal result success = %#v, want %v", terminalRecord.Result, test.wantSuccess)
+			}
+			if actualExecution == nil || actualExecution.Success != terminalRecord.Result.Success || actualExecution.TotalDuration != terminalRecord.Result.TotalDuration || len(actualExecution.Steps) != len(terminalRecord.Result.Steps) {
+				t.Fatalf("returned execution diverged from the terminal record: returned=%+v stored=%+v", actualExecution, terminalRecord.Result)
 			}
 			if test.wantHookCalls {
 				if len(terminalRecord.PipelineHooks) != 2 ||

@@ -2224,29 +2224,49 @@ The HITL controller stores `OriginalTraceID`, `OriginalSpanID`, and
 metadata copy also carries a valid canonical `conversation_id` when one is
 present.
 
-Applications resume through `orchestration.BuildResumeContext`. They must not
-duplicate trace-link creation or manually reconstruct the resume baggage:
+Application handlers call `ResumeCoordinator`; its executor receives the
+restored context and calls the normal result-bearing processing path. For SSE,
+use `ResumeWithExecutor` with a request-local callback. Do not load a checkpoint
+and call `BuildResumeContext` as a replacement for acquiring ownership.
 
 ```go
-checkpoint, err := checkpointStore.LoadCheckpoint(ctx, checkpointID)
-if err != nil {
-    return err
-}
-
-resumeCtx, endResumeSpan, err :=
-    orchestration.BuildResumeContext(ctx, checkpoint)
-if err != nil {
-    return err
-}
-defer endResumeSpan()
-
-_, err = orchestrator.ProcessRequest(
-    resumeCtx,
-    checkpoint.OriginalRequest,
-    nil,
+executor := orchestration.ResumeExecutorFunc(func(
+    ctx context.Context, checkpoint *orchestration.ExecutionCheckpoint,
+) (*orchestration.ExecutionResult, error) {
+    // Use the real terminal result; successful tool steps alone are not success.
+    _, execution, err := orchestrator.ProcessRequestWithExecution(
+        ctx, checkpoint.OriginalRequest, checkpoint.UserContext,
+    )
+    return execution, err
+})
+config, err := orchestration.LoadResumeCoordinatorRuntimeConfigFromEnvironment(
+    orchestration.DefaultResumeCoordinatorRuntimeConfig(), os.LookupEnv,
 )
+if err != nil { return err }
+coordinator, err := orchestration.NewResumeCoordinator(
+    checkpointStore, executor, config, orchestration.WithResumeLogger(logger),
+)
+if err != nil { return err }
+
+// At the request boundary:
+_, err = coordinator.ResumeExecution(ctx, checkpointID)
 return err
 ```
+
+The coordinator calls `BuildResumeContext` exactly once after a successful
+claim and owns its cleanup. The helper remains the single owner of the linked
+`hitl.resume` span and correlation restoration. A rejected claim creates no
+resume span; its rejection event belongs to the caller span, if present.
+The claim occurs before span creation. The helper's existing
+`hitl.trace_link_created` event comes first, followed by
+`hitl.resume.claimed` (recorded after the acquisition), then execution and
+terminal events.
+
+Stored checkpoint lineage is authoritative. The migrated handlers do not
+accept an HTTP header override for `original_request_id`. Internal attempt
+and process-owner IDs belong only in structured logs and trace attributes,
+never in metric labels or added baggage. Canonical conversation-ID validation
+and the original trace link are unchanged.
 
 `BuildResumeContext`:
 
@@ -2267,11 +2287,6 @@ return err
 An invalid or capacity-rejected checkpoint conversation ID is omitted and
 increments the bounded rejection counter. It does not fail the resume or mark
 the span as failed.
-
-If an application accepts a trusted
-`X-TruvaG3-Original-Request-ID` override, apply it to
-`checkpoint.OriginalRequestID` before calling `BuildResumeContext`. The helper
-still owns link and baggage construction.
 
 ### Understanding Trace Links vs Parent-Child
 
@@ -2368,6 +2383,63 @@ In Jaeger:
 - Click "References" in Trace B to jump to Trace A
 ```
 
+### Resume lifecycle observations
+
+These observations belong to the coordinator, not an application-created
+second resume span. Every new event places `request_id` first. Before the
+executor creates its request ID, it is the incoming request ID if available;
+later observations use the actual resumed execution ID. Stored
+`original_request_id` and validated `conversation_id` remain separate.
+
+| Event | Meaning |
+|---|---|
+| `hitl.resume.rejected` | Validation or claim rejection on the caller span; no execution started |
+| `hitl.resume.claimed` | Durable claim acquired; recorded after the linked span is created |
+| `hitl.resume.started` | Application executor starts; absent for saved-successor recovery |
+| `hitl.resume.continued` | Parent-to-successor transition persisted |
+| `hitl.resume.completed` | Successful terminal result and completion persisted |
+| `hitl.resume.claim_lost` | Confirmed loss of ownership after claiming |
+| `hitl.resume.failed` | Other settled failure, cancellation, deadline, or propagated panic |
+
+Healthy renewal ticks are counter-only: no repeated logs or events.
+Terminal failures mark the owning span as failed. The returned error retains
+its original causes; these new diagnostic records use bounded descriptions,
+not copied model/checkpoint/backend payloads.
+
+| Counter | Closed labels in addition to `module=orchestration` | Emission |
+|---|---|---|
+| `orchestration.hitl.resume_attempt_total` | `outcome=claimed/in_progress/not_resumable/not_found/invalid_input/cancelled/deadline/failed` | Once when validation/claim settles |
+| `orchestration.hitl.resume_renewal_total` | `outcome=succeeded/claim_lost/failed/cancelled`; `phase=periodic/finalization` | Once per actual renewal call, including the final renewal |
+| `orchestration.hitl.resume_outcome_total` | `outcome=completed/continued/failed/cancelled/deadline/claim_lost/panic`; `stage=restore/recovery/execute/renew/release/finalize` | Once per acquired attempt after settlement; none for rejected claims |
+
+A stopped timer without a call adds no renewal count. These are process-local
+emission rules, not durable exactly-once accounting after crashes.
+`RecordCheckpointStatus` / `orchestration.hitl.checkpoint_status_total`
+counts only **successfully persisted human-command transitions**, after CAS.
+It does not count failed CAS attempts, backend retries, or resume ownership
+transitions. Expiry counters retain their separate semantics.
+
+| Log operation | Level / status |
+|---|---|
+| `hitl_resume_claim` | INFO / `success` or expected `rejected`; backend failure ERROR / `error`; canceled/deadline WARN / `rejected` |
+| `hitl_resume_start` | INFO / `success` (started, not completed) |
+| `hitl_resume_continue` | INFO / `interrupted` after persistence |
+| `hitl_resume_complete` | INFO / `success` after persistence |
+| `hitl_resume_claim_lost` | ERROR / `error` |
+| `hitl_resume_fail` | ERROR / `error`; cancellation/deadline alone WARN / `error` |
+
+Log fields include `operation`, `status`, known request/original-request/
+conversation IDs, `checkpoint_id`, `attempt_id`, and internal `owner`.
+Terminal logs add numeric `duration_ms` and the selected `stage`/`outcome`.
+Successor transitions add `successor_checkpoint_id`. None of these IDs enters
+metric labels or new high-cardinality baggage.
+
+Failure `error_type` is restricted to
+`validation/claim/context_restore/execution/renewal/successor/finalization/claim_release/claim_lost/cancelled/deadline/panic`.
+Expected rejection `reason` is
+`invalid_input/in_progress/not_resumable/not_found`; successful and expected
+state-rejection records omit failure diagnostics.
+
 ### Key Functions for HITL Tracing
 
 | Function | Purpose |
@@ -2381,7 +2453,7 @@ In Jaeger:
 1. **Use the controller-created checkpoint** — It captures typed trace and
    request-lineage fields automatically.
 
-2. **Always call `BuildResumeContext`** — Call its cleanup function and use the
+2. **Use the coordinator-owned context** — `ResumeCoordinator` calls and cleans up `BuildResumeContext`; adapters use the
    returned context for resumed processing.
 
 3. **Do not duplicate link or baggage setup** — The framework helper owns both.
@@ -2627,7 +2699,7 @@ Distributed tracing transforms debugging from guesswork into science. Here's wha
 4. **Client-Side:** `TracedHTTPClient` propagates W3C Trace Context and Baggage to downstream services
 5. **Log Correlation:** Extract trace IDs from context to include in your logs
 6. **Conversation Correlation:** Use `conversation_id` across turns and `original_request_id` only for a resume/delegation family
-7. **HITL Ownership:** Resume through `BuildResumeContext`; the framework creates the trace link and restores validated correlation
+7. **HITL Ownership:** Resume through `ResumeCoordinator`; the framework creates the trace link and restores validated correlation
 8. **Infrastructure:** OTEL Collector + Jaeger + Grafana for collection and visualization
 
 **Remember:** Tracing is like having GPS for your requests. You always know where they are, where they've been, and why they're stuck in traffic!

@@ -20,7 +20,7 @@ func (*backendTestCheckpointPersistence) SaveCheckpoint(context.Context, *Execut
 func (*backendTestCheckpointPersistence) LoadCheckpoint(context.Context, string) (*ExecutionCheckpoint, error) {
 	return nil, nil
 }
-func (*backendTestCheckpointPersistence) UpdateCheckpointStatus(context.Context, string, CheckpointStatus) error {
+func (*backendTestCheckpointPersistence) UpdateCheckpointStatus(context.Context, string, CheckpointStatus, CheckpointStatus) error {
 	return nil
 }
 func (*backendTestCheckpointPersistence) ListPendingCheckpoints(context.Context, CheckpointFilter) ([]*ExecutionCheckpoint, error) {
@@ -194,7 +194,10 @@ func TestHITLRequestPathAcceptsPersistenceOnlyBackend(t *testing.T) {
 	persistence := &backendTestCheckpointPersistence{}
 	controller := NewInterruptController(nil, persistence, nil)
 	controller.SetCheckpointPersistence(persistence)
-	handler := NewHITLHandler(controller, persistence)
+	handler, err := NewHITLHandler(controller, persistence)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if controller.store != persistence || handler.store != persistence {
 		t.Fatal("HITL request path did not retain the narrow checkpoint persistence backend")
 	}
@@ -215,5 +218,46 @@ func TestOrchestrationBackendsValidationAndTypedNil(t *testing.T) {
 	}
 	if err := backends.ValidateFor(requirements); err == nil {
 		t.Fatal("missing required capabilities were accepted")
+	}
+}
+
+type backendTestCheckpointResume struct{ CheckpointResumePersistence }
+
+func TestCheckpointResumeBackendComposition(t *testing.T) {
+	persistence := &backendTestCheckpointPersistence{}
+	resume := &backendTestCheckpointResume{}
+	backends, err := NewOrchestrationBackends(WithCheckpointPersistence(persistence), WithCheckpointResume(resume))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirements, err := RequirementsForFeatures(nil, BackendFeatureHITLResume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backends.ValidateFor(requirements); err != nil {
+		t.Fatal(err)
+	}
+	if backends.CheckpointResume() != resume {
+		t.Fatal("resume capability was not retained")
+	}
+	replaced, err := backends.With(WithCheckpointPersistence(&backendTestCheckpointPersistence{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced.CheckpointResume() != nil || replaced.ValidateFor(requirements) == nil {
+		t.Fatal("replacement retained a resume capability bound to the previous persistence")
+	}
+	if backends.CheckpointResume() != resume {
+		t.Fatal("replacement mutated the original composition")
+	}
+	var typedNil *backendTestCheckpointResume
+	for _, invalid := range []CheckpointResumePersistence{nil, typedNil} {
+		if _, err := NewOrchestrationBackends(WithCheckpointResume(invalid)); err == nil {
+			t.Fatal("nil resume capability was accepted")
+		}
+	}
+	var absent *OrchestrationBackends
+	if absent.CheckpointResume() != nil {
+		t.Fatal("nil composition exposed a resume capability")
 	}
 }

@@ -17,7 +17,7 @@ import (
 // - Interface composition for larger behaviors
 // - Constructors return concrete types, not interfaces
 //
-// See HUMAN_IN_THE_LOOP_PROPOSAL.md for full design documentation.
+// Interruption, notification, persistence, and resume execution are separate roles.
 // =============================================================================
 
 // -----------------------------------------------------------------------------
@@ -69,7 +69,7 @@ type InterruptPolicy interface {
 type CheckpointPersistence interface {
 	SaveCheckpoint(ctx context.Context, checkpoint *ExecutionCheckpoint) error
 	LoadCheckpoint(ctx context.Context, checkpointID string) (*ExecutionCheckpoint, error)
-	UpdateCheckpointStatus(ctx context.Context, checkpointID string, status CheckpointStatus) error
+	UpdateCheckpointStatus(ctx context.Context, checkpointID string, expected, next CheckpointStatus) error
 	ListPendingCheckpoints(ctx context.Context, filter CheckpointFilter) ([]*ExecutionCheckpoint, error)
 	DeleteCheckpoint(ctx context.Context, checkpointID string) error
 }
@@ -252,10 +252,6 @@ type InterruptController interface {
 	// Called when human responds through the InterruptHandler.
 	ProcessCommand(ctx context.Context, command *Command) (*ResumeResult, error)
 
-	// ResumeExecution continues workflow execution from a checkpoint.
-	// Called after ProcessCommand returns ShouldResume=true.
-	ResumeExecution(ctx context.Context, checkpointID string) (*ExecutionResult, error)
-
 	// UpdateCheckpointProgress updates a checkpoint with completed steps.
 	// Called by executor before returning ErrInterrupted for step-level interrupts.
 	// This allows resumption to skip already-completed steps.
@@ -419,6 +415,12 @@ type ExecutionCheckpoint struct {
 	CreatedAt time.Time        `json:"created_at"`
 	ExpiresAt time.Time        `json:"expires_at"`
 	Status    CheckpointStatus `json:"status"`
+
+	// Resume ownership is persisted for fencing and recovery. Public responses
+	// deliberately expose only parent/successor navigation, not attempt ownership.
+	ResumeState           *CheckpointResumeState `json:"resume_state,omitempty"`
+	ParentCheckpointID    string                 `json:"parent_checkpoint_id,omitempty"`
+	ParentResumeAttemptID string                 `json:"parent_resume_attempt_id,omitempty"`
 }
 
 // InterruptPoint identifies where in execution the interrupt occurred
@@ -440,13 +442,17 @@ const (
 	CheckpointStatusPending   CheckpointStatus = "pending"   // Awaiting human response
 	CheckpointStatusApproved  CheckpointStatus = "approved"  // Human approved, ready to resume
 	CheckpointStatusRejected  CheckpointStatus = "rejected"  // Human rejected
-	CheckpointStatusEdited    CheckpointStatus = "edited"    // Human edited, ready to resume
+	CheckpointStatusEdited    CheckpointStatus = "edited"    // Reserved data value; not resumable
 	CheckpointStatusCompleted CheckpointStatus = "completed" // Execution completed
 	CheckpointStatusAborted   CheckpointStatus = "aborted"   // User aborted
 	// CheckpointStatusPreparing is a transient framework-owned state used while
 	// orchestration attaches durable run state. It is never resumable or exposed
 	// as pending human work.
 	CheckpointStatusPreparing CheckpointStatus = "preparing"
+	// Resuming is owned execution, not pending human work. Continued is terminal
+	// for this checkpoint and points to a separately persisted interruption.
+	CheckpointStatusResuming  CheckpointStatus = "resuming"
+	CheckpointStatusContinued CheckpointStatus = "continued"
 
 	// Expiry status for STREAMING requests (implicit deny - no action applied)
 	// User must manually resume if desired

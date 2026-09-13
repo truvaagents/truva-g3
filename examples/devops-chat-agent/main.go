@@ -50,6 +50,23 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+	// Install the host logger before any long-lived dependency captures it.
+	middlewareConfig := &telemetry.TracingMiddlewareConfig{
+		ExcludedPaths: []string{"/health", "/metrics", "/ready", "/live", "/api/capabilities"},
+		RequestFilter: func(r *http.Request) bool { return r.URL.Query().Get("poll") != "true" },
+	}
+	framework, err := core.NewFramework(agent,
+		core.WithName("devops-chat-agent"),
+		core.WithPort(getPort()),
+		core.WithNamespace(os.Getenv("NAMESPACE")),
+		core.WithRedisConnection(redisConnection),
+		core.WithDiscovery(true, "redis"),
+		core.WithCORSDefaults(),
+		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("devops-chat-agent", middlewareConfig)),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create framework: %v", err)
+	}
 	skillRegistry, skillClients, err := newSkillRegistry(agent.Logger)
 	if err != nil {
 		log.Fatalf("Failed to create skill registry: %v", err)
@@ -74,37 +91,30 @@ func main() {
 			log.Fatalf("HITL setup failed: %v", hitlErr)
 		}
 		defer func() { _ = hitl.Close() }()
+		resumeConfig, configErr := orchestration.LoadResumeCoordinatorRuntimeConfigFromEnvironment(orchestration.DefaultResumeCoordinatorRuntimeConfig(), os.LookupEnv)
+		if configErr != nil {
+			log.Fatalf("HITL resume configuration failed: %v", configErr)
+		}
+		hitl.Resumer, hitlErr = orchestration.NewResumeCoordinator(hitl.CheckpointStore,
+			orchestration.ResumeExecutorFunc(agent.executeApprovedCheckpoint), resumeConfig,
+			orchestration.WithResumeLogger(agent.Logger))
+		if hitlErr != nil {
+			log.Fatalf("HITL resume setup failed: %v", hitlErr)
+		}
 		log.Printf("HITL enabled: step_sensitive_capabilities=%v", hitlConfig.StepSensitiveCapabilities)
-	}
-
-	// 5. Create framework with tracing middleware
-	middlewareConfig := &telemetry.TracingMiddlewareConfig{
-		ExcludedPaths: []string{"/health", "/metrics", "/ready", "/live", "/api/capabilities"},
-		RequestFilter: func(r *http.Request) bool {
-			return r.URL.Query().Get("poll") != "true"
-		},
-	}
-
-	framework, err := core.NewFramework(agent,
-		core.WithName("devops-chat-agent"),
-		core.WithPort(getPort()),
-		core.WithNamespace(os.Getenv("NAMESPACE")),
-		core.WithRedisConnection(redisConnection),
-		core.WithDiscovery(true, "redis"),
-		core.WithCORSDefaults(), // Allows all headers including X-Truvag3-Original-Request-ID
-		core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("devops-chat-agent", middlewareConfig)),
-	)
-	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
 	}
 
 	// 5a. Register HITL endpoints (before framework.Run starts serving)
 	if hitl != nil {
-		hitlHandler := orchestration.NewHITLHandler(
+		hitlHandler, handlerErr := orchestration.NewHITLHandler(
 			hitl.Controller,
 			hitl.CheckpointStore,
 			orchestration.WithHITLHandlerLogger(agent.Logger),
+			orchestration.WithHITLResumer(hitl.Resumer),
 		)
+		if handlerErr != nil {
+			log.Fatalf("HITL handler setup failed: %v", handlerErr)
+		}
 		agent.RegisterHITLCapabilities(hitlHandler)
 	}
 

@@ -31,6 +31,9 @@ func (c *checkpointDiagnosticFailureClient) Publish(context.Context, string, int
 func (c *checkpointDiagnosticFailureClient) TxPipelined(context.Context, func(redis.Pipeliner) error) ([]redis.Cmder, error) {
 	return nil, c.cause
 }
+func (c *checkpointDiagnosticFailureClient) Watch(context.Context, func(*redis.Tx) error, ...string) error {
+	return c.cause
+}
 
 type checkpointDiagnosticLogger struct {
 	core.NoOpLogger

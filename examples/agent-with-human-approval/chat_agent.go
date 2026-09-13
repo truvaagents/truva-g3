@@ -297,6 +297,11 @@ func (t *HITLChatAgent) addConversationHistoryMetadata(metadata map[string]inter
 // ProcessWithStreaming processes a user query and streams progress via callback.
 // If HITL is triggered, it returns orchestration.ErrInterrupted with the checkpoint.
 func (t *HITLChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, query string, callback StreamCallback) error {
+	_, err := t.processWithStreamingExecution(ctx, sessionID, query, callback)
+	return err
+}
+
+func (t *HITLChatAgent) processWithStreamingExecution(ctx context.Context, sessionID, query string, callback StreamCallback) (execution *orchestration.ExecutionResult, returnErr error) {
 	startTime := time.Now()
 
 	t.mu.RLock()
@@ -304,7 +309,7 @@ func (t *HITLChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, que
 	t.mu.RUnlock()
 
 	if orch == nil {
-		return fmt.Errorf("orchestrator not initialized")
+		return nil, fmt.Errorf("orchestrator not initialized")
 	}
 
 	// Retrieve conversation history for context.
@@ -357,11 +362,14 @@ func (t *HITLChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, que
 	ctx = orchestration.WithMetadata(ctx, metadata)
 
 	// Process with streaming - HITL may interrupt this
-	result, err := orch.ProcessRequestStreaming(ctx, query, metadata, func(chunk core.StreamChunk) error {
+	result, execution, err := orch.ProcessRequestStreamingWithExecution(ctx, query, metadata, func(chunk core.StreamChunk) error {
 		if chunk.Content != "" {
 			callback.SendChunk(chunk.Content)
 		}
-		return nil
+		if delivery, ok := callback.(interface{ Err() error }); ok && delivery.Err() != nil {
+			return delivery.Err()
+		}
+		return ctx.Err()
 	})
 
 	// Check for HITL interrupt - this is NOT an error
@@ -390,7 +398,7 @@ func (t *HITLChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, que
 				// when it receives the checkpoint event, so we don't send a duplicate status here.
 				callback.SendCheckpoint(checkpoint)
 			}
-			return err // Return the error so caller knows it's interrupted
+			return execution, err // Preserve the real partial execution alongside interruption.
 		}
 
 		// Actual error
@@ -400,7 +408,11 @@ func (t *HITLChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, que
 			"duration_ms": time.Since(startTime).Milliseconds(),
 		})
 		telemetry.RecordSpanError(ctx, err)
-		return fmt.Errorf("streaming orchestration failed: %w", err)
+		return execution, fmt.Errorf("streaming orchestration failed: %w", err)
+	}
+
+	if result == nil || execution == nil || !execution.Success {
+		return execution, &orchestration.ErrCheckpointExecutionFailed{}
 	}
 
 	// Success path - execution completed without HITL interrupt
@@ -489,7 +501,7 @@ func (t *HITLChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, que
 		"status":      "success",
 	})
 
-	return nil
+	return execution, nil
 }
 
 // registerCapabilities registers the agent's HTTP endpoints.
@@ -825,6 +837,11 @@ type SyncResponse struct {
 // This is the non-streaming equivalent of ProcessWithStreaming.
 // requestMetadata is optional user-provided metadata passed to the orchestrator.
 func (t *HITLChatAgent) ProcessSync(ctx context.Context, sessionID, query string, requestMetadata map[string]interface{}) (*SyncResponse, error) {
+	response, _, err := t.processSyncWithExecution(ctx, sessionID, query, requestMetadata)
+	return response, err
+}
+
+func (t *HITLChatAgent) processSyncWithExecution(ctx context.Context, sessionID, query string, requestMetadata map[string]interface{}) (syncResponse *SyncResponse, execution *orchestration.ExecutionResult, returnErr error) {
 	startTime := time.Now()
 
 	t.mu.RLock()
@@ -832,7 +849,7 @@ func (t *HITLChatAgent) ProcessSync(ctx context.Context, sessionID, query string
 	t.mu.RUnlock()
 
 	if orch == nil {
-		return nil, fmt.Errorf("orchestrator not initialized")
+		return nil, execution, fmt.Errorf("orchestrator not initialized")
 	}
 
 	// Retrieve conversation history for context.
@@ -875,7 +892,7 @@ func (t *HITLChatAgent) ProcessSync(ctx context.Context, sessionID, query string
 	ctx = orchestration.WithMetadata(ctx, metadata)
 
 	// Process with non-streaming orchestrator - HITL may interrupt this
-	result, err := orch.ProcessRequest(ctx, query, metadata)
+	result, execution, err := orch.ProcessRequestWithExecution(ctx, query, metadata)
 
 	// Check for HITL interrupt - this is NOT an error, it's expected behavior
 	if err != nil {
@@ -906,7 +923,7 @@ func (t *HITLChatAgent) ProcessSync(ctx context.Context, sessionID, query string
 					Checkpoint:  checkpoint,
 					DurationMs:  time.Since(startTime).Milliseconds(),
 					Metadata:    metadata,
-				}, nil
+				}, execution, nil
 			}
 		}
 
@@ -917,7 +934,11 @@ func (t *HITLChatAgent) ProcessSync(ctx context.Context, sessionID, query string
 			"duration_ms": time.Since(startTime).Milliseconds(),
 		})
 		telemetry.RecordSpanError(ctx, err)
-		return nil, fmt.Errorf("orchestration failed: %w", err)
+		return nil, execution, fmt.Errorf("orchestration failed: %w", err)
+	}
+
+	if result == nil || execution == nil || !execution.Success {
+		return nil, execution, &orchestration.ErrCheckpointExecutionFailed{}
 	}
 
 	// Success path - execution completed
@@ -969,5 +990,5 @@ func (t *HITLChatAgent) ProcessSync(ctx context.Context, sessionID, query string
 		Interrupted: false,
 		DurationMs:  time.Since(startTime).Milliseconds(),
 		Metadata:    metadata,
-	}, nil
+	}, execution, nil
 }

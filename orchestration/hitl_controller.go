@@ -523,6 +523,13 @@ func (c *DefaultInterruptController) CheckOnError(ctx context.Context, step Rout
 
 // ProcessCommand handles a human command and updates checkpoint status.
 func (c *DefaultInterruptController) ProcessCommand(ctx context.Context, command *Command) (*ResumeResult, error) {
+	if command == nil {
+		return nil, &ErrInvalidCommand{Reason: "command is required"}
+	}
+	switch command.Type {
+	case CommandEdit, CommandSkip, CommandRetry, CommandRespond:
+		return nil, &ErrCheckpointCommandUnsupported{CommandType: command.Type}
+	}
 	if c.store == nil {
 		return nil, fmt.Errorf("checkpoint store not configured")
 	}
@@ -535,10 +542,7 @@ func (c *DefaultInterruptController) ProcessCommand(ctx context.Context, command
 
 	// Validate command
 	if checkpoint.Status != CheckpointStatusPending {
-		return nil, &ErrInvalidCommand{
-			CommandType: command.Type,
-			Reason:      fmt.Sprintf("checkpoint is not pending (status: %s)", checkpoint.Status),
-		}
+		return nil, &ErrCheckpointStatusConflict{CheckpointID: checkpoint.CheckpointID, Expected: CheckpointStatusPending, Actual: checkpoint.Status}
 	}
 
 	// Add span event with context about what's being approved/rejected
@@ -581,38 +585,16 @@ func (c *DefaultInterruptController) ProcessCommand(ctx context.Context, command
 		checkpoint.Status = CheckpointStatusApproved
 		result.ShouldResume = true
 
-	case CommandEdit:
-		checkpoint.Status = CheckpointStatusEdited
-		result.ShouldResume = true
-		if command.EditedPlan != nil {
-			result.ModifiedPlan = command.EditedPlan
-		}
-
 	case CommandReject:
 		checkpoint.Status = CheckpointStatusRejected
 		result.ShouldResume = false
 		result.Feedback = command.Feedback
-
-	case CommandSkip:
-		checkpoint.Status = CheckpointStatusApproved
-		result.ShouldResume = true
-		result.SkipStep = true
 
 	case CommandAbort:
 		checkpoint.Status = CheckpointStatusAborted
 		result.ShouldResume = false
 		result.Abort = true
 		result.Feedback = command.Feedback
-
-	case CommandRetry:
-		checkpoint.Status = CheckpointStatusApproved
-		result.ShouldResume = true
-		// Modified params will be in command.EditedParams
-
-	case CommandRespond:
-		checkpoint.Status = CheckpointStatusApproved
-		result.ShouldResume = true
-		// Response is in command.Response
 
 	default:
 		return nil, &ErrInvalidCommand{
@@ -621,28 +603,26 @@ func (c *DefaultInterruptController) ProcessCommand(ctx context.Context, command
 		}
 	}
 
-	// Record status transition metric (Phase 4 - Metrics Integration)
-	RecordCheckpointStatus(CheckpointStatusPending, checkpoint.Status)
-
 	// Update checkpoint status and remove from pending index if applicable
 	// Use UpdateCheckpointStatus instead of SaveCheckpoint to properly manage the pending index
-	if err := c.store.UpdateCheckpointStatus(ctx, command.CheckpointID, checkpoint.Status); err != nil {
+	if err := c.store.UpdateCheckpointStatus(ctx, command.CheckpointID, CheckpointStatusPending, checkpoint.Status); err != nil {
 		// Record command failure
 		RecordCommandProcessed(command.Type, false)
 		return nil, fmt.Errorf("failed to update checkpoint status: %w", err)
 	}
+	RecordCheckpointStatus(CheckpointStatusPending, checkpoint.Status)
 
-	// Calculate and record approval latency (Phase 4 - Metrics Integration)
+	// Count only persisted decisions, never a rejected compare-and-set.
 	if !checkpoint.CreatedAt.IsZero() {
 		latency := time.Since(checkpoint.CreatedAt).Seconds()
 		RecordApprovalLatency(latency, command.Type)
 	}
 
-	// Record successful command processing (Phase 4 - Metrics Integration)
+	// Record successful command processing.
 	RecordCommandProcessed(command.Type, true)
 
 	// Publish command via Pub/Sub so SubscribeCommand listeners receive the decision.
-	// This enables the ProcessQuery wait-and-resume pattern (CROSS_AGENT_HITL_PROPAGATION Change 1).
+	// Waiting callers can resume only after the decision is durable.
 	if c.commandStore != nil {
 		if pubErr := c.commandStore.PublishCommand(ctx, command); pubErr != nil {
 			// Non-fatal: status is already updated, but subscriber won't be notified.
@@ -700,62 +680,6 @@ func (c *DefaultInterruptController) ProcessCommand(ctx context.Context, command
 	}
 
 	return result, nil
-}
-
-// ResumeExecution continues workflow execution from a checkpoint.
-// This is a stub - actual resume logic depends on the orchestrator implementation.
-func (c *DefaultInterruptController) ResumeExecution(ctx context.Context, checkpointID string) (*ExecutionResult, error) {
-	// Load checkpoint to get execution state
-	checkpoint, err := c.store.LoadCheckpoint(ctx, checkpointID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Verify checkpoint is in a resumable state
-	if checkpoint.Status != CheckpointStatusApproved && checkpoint.Status != CheckpointStatusEdited {
-		return nil, fmt.Errorf("checkpoint %s is not in a resumable state (status: %s)", checkpointID, checkpoint.Status)
-	}
-
-	// Add span event
-	telemetry.AddSpanEvent(ctx, "hitl.resume.started",
-		attribute.String("checkpoint_id", checkpointID),
-		attribute.String("request_id", checkpoint.RequestID),
-	)
-
-	if c.logger != nil {
-		c.logger.InfoWithContext(ctx, "Execution resume started", map[string]interface{}{
-			"operation":       "hitl_resume_started",
-			"checkpoint_id":   checkpointID,
-			"request_id":      checkpoint.RequestID,
-			"interrupt_point": checkpoint.InterruptPoint,
-		})
-	}
-
-	// Note: The actual resume logic would be implemented by the orchestrator
-	// This controller just provides the checkpoint data and validates state
-	// The orchestrator calls this, gets the checkpoint, and continues execution
-
-	// Mark checkpoint as completed
-	checkpoint.Status = CheckpointStatusCompleted
-	if err := c.store.SaveCheckpoint(ctx, checkpoint); err != nil {
-		if c.logger != nil {
-			c.logger.WarnWithContext(ctx, "Failed to mark checkpoint completed", map[string]interface{}{
-				"operation":     "hitl_resume_complete",
-				"checkpoint_id": checkpointID,
-				"error":         err.Error(),
-			})
-		}
-	}
-
-	// Return a placeholder result - the orchestrator will build the actual result
-	return &ExecutionResult{
-		PlanID:  checkpoint.Plan.PlanID,
-		Success: true,
-		Metadata: map[string]interface{}{
-			"resumed_from_checkpoint": checkpointID,
-			"interrupt_point":         checkpoint.InterruptPoint,
-		},
-	}, nil
 }
 
 // UpdateCheckpointProgress updates a checkpoint with completed steps.
@@ -921,6 +845,11 @@ func (c *DefaultInterruptController) createCheckpoint(
 	}
 	if checkpointEnrichmentRequired(ctx) {
 		checkpoint.Status = CheckpointStatusPreparing
+	}
+	if lineage, ok := ctx.Value(resumeLineageKey{}).(resumeLineage); ok {
+		checkpoint.CheckpointID = lineage.SuccessorCheckpointID
+		checkpoint.ParentCheckpointID = lineage.CheckpointID
+		checkpoint.ParentResumeAttemptID = lineage.AttemptID
 	}
 
 	if result != nil {

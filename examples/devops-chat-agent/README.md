@@ -532,6 +532,52 @@ See `.env.example` for complete documentation of all supported providers.
 
 ## Human-in-the-Loop (HITL)
 
+### Framework-owned resume
+
+All resume routes use `orchestration.ResumeCoordinator`. The application
+supplies its processing adapter; it no longer loads a checkpoint, builds a
+resume context, or writes `completed` itself.
+
+The coordinator claims durable approval, restores the saved plan/results/
+parameters/skills, renews ownership during execution, and saves the real
+terminal result. Concurrent ownership is a 409 `resume_in_progress`; ownership
+lost after work started is the distinct `resume_claim_lost`.
+Inspect execution evidence before retrying either an ambiguous failure or a
+disconnected stream.
+
+Only approve/reject/abort are supported by the default command endpoint.
+Edit/skip/retry/respond return 400 `unsupported_command` before state changes.
+The public checkpoint includes parent/successor navigation, not internal
+attempt IDs, lease deadlines, reservations, or process owners. Application
+payloads are preserved.
+
+A second interruption saves the parent as `continued` before announcing its
+successor. Final success requires a successful terminal execution **and**
+successful checkpoint finalization. Synthesis, hooks, and delivery errors
+cannot be reported as completion just because tool steps succeeded.
+
+In this example's own `.env`:
+
+```bash
+TRUVAG3_HITL_RESUME_CLAIM_LEASE=30s
+TRUVAG3_HITL_RESUME_CLEANUP_TIMEOUT=5s
+```
+
+The explicit startup loader reads these values. The lease accepts 3s–24h;
+cleanup must be positive, ≤1m, and ≤lease/3. They are separate from the human
+approval timeout and checkpoint storage TTL. Renewal does not extend retention.
+Use `./setup.sh rollout` for configuration changes and `./setup.sh rebuild`
+for source changes.
+
+Streaming resume uses a request-local executor. Progress remains live, but
+`done` and checkpoint events wait for durable finalization. A 200 SSE
+handshake or a `finish` event is not completion. Before streaming starts,
+errors use coded JSON; afterward they are error events with
+`retryable: false`. HTTP/SSE disconnects cancel active work; bounded cleanup
+can still save the outcome after execution settles.
+
+### Approval behavior
+
 This agent is HITL-enabled by default. Any plan step whose capability matches `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` is intercepted before execution; the orchestrator emits a `checkpoint` SSE event, persists the checkpoint in the versioned DB 0 HITL subspace, and waits for a decision via the HITL endpoints.
 
 ### Default Sensitive Capabilities

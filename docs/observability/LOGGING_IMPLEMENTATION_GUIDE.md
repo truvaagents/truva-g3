@@ -77,6 +77,14 @@ type Logger interface {
 
 When you create a component with `core.NewBaseAgent()` or `core.NewTool()`, the Logger is initially set to `NoOpLogger` (a silent logger defined in [`core/interfaces.go`](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go) — search for `type NoOpLogger`). The framework replaces this with a `ProductionLogger` when you call `core.NewFramework()`.
 
+Create the framework host before passing its logger to long-lived helpers.
+Otherwise, those helpers keep the original silent logger. A worker without a
+framework HTTP host must configure its logger explicitly. If it uses
+`core.NewProductionLogger`, enable the production logger's metrics/context
+bridge with `EnableMetrics()` after telemetry initialization, before creating
+component-scoped child loggers. This also enables trace IDs in context-aware
+logs. Pass the configured logger to the worker, coordinator, and AI client.
+
 ---
 
 ## 3. Log Levels Explained
@@ -779,40 +787,68 @@ Use `conversation_id` when the investigation spans other top-level turns.
 
 The HITL controller stores the original request, trace, and span IDs in
 `ExecutionCheckpoint`, together with a framework-owned shallow metadata copy.
-`orchestration.BuildResumeContext` is the single resume authority: it restores
+`ResumeCoordinator` owns attempts; its lower-level `orchestration.BuildResumeContext` helper restores
 `original_request_id`, validates and restores `conversation_id`, marks that
 baggage member metric-ineligible, creates the linked `hitl.resume` span, and
 restores plan/resume state.
 
-Application handlers load the checkpoint and call the helper. They do not
-manually call `StartLinkedSpan` or rebuild baggage:
+Application handlers call `ResumeCoordinator`; its executor receives the
+restored context and calls the normal result-bearing processing path. For SSE,
+use `ResumeWithExecutor` with a request-local callback. Do not load a checkpoint
+and call `BuildResumeContext` as a replacement for acquiring ownership.
 
 ```go
-checkpoint, err := checkpointStore.LoadCheckpoint(ctx, checkpointID)
-if err != nil {
-    return err
-}
-
-resumeCtx, endResumeSpan, err :=
-    orchestration.BuildResumeContext(ctx, checkpoint)
-if err != nil {
-    return err
-}
-defer endResumeSpan()
-
-_, err = orchestrator.ProcessRequest(
-    resumeCtx,
-    checkpoint.OriginalRequest,
-    nil,
+executor := orchestration.ResumeExecutorFunc(func(
+    ctx context.Context, checkpoint *orchestration.ExecutionCheckpoint,
+) (*orchestration.ExecutionResult, error) {
+    // Use the real terminal result; successful tool steps alone are not success.
+    _, execution, err := orchestrator.ProcessRequestWithExecution(
+        ctx, checkpoint.OriginalRequest, checkpoint.UserContext,
+    )
+    return execution, err
+})
+config, err := orchestration.LoadResumeCoordinatorRuntimeConfigFromEnvironment(
+    orchestration.DefaultResumeCoordinatorRuntimeConfig(), os.LookupEnv,
 )
+if err != nil { return err }
+coordinator, err := orchestration.NewResumeCoordinator(
+    checkpointStore, executor, config, orchestration.WithResumeLogger(logger),
+)
+if err != nil { return err }
+
+// At the request boundary:
+_, err = coordinator.ResumeExecution(ctx, checkpointID)
 return err
 ```
 
-The helper falls back from `checkpoint.OriginalRequestID` to
-`checkpoint.RequestID`. If an application accepts a trusted
-`X-TruvaG3-Original-Request-ID` override, it may update the typed checkpoint
-field before calling the helper; link and baggage setup remain
-framework-owned.
+The coordinator calls `BuildResumeContext` exactly once after a successful
+claim and owns its cleanup. The helper remains the single owner of the linked
+`hitl.resume` span and correlation restoration. A rejected claim creates no
+resume span; its rejection event belongs to the caller span, if present.
+The claim occurs before span creation. The helper's existing
+`hitl.trace_link_created` event comes first, followed by
+`hitl.resume.claimed` (recorded after the acquisition), then execution and
+terminal events.
+
+Stored checkpoint lineage is authoritative. The migrated handlers do not
+accept an HTTP header override for `original_request_id`. Internal attempt
+and process-owner IDs belong only in structured logs and trace attributes,
+never in metric labels or added baggage. Canonical conversation-ID validation
+and the original trace link are unchanged.
+
+### Resume operation and metric contract
+
+The coordinator uses context-aware logging, including bounded detached cleanup
+while the resume span is still open. It uses `framework/orchestration` when
+the injected logger supports component scoping; custom and NoOp loggers remain
+supported. It does not copy application errors or checkpoint bodies into new
+diagnostic log fields.
+
+The fixed event, log-operation, metric-name, label, and emission-count tables
+are in [Resume lifecycle observations](DISTRIBUTED_TRACING_GUIDE.md#resume-lifecycle-observations).
+`RecordCheckpointStatus` now counts only a human-command transition whose
+expected-status CAS succeeded, not an attempted or rejected transition.
+Resume claim/renew/release/finalize and expiry keep their separate counters.
 
 ### Logging Fields for HITL
 
@@ -1093,7 +1129,7 @@ When implementing HITL-related logging:
 - [ ] Preserve validated `conversation_id` independently across turns
 - [ ] Include `checkpoint_id` when creating or resuming from checkpoints
 - [ ] Include `interrupted: true` when storing interrupted executions
-- [ ] Call `BuildResumeContext` and use its returned context and cleanup function
+- [ ] Call `ResumeCoordinator`; its executor uses the supplied context, without duplicating link construction
 - [ ] Use non-context logging methods in background goroutines
 - [ ] Log both the interrupt (parent) and resume (child) with matching `original_request_id`
 
@@ -1103,13 +1139,13 @@ The [`examples/agent-with-human-approval`](https://github.com/truvaagents/truva-
 
 | File | Purpose |
 |------|---------|
-| [`handlers.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go) | Manual and synchronous resume handlers using `BuildResumeContext` |
-| [`handlers_auto_resume.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers_auto_resume.go) | Expiry-triggered resume using the same helper |
+| [`handlers.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers.go) | Thin routes delegating to coordinator-backed sync/SSE adapters |
+| [`handlers_auto_resume.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/handlers_auto_resume.go) | Expiry-triggered resume through the same coordinator |
 | [`hitl_setup.go`](https://github.com/truvaagents/truva-g3/blob/main/examples/agent-with-human-approval/hitl_setup.go) | HITL controller and checkpoint store setup with expiry callbacks |
 
 **Key patterns demonstrated:**
 
-1. **Single-call resume setup** with `BuildResumeContext`
+1. **Framework-owned attempt lifecycle** with `ResumeCoordinator`
 2. **Typed checkpoint lineage** with an optional trusted header override
 3. **Framework-owned linked span and validated conversation restoration**
 4. **Direct logging of bounded correlation fields**
@@ -2520,7 +2556,7 @@ logging. Skill names and versions are diagnostic fields, never metric labels.
 4. **Log both success and failure** with duration metrics
 5. **Use the right correlation scope**: request, request family, conversation, or trace
 6. **Keep `conversation_id` out of metrics and Loki stream labels** while retaining it in structured logs and spans
-7. **Resume HITL through `BuildResumeContext`** instead of rebuilding links or baggage in handlers
+7. **Resume HITL through `ResumeCoordinator`** instead of rebuilding links or baggage in handlers
 8. **Initialize telemetry first** to enable all three observability layers
 
 Following these guidelines ensures your logs are useful in production, easy to search, and properly correlated across your distributed system.

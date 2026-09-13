@@ -50,9 +50,12 @@ func (fixture *expiryProcessorFixture) SaveCheckpoint(context.Context, *Executio
 func (fixture *expiryProcessorFixture) LoadCheckpoint(context.Context, string) (*ExecutionCheckpoint, error) {
 	return fixture.checkpoint, nil
 }
-func (fixture *expiryProcessorFixture) UpdateCheckpointStatus(_ context.Context, _ string, status CheckpointStatus) error {
+func (fixture *expiryProcessorFixture) UpdateCheckpointStatus(_ context.Context, _ string, expected, status CheckpointStatus) error {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
+	if fixture.checkpoint.Status != expected {
+		return &ErrCheckpointStatusConflict{Expected: expected, Actual: fixture.checkpoint.Status, Next: status}
+	}
 	fixture.events = append(fixture.events, "update:"+string(status))
 	return fixture.updateErr
 }
