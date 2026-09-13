@@ -10,9 +10,8 @@ use (
 	./telemetry
 )
 
-// Temporary release bootstrap; remove each replacement after its v0.5.0 tag
-// is published and the dependent module checksums have been updated.
+// Temporary release bootstrap; remove after telemetry/v0.5.0 is published
+// and the dependent module checksums have been updated.
 replace (
-	github.com/truvaagents/truva-g3/core v0.5.0 => ./core
 	github.com/truvaagents/truva-g3/telemetry v0.5.0 => ./telemetry
 )
