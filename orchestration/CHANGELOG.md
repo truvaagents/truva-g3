@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased — v0.5.0 preparation
+## v0.5.0
 
-The release is not yet published. See the [root changelog](../CHANGELOG.md)
+See the [root changelog](../CHANGELOG.md)
 for the cross-module release summary.
 
 ### Backend composition and Redis/Valkey topology

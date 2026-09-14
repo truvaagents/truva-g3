@@ -1,8 +1,7 @@
 # Changelog
 
-## Unreleased — v0.5.0 preparation
+## v0.5.0
 
-These changes are being prepared for v0.5.0; the release is not yet published.
 All seven Go modules are co-versioned and require Go 1.27.0 or newer.
 
 ### Highlights since v0.4.0
@@ -92,5 +91,4 @@ the policy for future externally used releases.
   checks local module resolution and temporary dependency bootstraps in CI.
 
 See the [core](core/CHANGELOG.md), [orchestration](orchestration/CHANGELOG.md), and
-[telemetry](telemetry/CHANGELOG.md) entries for API replacements. No release or
-version tag is implied by these Unreleased entries.
+[telemetry](telemetry/CHANGELOG.md) entries for API replacements.
