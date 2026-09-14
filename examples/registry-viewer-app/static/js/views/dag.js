@@ -4100,7 +4100,7 @@ function initCytoscape() {
         const nodeData = node.data();
         const nodeType = nodeData.nodeType;
 
-        // Handle user memory group nodes — show step list popup
+        // Handle user memory group nodes — show a brief hook summary
         if (nodeType === 'user_memory_group') {
             showUserMemoryGroupPopup(node, nodeData);
             return;
@@ -4906,7 +4906,19 @@ function showNodePopup(node, step, result) {
                 </div>
             ` : ''}
         ` : '<div style="color: var(--text-muted); font-style: italic;">Not executed yet</div>'}
+        <button type="button" data-step-details style="display: block; margin-top: 12px; background: none; border: 0; padding: 0; color: var(--accent-blue); font: inherit; cursor: pointer;">View details in Step Details →</button>
     `;
+    popup.querySelector('[data-step-details]').addEventListener('click', () => {
+        setDagDetailTab('dag-steps');
+        const card = document.getElementById(`dag-step-details-${step.step_id}`);
+        if (card) {
+            card.focus({ preventScroll: true });
+            card.scrollIntoView({ block: 'start' });
+        }
+    });
+    popup.style.boxSizing = 'border-box';
+    popup.style.maxHeight = 'calc(100vh - 16px)';
+    popup.style.overflowY = 'auto';
 
     // Position popup near node — appended to document.body so it's not
     // clipped by the DAG container's overflow:hidden.
@@ -5336,7 +5348,7 @@ function renderStepDetails(container) {
                 };
 
                 return `${phaseDivider}
-                    <div class="dag-step-card ${status}">
+                    <div class="dag-step-card ${status}" id="dag-step-details-${escapeHtmlAttribute(step.step_id)}" tabindex="-1">
                         <div class="dag-step-header">
                             <div class="dag-step-title">
                                 <span class="dag-step-number" style="${stepNumColors[status]} padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12px;">Step ${executionDisplayStepNumber(idx, selected)}</span>
@@ -6093,48 +6105,44 @@ function showUserMemoryGroupPopup(node, nodeData) {
     document.querySelectorAll('.node-popup').forEach(p => p.remove());
 
     const steps = nodeData.steps || [];
-    const stage = nodeData.pipelineStage === 'before_planning' ? 'BeforePlanning' : 'AfterSynthesis';
+    const isBeforePlanning = nodeData.pipelineStage === 'before_planning';
+    const stage = isBeforePlanning ? 'BeforePlanning' : 'AfterSynthesis';
+    const detailTab = isBeforePlanning ? 'dag-pre' : 'dag-post';
+    const detailLabel = isBeforePlanning ? 'Pre-Execution' : 'Post-Execution';
     const llmCount = steps.filter(s =>
         (s.category || 'llm') === 'llm'
     ).length;
+    const failedCount = steps.filter(s => s.success === false).length;
 
     let html = `
         <div style="font-weight: 600; margin-bottom: 8px; color: #f0a030;">User Memory: ${stage}</div>
         <div style="font-size: 0.85em; color: var(--text-muted); margin-bottom: 12px;">
-            ${steps.length} steps | ${formatDuration(nodeData.totalDuration || 0)}${llmCount ? ` | ${llmCount} LLM calls` : ''}
+            ${steps.length} operations · ${llmCount} LLM calls<br>
+            ${formatDuration(nodeData.totalDuration || 0)} aggregate operation time
         </div>
+        ${failedCount ? `<div style="color: var(--accent-red); margin-bottom: 10px;">${failedCount} operation${failedCount === 1 ? '' : 's'} failed</div>` : ''}
     `;
 
-    // These are the stored invocation records represented by this group, not
-    // decisions inferred from the success/failure of its inner operations.
-    html += renderPipelineHookObservations(nodeData.pipelineHooks || []);
-
-    steps.forEach(step => {
-        const category = step.category || 'llm';
-        const label = getLLMType(step.type).icon || '·';
-        const typeName = step.type?.replace('user_memory_', '').replace(/_/g, ' ') || step.type;
-        const opacity = category === 'llm' ? '1.0' : '0.7';
-        const categoryBadges = {
-            'llm':       '<span style="background:#f0a030;color:#1e1e2e;padding:1px 4px;border-radius:3px;font-size:0.7em;margin-left:4px;">LLM</span>',
-            'vector_db': '<span style="background:rgba(100,210,255,0.2);color:#64d2ff;padding:1px 4px;border-radius:3px;font-size:0.7em;margin-left:4px;border:1px solid rgba(100,210,255,0.3);">Vector DB</span>',
-            'storage':   '<span style="background:rgba(166,227,161,0.2);color:#a6e3a1;padding:1px 4px;border-radius:3px;font-size:0.7em;margin-left:4px;border:1px solid rgba(166,227,161,0.3);">Storage</span>',
-            'embedding': '<span style="background:rgba(218,143,255,0.2);color:#da8fff;padding:1px 4px;border-radius:3px;font-size:0.7em;margin-left:4px;border:1px solid rgba(218,143,255,0.3);">Embedding</span>',
-            'logic':     '<span style="background:rgba(255,255,255,0.08);color:var(--text-muted);padding:1px 4px;border-radius:3px;font-size:0.7em;margin-left:4px;border:1px solid rgba(255,255,255,0.12);">Logic</span>',
-        };
-        const badge = categoryBadges[category] || '';
-
-        html += `<div style="padding:6px 8px;margin:2px 0;background:rgba(240,160,48,0.08);border-radius:6px;border-left:3px solid rgba(240,160,48,${opacity});">`;
-        html += `<div style="font-size:0.85em;color:var(--text-primary);">${label} ${escapeHtml(typeName)}${badge} <span style="color:var(--text-muted);float:right;">${formatDuration(step.duration_ms || 0)}</span></div>`;
-        if (step.response) html += `<div style="font-size:0.75em;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(step.response)}</div>`;
-        if (!step.success) html += `<div style="font-size:0.75em;color:var(--accent-red);margin-top:1px;">Error: ${escapeHtml(step.error || '')}</div>`;
-        html += `</div>`;
+    // Keep invocation outcome and pipeline consequence tied to stored hook
+    // records. Full effects, decisions and operation payloads belong in the tab.
+    (nodeData.pipelineHooks || []).forEach(hook => {
+        const status = pipelineHookStatus(hook.status);
+        html += `
+            <div style="margin-bottom: 12px; overflow-wrap: anywhere;">
+                <div style="font-weight: 500;">${escapeHtml(hook.hook_name || 'Unknown hook')}</div>
+                <div style="color: ${status.color}; margin-top: 4px;">${status.label} · ${formatPipelineHookDuration(hook.duration)}</div>
+                <div style="margin-top: 4px;">${escapeHtml(pipelineHookConsequence(hook).summary)}</div>
+                ${hook.error ? `<div style="color: var(--accent-red); margin-top: 4px;">${escapeHtml(truncateText(hook.error, 160))}</div>` : ''}
+            </div>`;
     });
+    html += `<button type="button" data-memory-hook-details style="background: none; border: 0; padding: 0; color: var(--accent-blue); font: inherit; cursor: pointer;">View details in ${detailLabel} →</button>`;
 
     const popup = document.createElement('div');
     popup.className = 'node-popup';
     popup.style.cssText = `
         position: fixed;
-        min-width: 380px; max-width: 520px; max-height: 500px; overflow-y: auto;
+        width: 340px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px);
+        box-sizing: border-box; overflow-y: auto;
         background: linear-gradient(135deg, rgba(25, 25, 35, 0.98) 0%, rgba(15, 15, 22, 0.98) 100%);
         backdrop-filter: blur(24px) saturate(180%);
         -webkit-backdrop-filter: blur(24px) saturate(180%);
@@ -6146,6 +6154,10 @@ function showUserMemoryGroupPopup(node, nodeData) {
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 20px rgba(240, 160, 48, 0.15);
     `;
     popup.innerHTML = html;
+    popup.querySelector('[data-memory-hook-details]').addEventListener('click', () => {
+        setDagDetailTab(detailTab);
+        document.querySelector(`#dagDetailPanel [data-tab="${detailTab}"]`)?.focus();
+    });
 
     const dagContainerEl = document.getElementById('dagContainer');
     const pos = node.renderedPosition();
