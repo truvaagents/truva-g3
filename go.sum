@@ -14,8 +14,8 @@ github.com/redis/go-redis/v9 v9.22.0 h1:laDvpYXTJtZLloinw1fA5Kqd6HAEH2XKxOkG/PDq
 github.com/redis/go-redis/v9 v9.22.0/go.mod h1:y2g0Wj8rQvuK0ELM+oxSudcLtC09JScs98I/X9gRWY4=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
-github.com/truvaagents/truva-g3/core v0.4.0 h1:ed2JaT2+r6DXOr2U209T0B5IBDwaNk9mACyQkibfNtY=
-github.com/truvaagents/truva-g3/core v0.4.0/go.mod h1:cn7LaZ1CIFR3LfWzskS4IGXmJyeUBYB5HM7c5nj6oog=
+github.com/truvaagents/truva-g3/core v0.5.0 h1:M5Kn37p5XDO9jyUwOn6F47ISdc0deXj2Dd8FrYHWXCI=
+github.com/truvaagents/truva-g3/core v0.5.0/go.mod h1:CiZmnZJmFARzWkNSxucZvaOgJfXTQjjQurAre9BLwVo=
 github.com/yuin/gopher-lua v1.1.1 h1:kYKnWBjvbNP4XLT3+bPEwAXJx262OhaHDWDVOPjL46M=
 github.com/yuin/gopher-lua v1.1.1/go.mod h1:GBR0iDaNXjAgGg9zfCvksxSRnQx76gclCIb7kdAd1Pw=
 github.com/zeebo/xxh3 v1.1.0 h1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=
