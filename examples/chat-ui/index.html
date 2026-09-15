@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>TruvaG3 Travel Assistant</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -75,6 +75,7 @@
             background-size: 400% 400%;
             animation: gradientShift 25s ease infinite;
             height: 100vh;
+            height: 100dvh;
             overflow: hidden;
             -webkit-font-smoothing: antialiased;
             font-size: 14px;
@@ -108,6 +109,7 @@
         .sidebar {
             width: var(--sidebar-width);
             height: 100vh;
+            height: 100dvh;
             background: var(--glass-bg);
             backdrop-filter: blur(16px) saturate(180%);
             -webkit-backdrop-filter: blur(16px) saturate(180%);
@@ -382,6 +384,7 @@
             display: flex;
             flex-direction: column;
             height: 100vh;
+            height: 100dvh;
             position: relative;
             min-width: 0;
         }
@@ -1279,14 +1282,32 @@
                 display: none;
             }
 
+            .header-overlay {
+                top: calc(10px + env(safe-area-inset-top, 0px));
+            }
+
+            .header-overlay-left {
+                left: calc(14px + env(safe-area-inset-left, 0px));
+            }
+
+            .header-overlay-right {
+                right: calc(14px + env(safe-area-inset-right, 0px));
+            }
+
             .floating-input {
-                width: calc(100% - 32px);
+                left: calc(16px + env(safe-area-inset-left, 0px));
+                right: calc(16px + env(safe-area-inset-right, 0px));
+                width: auto;
+                bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+                transform: none;
             }
 
             .chat-messages {
                 padding: 16px;
-                padding-top: 58px;
-                padding-bottom: 90px;
+                padding-top: calc(58px + env(safe-area-inset-top, 0px));
+                padding-right: calc(16px + env(safe-area-inset-right, 0px));
+                padding-bottom: calc(90px + env(safe-area-inset-bottom, 0px));
+                padding-left: calc(16px + env(safe-area-inset-left, 0px));
             }
 
             .message {
