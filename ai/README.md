@@ -1142,6 +1142,131 @@ response, _ := client.GenerateResponse(
 )
 ```
 
+### GPT-6 Family Support
+
+The native OpenAI adapter supports `gpt-6-astra`, `gpt-6-sol` and `gpt-6-luna`
+for text/JSON generation and streaming. It recognizes the family and suffixed
+model IDs, selects `max_completion_tokens`, and advertises portable reasoning
+and JSON support. Existing aliases still select their current models; adding
+support does **not** opt existing agents into a more expensive model.
+
+Use the same developer configuration paths as other models:
+
+```go
+client, err := ai.NewRequestClient(
+    ai.WithProvider("openai"),
+    ai.WithModel("gpt-6-luna"), // Or Astra/Sol; no agent-specific adapter.
+    ai.WithMaxTokens(4000),
+    ai.WithReasoningEffort("low"),
+    ai.WithReasoningTokenMultiplier(1), // Keep the wire cap at 4,000.
+)
+if err != nil {
+    return err
+}
+request := core.NewAIRequest("Return a JSON answer", "planning")
+request.Generation.ResponseFormat = core.SetAIParameter("json")
+// Per-call options override client defaults without rebuilding the client.
+request.Generation.Model = "gpt-6-sol"
+request.Generation.MaxTokens = core.SetAIParameter(2000)
+request.Generation.ReasoningEffort = core.SetAIParameter("medium")
+result, err := client.Generate(ctx, request)
+```
+
+An agent using `WithModel("default")` can instead set
+`TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-6-luna`. `AIOptions.Model` and
+`AIOptions.ReasoningEffort` remain supported by the legacy API. Provider-native
+extras (`WithExtra` / `AIOptions.Extra`), `WithRequestRules`,
+`WithRequestMiddleware` and per-call `AIRequest.Patches` retain their existing
+precedence. For example, an application can remove an inherited native `top_p`
+through a scoped request rule before final model validation. Presence-aware
+`OmitAIParameter` explicitly clears inherited portable options.
+
+All three models accept `low`, `medium`, `high`, `xhigh` and `max`; only Sol and
+Luna accept `none`. Empty effort leaves the provider default unchanged and
+does not activate the framework token multiplier. With active/default
+reasoning, remove `temperature`, `top_p`, `top_logprobs` and `logprobs` (default
+temperature is already omitted by the codec). Invalid final combinations fail
+locally, including ones introduced by application policy; overrides do not
+disable API-contract validation.
+
+Native tool calling with reasoning requires the Responses API, which this
+Chat Completions adapter does not implement. Sol/Luna allow native tool
+parameters with `reasoning_effort=none`, but this change does not add a native
+tool-call/result lifecycle. Framework JSON planning and executor tool dispatch
+are separate and supported with all three models. For Responses-specific
+features, use an application-owned client through the existing native-SDK
+integration seam. See [official GPT-6 compatibility guidance](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra.md#migration-quickstart)
+and the [architecture contract](ARCHITECTURE.md#gpt-6-family-compatibility-and-developer-overrides).
+
+Family matching does not verify that a future model ID exists, nor grant
+account access. OpenRouter and other compatible providers retain their own
+capability metadata; native OpenAI support is not an availability claim for
+those routes.
+
+#### GPT-6 Token Budgets
+
+With explicit active reasoning effort, the native adapter applies its existing
+default token multiplier of five: `WithMaxTokens(30000)` becomes
+`max_completion_tokens: 150000`. The same multiplier applies to `low` through
+`max`; omitted effort and `none` keep the original budget. The adapter currently
+does **not** clamp or locally enforce model-specific output ceilings. Astra,
+Sol and Luna each document a 128,000-token output limit as of 2026-09-26.
+See the official [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra),
+[Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) and
+[Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) model pages.
+
+Use `ai.WithReasoningTokenMultiplier(1)` for a standalone client or
+`ai.WithChainReasoningTokenMultiplier(1)` for a chain when the configured value
+should be the exact total token cap, and keep it within the selected model's
+limits. `AIRequestReport.EffectiveMaxTokens` reports the final wire value after
+request policy. That cap includes reasoning and visible output; it does not
+reserve a fixed amount for the final answer. Over-limit provider behavior has
+not been live-tested. Automatic clamping and generic model-limit validation are
+deferred, not included in GPT-6 support; no existing application budget changes.
+
+#### GPT-6 Prompt-Cache Migration
+
+Developers passing caching settings through native extras should follow the
+[official migration guidance](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra.md#migration-quickstart):
+when moving from GPT-5.5 or earlier, replace `prompt_cache_retention` with
+`prompt_cache_options.ttl`, currently `"30m"`:
+
+```go
+// Client option; also available through AIOptions.Extra per request.
+ai.WithExtra("prompt_cache_options", map[string]interface{}{"ttl": "30m"})
+```
+
+Remove the old extra explicitly. This is not a mechanical value rename:
+`prompt_cache_retention` expresses maximum retention, while the new `ttl`
+expresses minimum lifetime. The adapter does not set either by default or
+automatically translate `"24h"` into `"30m"`. The provider currently defaults
+the new TTL to `"30m"`, so applications without custom cache extras need no
+additional option. See the [Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+and [prompt-caching guide](https://developers.openai.com/api/docs/guides/prompt-caching).
+
+#### GPT-6 Verification Scope
+
+Live Kind smoke verification on 2026-09-26 used one fresh travel-agent query
+per model: "What currency is used in Japan? Give its name and three-letter code
+in one sentence." Each run selected `country-info-tool`, completed one phase,
+and returned Japanese yen / JPY through streaming synthesis. Selection,
+planning and synthesis records confirmed the requested native OpenAI model.
+
+| Model | Execution ID | Result |
+| --- | --- | --- |
+| `gpt-6-astra` | `orch-1790429640832700576` | Passed |
+| `gpt-6-sol` | `orch-1790429687593509090` | Passed |
+| `gpt-6-luna` | `orch-1790429752890795522` | Passed |
+
+The tested workspace image was
+`sha256:4b7c8a8f19f102c02c7dc713dc9d6a2d80d8c83deb4e659e3e0bfcb9f8fe271d`.
+These are bounded smoke results, not proof of every reasoning effort, native
+tool-calling mode, output ceiling or future model ID. The remaining parameter
+and rejection matrix uses mocked tests. Skill selection retained GPT-5.6 Luna;
+the runs were not exclusively GPT-6 calls. Temporary model/provider settings
+were restored afterward. Execution/debug retention is finite; these IDs record
+provenance and do not promise indefinite availability in Registry Viewer.
+
 ## 10. Supported Providers
 
 ### Reusable OpenAI-Compatible Provider

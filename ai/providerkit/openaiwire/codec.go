@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/truvaagents/truva-g3/ai/internal/openaimodel"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
@@ -641,6 +642,9 @@ func streamDecodeFailure(result *core.AIResult, emitted bool, err error) (*core.
 // contract.
 func IsReasoningModel(model string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(model))
+	if openaimodel.IsGPT6(normalized) {
+		return true
+	}
 	for _, prefix := range []string{"gpt-5", "o1", "o3", "o4"} {
 		if strings.HasPrefix(normalized, prefix) {
 			return true

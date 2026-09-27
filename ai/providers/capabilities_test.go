@@ -2,6 +2,52 @@ package providers
 
 import "testing"
 
+func TestModelCapabilitiesMatchingModes(t *testing.T) {
+	for _, tc := range []struct {
+		name, model string
+		row         ModelCapabilities
+		want        bool
+	}{
+		{"catch-all", "anything", ModelCapabilities{}, true},
+		{"family-name", "nova", ModelCapabilities{ModelPrefix: "nova", MatchFamilyBoundary: true}, true},
+		{"family-snapshot", " NOVA-FAST-2026-09-26 ", ModelCapabilities{ModelPrefix: "nova", MatchFamilyBoundary: true}, true},
+		{"family-neighbor", "nova2", ModelCapabilities{ModelPrefix: "nova", MatchFamilyBoundary: true}, false},
+		{"family-vendor-prefix", "vendor/nova", ModelCapabilities{ModelPrefix: "nova", MatchFamilyBoundary: true}, false},
+		{"exact-case", "NOVA", ModelCapabilities{ModelPrefix: "nova", ExactModel: true}, true},
+		{"exact-no-suffix", "nova-fast", ModelCapabilities{ModelPrefix: "nova", ExactModel: true}, false},
+		{"exact-precedence", "nova-fast", ModelCapabilities{ModelPrefix: "nova", ExactModel: true, MatchFamilyBoundary: true}, false},
+		{"legacy-prefix", "nova2", ModelCapabilities{ModelPrefix: "nova"}, true},
+		{"legacy-whitespace", " nova", ModelCapabilities{ModelPrefix: "nova"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.row.matchesModel(tc.model); got != tc.want {
+				t.Fatalf("matchesModel(%q) = %v, want %v", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLookupModelCapabilities_FamilyBoundaryIsOptIn(t *testing.T) {
+	for _, model := range []string{"gpt-6", "gpt-6-sol", " GPT-6-LUNA ", "gpt-6-astra-2026-09-26"} {
+		caps := LookupModelCapabilities("openai", model)
+		if caps.ModelPrefix != "gpt-6" || !caps.MatchFamilyBoundary || caps.ReasoningStyle != "openai" {
+			t.Fatalf("family row did not override catch-all for %q: %+v", model, caps)
+		}
+	}
+	for _, model := range []string{"gpt-60", "gpt-6ish", "vendor/gpt-6-sol"} {
+		if caps := LookupModelCapabilities("openai", model); caps.ModelPrefix != "" || caps.ReasoningStyle != "" {
+			t.Fatalf("family row leaked to %q: %+v", model, caps)
+		}
+	}
+	// Compatibility only: legacy prefix matches do not assert these models exist.
+	for _, model := range []string{"gpt-50", "o10", "o30", "o40"} {
+		caps := LookupModelCapabilities("openai", model)
+		if caps.MatchFamilyBoundary || caps.ReasoningStyle != "openai" {
+			t.Fatalf("legacy prefix behavior changed for %q: %+v", model, caps)
+		}
+	}
+}
+
 func TestLookupModelCapabilities_LongestPrefixWins(t *testing.T) {
 	caps := LookupModelCapabilities("openai.groq", "gpt-oss-120b")
 	if !caps.SupportsJSONMode {
@@ -94,6 +140,18 @@ func TestLookupModelCapabilities_OpenRouterVerifiedConcreteModel(t *testing.T) {
 		!caps.SupportsJSONMode || !caps.SupportsJSONSchema ||
 		!caps.SupportsHeaderPassthrough {
 		t.Fatalf("OpenRouter capabilities for concrete fast model = %#v", caps)
+	}
+}
+
+func TestLookupModelCapabilities_OpenRouterVerifiedJSONModels(t *testing.T) {
+	for _, model := range []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash"} {
+		caps := LookupModelCapabilities("openai.openrouter", model)
+		if !caps.ExactModel || !caps.SupportsJSONMode || caps.SupportsJSONSchema || caps.ReasoningStyle != "" {
+			t.Fatalf("incorrect capability scope for %s: %+v", model, caps)
+		}
+		if LookupModelCapabilities("openai.openrouter", model+"-unverified").SupportsJSONMode {
+			t.Fatal("exact model contract leaked to an unverified name")
+		}
 	}
 }
 

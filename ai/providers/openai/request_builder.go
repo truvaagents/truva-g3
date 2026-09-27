@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/truvaagents/truva-g3/ai"
+	"github.com/truvaagents/truva-g3/ai/internal/openaimodel"
 	"github.com/truvaagents/truva-g3/ai/providerkit/openaiwire"
 	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
@@ -483,7 +484,11 @@ func (c *Client) buildPolicyRequest(
 	if c.requestPolicy == nil {
 		return prepared, errors.New("OpenAI request policy engine is not configured")
 	}
-	report, err := c.requestPolicy.Apply(ctx, draft, request.Patches)
+	var policyDraft requestpolicy.Draft = draft
+	if semantics.ProviderAlias == "openai" && openaimodel.IsGPT6(semantics.SemanticModel) {
+		policyDraft = &gpt6Draft{Draft: draft}
+	}
+	report, err := c.requestPolicy.Apply(ctx, policyDraft, request.Patches)
 	if report != nil {
 		adjustments := append([]core.AIRequestAdjustment(nil), semantics.PreparationAdjustments...)
 		adjustments = append(adjustments, draft.Adjustments()...)

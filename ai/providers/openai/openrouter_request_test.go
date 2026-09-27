@@ -83,6 +83,35 @@ func TestOpenRouterPortableExplicitOmitOverridesLegacyValues(t *testing.T) {
 	}
 }
 
+func TestOpenRouterVerifiedJSONModelsPreserveExpandedBudgets(t *testing.T) {
+	client := NewClient("key", "", openRouterProviderAlias, &core.NoOpLogger{})
+	for _, model := range []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash"} {
+		for _, budget := range []int{1024, 10000, 30000} {
+			request := core.NewAIRequestFromLegacy("Return a JSON object", "planning", &core.AIOptions{Model: model, MaxTokens: budget})
+			request.Generation.ResponseFormat = core.SetAIParameter("json")
+			invocation, err := client.prepareInvocation(t.Context(), request, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := decodePreparedOpenRouterBody(t, invocation.Request.Body)
+			if body["max_completion_tokens"] != float64(budget) || body["model"] != model {
+				t.Fatalf("budget/model changed: %#v", body)
+			}
+			format, ok := body["response_format"].(map[string]interface{})
+			if !ok || format["type"] != "json_object" {
+				t.Fatal("JSON intent lost")
+			}
+			provider := requireOpenRouterProviderObject(t, body)
+			if provider["zdr"] != true || provider["data_collection"] != "deny" || provider["require_parameters"] != true {
+				t.Fatal("privacy/format routing weakened")
+			}
+			if _, ok := body["reasoning"]; ok {
+				t.Fatal("probe configuration unexpectedly changes reasoning effort")
+			}
+		}
+	}
+}
+
 func TestOpenRouterProfileNoneAndOrdinarySampling(t *testing.T) {
 	client := NewClient("key", "", openRouterProviderAlias, &core.NoOpLogger{})
 	for _, test := range []struct {
@@ -191,6 +220,43 @@ func TestOpenRouterNativeFieldsAndCapabilityBoundary(t *testing.T) {
 		explicit.Generation.ResponseFormat = core.SetAIParameter("json")
 		if _, err := client.prepareInvocation(t.Context(), explicit, false); !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
 			t.Fatalf("model=%q explicit unsupported error = %v", model, err)
+		}
+	}
+}
+
+func TestOpenRouterUnverifiedFallbackJSONIsBestEffort(t *testing.T) {
+	client := NewClient("key", "", openRouterProviderAlias, &core.NoOpLogger{})
+	for _, model := range []string{"deepseek/deepseek-v4.1-flash-unverified", "z-ai/glm-5.3-flash-unverified"} {
+		for _, purpose := range []string{"planning", "synthesis"} {
+			t.Run(model+"/"+purpose, func(t *testing.T) {
+				inherited := core.NewAIRequestFromLegacy("hello", purpose, &core.AIOptions{
+					Model: model, ResponseFormat: "json",
+				})
+				invocation, err := client.prepareInvocation(t.Context(), inherited, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body := decodePreparedOpenRouterBody(t, invocation.Request.Body)
+				if _, present := body["response_format"]; present {
+					t.Fatalf("unsupported inherited JSON mode reached fallback request: %#v", body)
+				}
+				foundOmission := false
+				for _, adjustment := range invocation.Request.Report.Adjustments {
+					if adjustment.Path == "/response_format" && adjustment.Reason == "unsupported_model_capability" && adjustment.Action == "remove" {
+						foundOmission = true
+					}
+				}
+				if !foundOmission {
+					t.Fatalf("missing inherited omission diagnostic: %#v", invocation.Request.Report.Adjustments)
+				}
+
+				explicit := core.NewAIRequest("hello", purpose)
+				explicit.Generation.Model = model
+				explicit.Generation.ResponseFormat = core.SetAIParameter("json")
+				if _, err := client.prepareInvocation(t.Context(), explicit, false); !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
+					t.Fatalf("unsupported explicit JSON mode error = %v", err)
+				}
+			})
 		}
 	}
 }
