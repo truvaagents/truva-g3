@@ -249,7 +249,7 @@ func WithMaxTokens(tokens int) AIOption {
 	}
 }
 
-// WithReasoningTokenMultiplier sets the token multiplier for reasoning models (GPT-5, o1, o3, o4).
+// WithReasoningTokenMultiplier sets the token multiplier for reasoning models (GPT-5, GPT-6, o1, o3, o4).
 // Reasoning models count internal chain-of-thought tokens against max_completion_tokens but
 // don't return them in the response. Without a multiplier, complex prompts exhaust tokens on
 // reasoning, leaving nothing for visible output.
@@ -266,9 +266,10 @@ func WithReasoningTokenMultiplier(multiplier int) AIOption {
 }
 
 // WithReasoningEffort sets the default reasoning effort for OpenAI reasoning models.
-// Valid values: "none", "low", "medium", "high", "xhigh" (model-dependent).
-// GPT-5.2+ defaults to "none" (no extended thinking). Set to "high" or "xhigh"
-// for complex reasoning tasks. This can be overridden per-request via AIOptions.ReasoningEffort.
+// Values are model-dependent; GPT-6 supports "low", "medium", "high", "xhigh"
+// and "max", with "none" additionally supported by Sol and Luna (not Astra).
+// Empty effort leaves the provider default in force. This can be overridden
+// per-request via AIOptions.ReasoningEffort or presence-aware generation options.
 func WithReasoningEffort(effort string) AIOption {
 	return func(c *AIConfig) {
 		c.ReasoningEffort = effort

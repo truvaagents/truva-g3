@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.9
+**Version**: 1.10
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -105,6 +105,80 @@ fingerprint. `AIRequestReport.EffectiveMaxTokens` is read from the final draft
 after policy evaluation and therefore records the actual wire value, including
 on later transport, provider-response, or decode failure paths that retain a
 prepared request report.
+
+### GPT-6 Family Compatibility and Developer Overrides
+
+Native OpenAI Chat Completions supports the GPT-6 family for the module's
+portable text/JSON generation and streaming contract. A side-effect-free
+`internal/openaimodel` classifier is shared by capability lookup and wire-profile
+selection, so Astra, Sol, Luna and suffixed snapshot IDs use the same
+`max_completion_tokens` and reasoning/JSON handling. Capability rows declare
+`MatchFamilyBoundary` to match the family name or a hyphen-delimited suffix;
+the generic lookup has no GPT-6-specific branch. `ExactModel` takes precedence,
+empty-prefix rows remain provider catch-alls, and longest matching prefix wins.
+The GPT-6 row opts in: it does not match `gpt-60` or vendor-prefixed IDs.
+Existing GPT-5/o-series rows retain their legacy prefix matching.
+It is a wire-contract classification, not proof that an arbitrary future ID
+exists or that an account has access. Other providers' capability metadata
+remains independent; native support does not imply OpenRouter availability.
+
+Existing aliases/defaults are unchanged. Developers can select a concrete model
+with `ai.WithModel`, `AIOptions.Model` or `AIRequest.Generation.Model`, or map a
+semantic alias using `TRUVAG3_OPENAI_MODEL_<ALIAS>`. Alias resolution retains its
+existing environment-override precedence. Client options and presence-aware
+`Set`/`Omit` values still control reasoning, output format and token budgets.
+The existing multiplier applies only to explicitly active reasoning effort;
+omitted effort and `none` keep the exact token budget. No new effort is imposed.
+
+**Known budget limitation:** the adapter does not enforce per-model output
+ceilings. The default multiplier of five applies equally to every explicit
+active effort, so a 30,000-token budget becomes 150,000, exceeding the currently
+documented 128,000-token output limit of Astra, Sol and Luna. Applications can
+select multiplier one through `WithReasoningTokenMultiplier(1)` or
+`WithChainReasoningTokenMultiplier(1)` and choose an appropriate total budget;
+`AIRequestReport.EffectiveMaxTokens` records the final wire value. This is not
+a visible-output reservation or a spending guarantee. Provider handling of
+over-limit requests has not been live-tested. Generic model-limit validation
+remains a separate follow-up requiring an explicit contract for known/unknown
+limits, endpoint/model overrides, framework scaling versus caller intent, and
+post-policy validation/reporting. This change adds neither clamping nor a new
+global budget policy. See the [documented model limits](README.md#gpt-6-token-budgets).
+
+The native provider wraps its codec draft with GPT-6 final validation, after
+application rules, middleware and per-request patches. Its versioned contract
+participates in the policy fingerprint. Developers may repair inherited native
+settings at those seams; they cannot bypass the final provider contract:
+
+- All three documented variants accept `low`, `medium`, `high`, `xhigh`, `max`.
+  Only Sol and Luna accept `none`; the adapter does not silently replace it.
+- Active/default reasoning rejects `temperature`, `top_p`, `logprobs` and
+  `top_logprobs`. The existing codec omits inherited default temperature.
+  Other incompatible native fields must be removed explicitly by the caller
+  or its request policy. Case-variant restricted field names fail closed.
+- Reasoning with native tools requires a Responses API adapter. Sol and Luna
+  permit Chat Completions tool parameters only with `reasoning_effort=none`.
+  This change does not add a native tool-result lifecycle or Responses adapter.
+  Framework orchestration's JSON plans are ordinary generation, not native
+  function-calling requests, and work for all three variants.
+
+These guards are provider-local. No `core` contract, orchestration workflow,
+provider-chain order, default model alias, or application budget changes.
+The native-SDK/custom-client escape hatch remains available for surfaces the
+built-in adapter does not implement. See the [GPT-6 migration contract](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra.md#migration-quickstart)
+and [agent-code examples](README.md#gpt-6-family-support).
+
+Prompt caching remains a provider-native extra, not a portable field. For
+migration from GPT-5.5 or earlier, use `prompt_cache_options.ttl: "30m"` instead
+of `prompt_cache_retention`; the former is a minimum lifetime, not the latter's
+maximum-retention policy. The adapter neither emits these fields by default
+nor translates the old value. See [migration guidance](README.md#gpt-6-prompt-cache-migration).
+
+Live verification on 2026-09-26 exercised Astra, Sol and Luna through the travel
+agent with real OpenAI selection, JSON planning and streaming synthesis.
+[Recorded execution identities and scope](README.md#gpt-6-verification-scope)
+distinguish these successful smoke runs from mocked coverage of other effort,
+override and rejection combinations. They do not certify native tool calling,
+all effort settings, arbitrary future IDs or output-ceiling behavior.
 
 ### OpenAI-Compatible Decode and SSE Boundary
 
@@ -1783,6 +1857,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.10 | 2026-09-26 | Added native GPT-6 family compatibility and post-policy validation, declarative family-boundary capability matching, developer overrides, token-ceiling limitations, prompt-cache migration guidance, and bounded three-model live-verification evidence |
 | 1.9 | 2026-08-22 | Added the OpenRouter provider contract and priority, application-composed circuit breaking, explicit OpenAI-wire token/response/SSE boundaries, and shared retry, failover, error-sanitization, observability, and cache-identity hardening; corrected the Together endpoint |
 | 1.8 | 2026-08-17 | Added Gemini's request-aware GenerateContent profile, static model-capability policy, HTTP integration seams, and corrected orchestration request-evidence semantics |
 | 1.7 | 2026-07-23 | Exported the bounded route-failure marker, aligned terminal generate/stream observability and success attributes, removed last-entry failover logs, and moved Bedrock additional-document rejection before stable fingerprinting |
