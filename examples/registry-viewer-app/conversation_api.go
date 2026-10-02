@@ -41,6 +41,7 @@ type ConversationTimelineResponse struct {
 	ExecutionCount          int                        `json:"execution_count"`
 	IndexIncomplete         bool                       `json:"index_incomplete"`
 	LLMEnrichmentIncomplete bool                       `json:"llm_enrichment_incomplete"`
+	LLMEnrichmentReasons    []llmEnrichmentReason      `json:"llm_enrichment_reasons,omitempty"`
 	Partial                 bool                       `json:"partial"`
 	Timestamp               time.Time                  `json:"timestamp"`
 }
@@ -65,6 +66,7 @@ type GroupedExecutionListResponse struct {
 	NextCursor              string                  `json:"next_cursor,omitempty"`
 	QueryFingerprint        string                  `json:"query_fingerprint"`
 	LLMEnrichmentIncomplete bool                    `json:"llm_enrichment_incomplete"`
+	LLMEnrichmentReasons    []llmEnrichmentReason   `json:"llm_enrichment_reasons,omitempty"`
 	Partial                 bool                    `json:"partial"`
 	Timestamp               time.Time               `json:"timestamp"`
 }
@@ -127,6 +129,8 @@ func summarizeExecution(execution *StoredExecution) ExecutionSummary {
 		return ExecutionSummary{}
 	}
 	summary := ExecutionSummary{
+		Lifecycle:         execution.Lifecycle,
+		RecordRevision:    execution.RecordRevision,
 		RequestID:         execution.RequestID,
 		OriginalRequestID: execution.OriginalRequestID,
 		ConversationID:    execution.Metadata[orchestration.MetadataConversationID],
@@ -639,16 +643,18 @@ func loadConversationTimeline(
 	for _, summary := range verified {
 		summaries = append(summaries, summary)
 	}
-	enrichment, enrichmentIncomplete, enrichmentErr :=
-		enrichExecutionSummariesFromLLMDebug(ctx, summaries)
-	return buildConversationTimelineResponse(
+	enrichment, enrichmentIncomplete, reasons, enrichmentErr :=
+		enrichExecutionSummariesWithDiagnostics(ctx, summaries)
+	response := buildConversationTimelineResponse(
 		conversationID,
 		summaries,
 		enrichment,
 		reverseMore || globalMore || hydrationPartial || ownerClassificationPartial,
 		indexIncomplete,
 		enrichmentIncomplete || enrichmentErr != nil,
-	), nil
+	)
+	response.LLMEnrichmentReasons = reasons
+	return response, nil
 }
 
 func buildConversationTimelineResponse(
@@ -1061,13 +1067,14 @@ func loadGroupedExecutions(
 		enrichment           map[string]llmDebugEnrichment
 		enrichmentIncomplete bool
 		enrichmentErr        error
+		reasons              []llmEnrichmentReason
 	)
 	if query.Sort == "total_duration_ms" {
 		// Combined duration ordering depends on mutable LLM-debug data, so it must
 		// be enriched before grouping. An incomplete read makes this bounded
 		// point-in-time result partial; duration cursors are rejected.
-		enrichment, enrichmentIncomplete, enrichmentErr =
-			enrichExecutionSummariesFromLLMDebug(ctx, summaries)
+		enrichment, enrichmentIncomplete, reasons, enrichmentErr =
+			enrichExecutionSummariesWithDiagnostics(ctx, summaries)
 		if enrichmentIncomplete || enrichmentErr != nil {
 			partial = true
 		}
@@ -1087,6 +1094,7 @@ func loadGroupedExecutions(
 		enrichmentIncomplete || enrichmentErr != nil,
 	)
 	if query.Sort == "total_duration_ms" {
+		response.LLMEnrichmentReasons = reasons
 		return response, nil
 	}
 
@@ -1094,8 +1102,9 @@ func loadGroupedExecutions(
 	// fields. Paginate first, then enrich just the returned page so optional
 	// LLM-enrichment bounds or failures cannot suppress a valid continuation.
 	pageSummaries := groupedExecutionPageSummaries(response.Groups)
-	enrichment, enrichmentIncomplete, enrichmentErr =
-		enrichExecutionSummariesFromLLMDebug(ctx, pageSummaries)
+	enrichment, enrichmentIncomplete, reasons, enrichmentErr =
+		enrichExecutionSummariesWithDiagnostics(ctx, pageSummaries)
+	response.LLMEnrichmentReasons = reasons
 	applyGroupedExecutionEnrichment(response.Groups, enrichment)
 	response.LLMEnrichmentIncomplete =
 		enrichmentIncomplete || enrichmentErr != nil
@@ -1446,11 +1455,11 @@ func executionMatchesGroupedQuery(
 ) bool {
 	switch query.Status {
 	case "success":
-		if !summary.Success || summary.Interrupted {
+		if summary.Lifecycle == nil || summary.Lifecycle.State != orchestration.RequestLifecycleCompleted {
 			return false
 		}
 	case "failed":
-		if summary.Success || summary.Interrupted {
+		if summary.Lifecycle == nil || (summary.Lifecycle.State != orchestration.RequestLifecycleFailed && summary.Lifecycle.State != orchestration.RequestLifecycleCancelled) {
 			return false
 		}
 	case "interrupted":
@@ -1678,17 +1687,42 @@ func encodeGroupedExecutionCursor(cursor groupedExecutionCursor) (string, error)
 	return encoded, nil
 }
 
-func enrichExecutionSummariesFromLLMDebug(
+// llmEnrichmentReason describes a bounded optional view omission, not lost records.
+// Observed counts are lower bounds when the bounded read stopped early.
+type llmEnrichmentReason struct {
+	Code      string `json:"code"`
+	RequestID string `json:"request_id,omitempty"`
+	Observed  int    `json:"observed"`
+	Limit     int    `json:"limit,omitempty"`
+}
+
+func enrichExecutionSummariesFromLLMDebug(ctx context.Context, summaries []ExecutionSummary) (map[string]llmDebugEnrichment, bool, error) {
+	result, incomplete, _, err := enrichExecutionSummariesWithDiagnostics(ctx, summaries)
+	return result, incomplete, err
+}
+
+func enrichExecutionSummariesWithDiagnostics(
 	ctx context.Context,
 	summaries []ExecutionSummary,
-) (map[string]llmDebugEnrichment, bool, error) {
+) (map[string]llmDebugEnrichment, bool, []llmEnrichmentReason, error) {
+	var reasons []llmEnrichmentReason
+	addReason := func(code, requestID string, observed, limit int) {
+		reasons = append(reasons, llmEnrichmentReason{code, requestID, observed, limit})
+		if viewerLogger != nil {
+			viewerLogger.WarnWithContext(ctx, "Optional LLM enrichment incomplete", map[string]interface{}{
+				"operation": "llm_debug_enrichment", "reason": code, "request_id": requestID, "observed": observed, "limit": limit,
+			})
+		}
+	}
+
 	enrichment := make(map[string]llmDebugEnrichment, len(summaries))
 	if len(summaries) == 0 || useMock {
-		return enrichment, false, nil
+		return enrichment, false, reasons, nil
 	}
 	client, err := getLLMDebugReadClient()
 	if err != nil {
-		return enrichment, false, err
+		addReason("backend_failure", "", 0, 0)
+		return enrichment, true, reasons, err
 	}
 
 	// Prefer the newest executions when a bounded grouped/timeline request
@@ -1709,6 +1743,7 @@ func enrichExecutionSummariesFromLLMDebug(
 	})
 	incomplete := len(summaryIndexes) > viewerLLMEnrichmentExecutionLimit
 	if incomplete {
+		addReason("execution_count_limit", "", len(summaryIndexes), viewerLLMEnrichmentExecutionLimit)
 		summaryIndexes = summaryIndexes[:viewerLLMEnrichmentExecutionLimit]
 	}
 
@@ -1730,7 +1765,8 @@ func enrichExecutionSummariesFromLLMDebug(
 		)
 	}
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
-		return enrichment, incomplete, err
+		addReason("backend_failure", "", 0, 0)
+		return enrichment, true, reasons, err
 	}
 
 	for _, summaryIndex := range summaryIndexes {
@@ -1740,6 +1776,7 @@ func enrichExecutionSummariesFromLLMDebug(
 		serialized, listErr := interactionCommands[requestID].Result()
 		if listErr == nil {
 			if len(serialized) > viewerLLMInteractionLimit {
+				addReason("interaction_count_limit", requestID, len(serialized), viewerLLMInteractionLimit)
 				incomplete = true
 				recordIncomplete = true
 			}
@@ -1747,6 +1784,7 @@ func enrichExecutionSummariesFromLLMDebug(
 				serializedBytes := 0
 				for _, raw := range serialized {
 					if len(raw) > viewerLLMInteractionBytesLimit-serializedBytes {
+						addReason("interaction_byte_limit", requestID, serializedBytes+len(raw), viewerLLMInteractionBytesLimit)
 						incomplete = true
 						recordIncomplete = true
 						break
@@ -1754,6 +1792,7 @@ func enrichExecutionSummariesFromLLMDebug(
 					serializedBytes += len(raw)
 					var interaction orchestration.LLMInteraction
 					if json.Unmarshal([]byte(raw), &interaction) != nil {
+						addReason("parse_failure", requestID, len(interactions), 0)
 						incomplete = true
 						recordIncomplete = true
 						break
@@ -1761,6 +1800,10 @@ func enrichExecutionSummariesFromLLMDebug(
 					interactions = append(interactions, interaction)
 				}
 			}
+		}
+		if listErr != nil {
+			addReason("backend_failure", requestID, 0, 0)
+			incomplete, recordIncomplete = true, true
 		}
 		if recordIncomplete {
 			// Do not publish partial duration/count values as exact enrichment.
@@ -1804,5 +1847,5 @@ func enrichExecutionSummariesFromLLMDebug(
 			)
 		}
 	}
-	return enrichment, incomplete, nil
+	return enrichment, incomplete, reasons, nil
 }

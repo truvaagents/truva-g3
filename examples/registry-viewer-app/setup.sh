@@ -16,6 +16,8 @@ K8_DEPLOYMENT_DIR="$EXAMPLES_DIR/k8-deployment"
 # Shared environment library: container-runtime detection (docker/podman) and a
 # kind() wrapper that makes `kind load docker-image` work under podman.
 source "$K8_DEPLOYMENT_DIR/setup-env-lib.sh"
+source "$SCRIPT_DIR/viewer-config.sh"
+load_viewer_memory_domains "$SCRIPT_DIR/.env"
 
 # Configuration
 NAMESPACE="truvag3-examples"

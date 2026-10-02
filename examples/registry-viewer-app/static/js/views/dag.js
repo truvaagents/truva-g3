@@ -21,6 +21,7 @@ import {
     formatConversationRequest,
 } from '../utils/format.js';
 import { fetchAPI } from '../api.js';
+import { executionStatus, matchesExecutionStatus } from '../utils/execution-lifecycle.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
 import {
     getLLMInteractionContent,
@@ -51,6 +52,8 @@ import {
 // ---------------------------------------------------------------------------
 let executions = [];
 let selected = null;
+let selectionVersion = 0;
+let detailRefreshPending = false;
 let activeTab = 'dag-viz';
 let filter = 'all';
 let cyInstance = null;
@@ -436,12 +439,17 @@ export function init() {
 
 export function refresh() {
     fetchExecutions({ preserveExpansion: true });
+    if (selected && !detailRefreshPending) {
+        void selectExecution(selected.request_id, { background: true });
+    }
     if (listPanelMode === 'timeline' && activeConversationID) {
         void loadConversationTimeline(activeConversationID, selected?.request_id, { force: true });
     }
 }
 
 export function destroy() {
+    selectionVersion++;
+    selected = null;
     // Dismiss any open popups (they're on document.body, not inside the DAG container)
     document.querySelectorAll('.node-popup').forEach(p => p.remove());
     // Destroy all cached Cytoscape instances
@@ -801,7 +809,7 @@ function updateDagStats(sourceExecutions = executions) {
     });
     const values = Array.from(unique.values());
     const total = values.length;
-    const successful = values.filter(e => e.success).length;
+    const successful = values.filter(e => executionStatus(e).state === 'completed').length;
     const rate = total > 0 ? Math.round((successful / total) * 100) : 0;
 
     document.getElementById('executionCount').textContent = total;
@@ -830,7 +838,15 @@ function updateDagLastUpdated(timestamp) {
 function updateGroupedDiagnostics(data) {
     const messages = [];
     if (data.llm_enrichment_incomplete) {
-        messages.push('LLM duration and call counts are incomplete because the LLM-debug keyspace could not be fully read.');
+        const labels = {
+            execution_count_limit: 'the execution-count limit was reached',
+            interaction_count_limit: 'an execution exceeded the interaction-count limit',
+            interaction_byte_limit: 'an execution exceeded the cumulative interaction-byte limit',
+            parse_failure: 'an interaction could not be decoded',
+            backend_failure: 'the debug backend could not be read'
+        };
+        const reasons = [...new Set((data.llm_enrichment_reasons || []).map(reason => labels[reason.code]).filter(Boolean))];
+        messages.push(`Optional LLM duration and call-count enrichment is incomplete${reasons.length ? ': ' + reasons.join('; ') : ''}. This does not establish missing execution records.`);
     }
     if (data.partial) {
         messages.push('This grouped result reached a safety bound; some groups may not be shown.');
@@ -1093,10 +1109,10 @@ function renderConversationGroupHeader(group, expanded) {
     );
     const visibleExecutions = flattenGroupedExecutions([group]);
     const totalDuration = primaryDurationMs(anchor);
-    const successful = visibleExecutions.every(item => item.success);
-    const interrupted = visibleExecutions.some(item => item.interrupted);
-    const statusClass = interrupted ? 'interrupted' : (successful ? 'success' : 'error');
-    const statusLabel = interrupted ? '⏸ Interrupted' : (successful ? '✓ Success' : '⚠ Mixed');
+    const statuses = visibleExecutions.map(executionStatus);
+    const uniform = statuses.length > 0 && statuses.every(item => item.state === statuses[0].state);
+    const statusClass = uniform ? statuses[0].css : 'pending';
+    const statusLabel = uniform ? statuses[0].label : 'Mixed lifecycle states';
     const shortConversationID = truncateText(group.conversation_id, 28);
     const matchingTurnCount = group.matching_turn_count ?? turns.length;
     const totalTurnCount = group.total_turn_count || turns.length;
@@ -1163,8 +1179,7 @@ function renderGroupedExecutionRow(exec, options = {}) {
     ].filter(Boolean).join(' ');
     const requestID = exec.request_id || '';
     const originalRequestID = exec.original_request_id || requestID;
-    const statusClass = exec.interrupted ? 'interrupted' : (exec.success ? 'success' : 'error');
-    const statusLabel = exec.interrupted ? '⏸ Interrupted' : (exec.success ? '✓ Success' : '✗ Failed');
+    const { css: statusClass, label: statusLabel } = executionStatus(exec);
     const duration = primaryDurationMs(exec);
 
     return `
@@ -1206,8 +1221,7 @@ function renderLegacyExecutionList() {
     const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
 
     let filtered = executions.filter(exec => {
-        if (filter === 'success' && (!exec.success || exec.interrupted)) return false;
-        if (filter === 'failed' && (exec.success || exec.interrupted)) return false;
+        if (!matchesExecutionStatus(exec, filter)) return false;
         if (filter === 'interrupted' && !exec.interrupted) return false;
         if (searchTerm && !exec.original_request.toLowerCase().includes(searchTerm) &&
             !exec.request_id.toLowerCase().includes(searchTerm)) return false;
@@ -1352,8 +1366,8 @@ function renderLegacyExecutionList() {
             data-request-id="${exec.request_id}"
             data-original-request-id="${exec.original_request_id || exec.request_id}">
             <td>
-                <span class="status-badge ${exec.interrupted ? 'interrupted' : (exec.success ? 'success' : 'error')}">
-                    ${exec.interrupted ? '⏸ Interrupted' : (exec.success ? '✓ Success' : '✗ Failed')}
+                <span class="status-badge ${executionStatus(exec).css}">
+                    ${executionStatus(exec).label}
                 </span>
             </td>
             <td>
@@ -1570,12 +1584,7 @@ function renderTimelineTurn(turn, index, totalTurns, selectedRequestID) {
     const related = turn.related_executions || [];
     const containsSelected = execution.request_id === selectedRequestID ||
         related.some(item => item.request_id === selectedRequestID);
-    const statusClass = execution.interrupted
-        ? 'interrupted'
-        : (execution.success ? 'success' : 'error');
-    const statusLabel = execution.interrupted
-        ? '⏸ Interrupted'
-        : (execution.success ? '✓ Success' : '✗ Failed');
+    const { css: statusClass, label: statusLabel } = executionStatus(execution);
     const duration = primaryDurationMs(execution);
 
     return `
@@ -1651,7 +1660,7 @@ function renderTimelineRelatedExecution(execution, selectedRequestID, orphan = f
                     <span>${formatDateTime(execution.created_at)}</span>
                     <span>${execution.step_count || 0} steps</span>
                     <span>${formatDuration(duration)}</span>
-                    <span class="${execution.success ? 'dag-success-text' : 'dag-error-text'}">${execution.interrupted ? 'Interrupted' : (execution.success ? 'Success' : 'Failed')}</span>
+                    <span class="status-badge ${executionStatus(execution).css}">${executionStatus(execution).label}</span>
                 </div>
                 <div class="dag-timeline-request-id">${escapeHtml(execution.request_id || '')}</div>
                 ${execution.missing_owner_id ? `<div class="dag-timeline-request-id">Parent: ${escapeHtml(execution.missing_owner_id)}</div>` : ''}
@@ -1723,14 +1732,22 @@ function renderTimelineError() {
 
 async function selectExecution(
     requestId,
-    { restoreTimelineActionFocus = false } = {},
+    { restoreTimelineActionFocus = false, background = false } = {},
 ) {
-    document.querySelectorAll('.node-popup').forEach(p => p.remove());
+    const version = background ? selectionVersion : ++selectionVersion;
+    if (background) detailRefreshPending = true;
+    if (!background) document.querySelectorAll('.node-popup').forEach(p => p.remove());
     const detailPanel = document.getElementById('dagDetailPanel');
-    showLoading(detailPanel, 'Loading execution...');
+    if (!background) showLoading(detailPanel, 'Loading execution...');
     try {
         // Use unified endpoint to get execution, LLM debug, and HITL data in one call
         const { data } = await fetchAPI(`/api/executions/${requestId}/unified`);
+        if (version !== selectionVersion || (background && selected?.request_id !== requestId)) return;
+        if (background && data.record_revision && selected.record_revision > data.record_revision) return;
+        // Hook and LLM debug stores can advance independently of the execution
+        // record revision, so refresh the complete unified view even at equal revision.
+        const viewport = background && cyInstance && !cyInstance.destroyed()
+            ? { zoom: cyInstance.zoom(), pan: { ...cyInstance.pan() } } : null;
         const selectionChanged = selected?.request_id !== data.request_id;
         selected = data;
         // Multi-phase support: merge all phase plan steps into plan.steps
@@ -1756,7 +1773,7 @@ async function selectExecution(
             renderConversationTimeline(activeTimeline, selected.request_id);
         }
         updateDetailTabs(); // Update tab visibility based on available data
-        renderExecutionDetail();
+        renderExecutionDetail(viewport);
         if (restoreTimelineActionFocus && listPanelMode === 'timeline') {
             requestAnimationFrame(() => {
                 const action = Array.from(document.querySelectorAll(
@@ -1768,7 +1785,8 @@ async function selectExecution(
     } catch (error) {
         console.error('Failed to fetch execution:', error);
     } finally {
-        hideLoading(detailPanel);
+        if (background) detailRefreshPending = false;
+        if (!background && version === selectionVersion) hideLoading(detailPanel);
     }
 }
 
@@ -1818,7 +1836,7 @@ function setDagDetailTab(tab) {
     renderExecutionDetail();
 }
 
-function renderExecutionDetail() {
+function renderExecutionDetail(viewport = null) {
     if (!selected) return;
 
     const container = document.getElementById('dagDetailContent');
@@ -1827,7 +1845,7 @@ function renderExecutionDetail() {
     document.getElementById('dagDetailTitle').textContent = truncateText(selected.original_request, 50);
 
     if (activeTab === 'dag-viz') {
-        renderDAGVisualization(container);
+        renderDAGVisualization(container, viewport);
     } else if (activeTab === 'dag-pre') {
         renderPreExecution(container);
     } else if (activeTab === 'dag-steps') {
@@ -2200,7 +2218,10 @@ function setDagViewMode(mode) {
 // DAG Visualization
 // ---------------------------------------------------------------------------
 
-function renderDAGVisualization(container) {
+function renderDAGVisualization(container, viewport = null) {
+    const renderedSelection = selected;
+    const renderedVersion = selectionVersion;
+    const renderedMode = viewMode;
     const stepCount = selected.plan?.steps?.length || 0;
     const hasLLM = selected.has_llm_data;
     const hasHITL = selected.has_hitl_data;
@@ -2232,7 +2253,7 @@ function renderDAGVisualization(container) {
                     ${traceID ? `<a class="dag-viz-meta-item dag-viz-trace-link" href="${jaegerTraceURL(traceID)}" target="_blank" rel="noopener noreferrer" title="Open execution trace ${escapeHtmlAttribute(traceID)} in Jaeger">Trace</a>` : ''}
                     <span class="dag-viz-meta-item">${stepCount} step${stepCount !== 1 ? 's' : ''}</span>
                     <span class="dag-viz-meta-item" title="${escapeHtmlAttribute(selected.duration_source || 'legacy execution duration')}">⏱️ Elapsed: ${formatDuration(totalDurationMs)}</span>
-                    <span class="dag-viz-meta-item ${selected.interrupted ? 'interrupted' : (selected.success ? 'success' : 'error')}">${selected.interrupted ? '⏸ Interrupted' : (selected.success ? '✓ Success' : '✗ Failed')}</span>
+                    <span class="dag-viz-meta-item ${executionStatus(selected).css}">${executionStatus(selected).label}</span>
                     ${hasLLM ? `<span class="dag-viz-meta-item" style="color: var(--accent-blue);">💭 ${llmCallCount} LLM calls · aggregate ${formatDuration(llmDurationMs)}</span>` : ''}
                     ${hasHITL && !selected.interrupted ? `<span class="dag-viz-meta-item" style="color: var(--accent-orange);">⏸️ HITL</span>` : ''}
                     ${selected.phase_count > 1 ? `<span class="dag-viz-meta-item" style="color: var(--accent-teal);">🔄 ${selected.phase_count} Phases</span>` : ''}
@@ -2411,6 +2432,7 @@ function renderDAGVisualization(container) {
     // Cache only helps for tab switches within the same execution (DAG → LLM Calls → DAG).
     // When switching executions, innerHTML rebuilds the dagContainer, orphaning cached children.
     setTimeout(() => {
+        if (selected !== renderedSelection || selectionVersion !== renderedVersion || viewMode !== renderedMode || activeTab !== 'dag-viz') return;
         const cacheKey = `${selected.request_id}:${viewMode}`;
         const cached = dagCache.get(cacheKey);
         const dagContainer = document.getElementById('dagContainer');
@@ -2431,6 +2453,10 @@ function renderDAGVisualization(container) {
                 dagCache.delete(cacheKey);
             }
             initCytoscape();
+        }
+        if (viewport && cyInstance) {
+            cyInstance.zoom(viewport.zoom);
+            cyInstance.pan(viewport.pan);
         }
     }, 50);
 }
@@ -3242,13 +3268,13 @@ function initCytoscape() {
                 : (leafSteps.length > 0 ? leafSteps.map(step => step.step_id) : [responseSource]);
             responseSource = appendPipelineHookChain(afterSynthesisHooks, hookSources);
         }
-        const successLabel = selected.success ? '✓ Complete' : (selected.interrupted ? '⏸ Paused (HITL)' : '✗ Failed');
+        const successLabel = executionStatus(selected).label;
         nodes.push({
             data: {
                 id: 'response',
                 label: `📤 ${successLabel}`,
                 nodeType: 'response',
-                success: selected.success,
+                success: executionStatus(selected).state === 'completed',
                 interrupted: selected.interrupted ? 'true' : 'false'
             }
         });
@@ -4634,13 +4660,13 @@ function showFullFlowNodePopup(node, nodeData) {
         case 'response':
             title = '📤 Response';
             color = 'var(--accent-teal)';
-            const success = nodeData.success;
-            const resultColor = success ? 'var(--accent-green)' : 'var(--accent-red)';
+            const responseStatus = executionStatus(selected);
+            const resultColor = responseStatus.state === 'completed' ? 'var(--accent-green)' : 'var(--text-muted)';
             const responseTotalDuration = primaryDurationMs(selected);
             content = `
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Status</div>
-                    <div style="color: ${resultColor}; font-weight: 600;">${success ? 'SUCCESS' : 'FAILED'}</div>
+                    <div style="color: ${resultColor}; font-weight: 600;">${responseStatus.label}</div>
                 </div>
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Elapsed Duration</div>
@@ -4899,6 +4925,7 @@ function showNodePopup(node, step, result) {
                 </span>
                 <span>${formatDuration(result.duration_ms || (result.duration ? Math.round(result.duration / 1000000) : 0))}</span>
                 <span>${result.attempts || 1} attempt${(result.attempts || 1) > 1 ? 's' : ''}</span>
+                ${Number.isInteger(result.dispatch_count) ? `<span>${result.dispatch_count} HTTP dispatch${result.dispatch_count === 1 ? '' : 'es'}</span>` : ''}
             </div>
             ${result.error && !result.success ? `
                 <div style="margin-top: 10px; padding: 10px 12px; background: rgba(255, 107, 107, 0.1); border-radius: 8px; border: 1px solid rgba(255, 107, 107, 0.2); color: var(--accent-red); font-size: 11px;">
@@ -5420,6 +5447,24 @@ function renderStepDetails(container) {
                                         ${formatResponseJson(result.parameters)}
                                     </div>
                                 </div>
+                            ` : ''}
+                            ${result?.dispatches?.length ? `
+                                <details class="dag-step-response">
+                                    <summary class="dag-step-response-header">HTTP dispatch history (${result.dispatches.length})</summary>
+                                    <div class="dag-step-response-content">${formatResponseJson(result.dispatches)}</div>
+                                </details>
+                            ` : ''}
+                            ${result?.tool_error ? `
+                                <details class="dag-step-response">
+                                    <summary class="dag-step-response-header">Structured failure (not successful output)</summary>
+                                    <div class="dag-step-response-content">${formatResponseJson(result.tool_error)}</div>
+                                </details>
+                            ` : ''}
+                            ${result?.metadata?.bindings ? `
+                                <details class="dag-step-response">
+                                    <summary class="dag-step-response-header">Parameter binding evidence</summary>
+                                    <div class="dag-step-response-content">${formatResponseJson(result.metadata.bindings)}</div>
+                                </details>
                             ` : ''}
                             ${result?.metadata?.resolution ? `
                                 <div class="dag-step-response">

@@ -2,6 +2,13 @@
 
 This directory contains a complete observability stack for TruvaG3 framework applications using modern cloud-native patterns.
 
+The memory dashboard distinguishes legacy event-summary provider completion
+from `truvag3_orchestration_event_summarization_outcomes_total`, grouped by
+`outcome=complete|partial|fallback`. Both dashboard sources contain this additive
+series; deploying dashboards does not change the meaning of the legacy counter.
+Summary coverage is also carried in execution hook effects and trace events.
+Neither provider completion nor summary coverage proves durable memory storage.
+
 ## 🏗️ Architecture Overview
 
 ```
@@ -25,8 +32,14 @@ Three signals reach the central OTEL Collector:
 
 - **Metrics** and **traces** are exported by apps via OTLP (SDK-emitted).
 - **Logs** are read from pod stdout by a per-node **DaemonSet** (`otel-collector-logs`),
-  which tails `/var/log/pods/truvag3-examples_*` and forwards records to the central
+  which tails `/var/log/pods/truvag3-examples_*` and
+  `/var/log/pods/software-maintenance_*` and forwards records to the central
   collector. Apps do not export logs via SDK — stdout is the contract.
+
+Maintenance sandbox runner pods (`software-maintenance_mw-*`) are excluded from
+this service-log route: their test output remains workspace evidence, rather
+than being attributed to the workspace tool. Apply collector configuration with
+`examples/k8-deployment/setup-infrastructure.sh rebuild otel-collector-logs`.
 
 ## 🚀 What Gets Deployed
 
@@ -95,7 +108,7 @@ the authority.
 pod stdout (JSON log line)
   │
   ▼
-filelog receiver  (DaemonSet, tails /var/log/pods/truvag3-examples_*)
+filelog receiver  (DaemonSet, tails truvag3-examples and software-maintenance pods)
   │  operators:
   │    - CRI regex parse
   │    - recombine partial lines
@@ -163,7 +176,7 @@ See [LOGGING_IMPLEMENTATION_GUIDE.md §10 — Service Identity Contract](../../d
 {service_name="hotel-tool"} |= "orch-1776904450804389754" | json | level="ERROR"
 
 # All services in the namespace — useful for request-wide trace reconstruction
-{k8s_namespace_name="truvag3-examples"} |= "orch-1776904450804389754"
+{k8s_namespace_name=~"truvag3-examples|software-maintenance"} |= "orch-1776904450804389754"
 
 # One pod specifically (e.g., when multiple replicas)
 {k8s_pod_name="hotel-tool-7f6fc48496-vhfhh"}
