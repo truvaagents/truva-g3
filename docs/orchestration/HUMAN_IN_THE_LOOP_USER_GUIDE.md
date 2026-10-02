@@ -1,5 +1,14 @@
 # Human-in-the-Loop (HITL) User Guide
 
+**Parameter boundary:** the executor records resolved values for the approval
+snapshot before the application `AgentInputProcessor` transform. There is no
+general parameter-edit API in HITL. Approved pre-resolved resume values bypass
+repeat coercion; application transforms retain their existing ordering and the
+final dispatch validator rechecks generic required/enum/template/container-shape
+rules. Thus the snapshot is not a claim that an application transform's output
+was independently human-approved. Adopt an application policy appropriate to
+those transforms rather than relying on implicit post-approval serialization.
+
 This guide shows how to pause an agent for human approval and continue safely
 after that decision. Start with the shared setup, then choose a JSON, streaming,
 or queued transport. The framework owns checkpoint claims and completion;

@@ -397,7 +397,8 @@ func TestNormalizeTerminalSynthesisPlan_EmitsWarnLog(t *testing.T) {
 }
 
 func TestBuildIterativePlanningInstructions_ContainsFinalAnswerContract(t *testing.T) {
-	result := BuildIterativePlanningInstructions(&IterativePlanConfig{Enabled: true, MaxPhases: 5, MaxTotalSteps: 200})
+	config := &IterativePlanConfig{Enabled: true, MaxPhases: 5, MaxTotalSteps: 200}
+	result := BuildIterativePlanningInstructions(config)
 	for _, want := range []string{
 		"The framework writes the final user-facing answer",
 		`"terminal": true, "steps": []`,
@@ -405,5 +406,36 @@ func TestBuildIterativePlanningInstructions_ContainsFinalAnswerContract(t *testi
 		if !strings.Contains(result, want) {
 			t.Errorf("BuildIterativePlanningInstructions missing final-answer contract substring %q\nGot:\n%s", want, result)
 		}
+	}
+	// Check the public legacy guidance and the shared initial/continuation rules
+	// as well as the budget-aware builder. These assertions pin prompt delivery,
+	// not whether a live model will obey it or reason correctly.
+	for name, prompt := range map[string]string{
+		"budget-aware": result,
+		"legacy":       IterativePlanningInstructions,
+		"shared-rules": buildDefaultFormatRules(config),
+	} {
+		t.Run(name, func(t *testing.T) {
+			normalized := strings.Join(strings.Fields(prompt), " ")
+			for _, want := range []string{
+				"planned actions are expected to satisfy the objective",
+				"no result-dependent decision about further actions",
+				"even for already-known entities",
+				"Known entity names and parameter shapes alone do not establish task completeness",
+				"rather than inventing evidence or continuing without useful work",
+			} {
+				if !strings.Contains(normalized, want) {
+					t.Errorf("missing task-completeness guidance %q", want)
+				}
+			}
+			for _, obsolete := range []string{
+				"Only set terminal: false if you need to discover entirely new entities",
+				"All entities are explicitly named",
+			} {
+				if strings.Contains(normalized, obsolete) {
+					t.Errorf("retained contradictory terminal guidance %q", obsolete)
+				}
+			}
+		})
 	}
 }

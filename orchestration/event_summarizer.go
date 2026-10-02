@@ -3,7 +3,9 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,11 @@ import (
 
 // Compile-time interface check.
 var _ core.EventSummarizer = (*LLMEventSummarizer)(nil)
+
+// Shared by both prompts so the shorter user instruction cannot omit entities.
+const eventSummaryOutputContract = `Return one JSON array with one entry per supplied step ID, including step_id, summary and entities.
+Copy entity IDs exactly from the supplied parameters or response. Use "entities": [] when no entity is identifiable.
+Output shape: [{"step_id":"step-1","summary":"...","entities":[{"type":"...","id":"..."}]}]`
 
 // eventSummarizerSystemPrompt is the system prompt for event summarization LLM calls.
 // Structure follows docs/building/EFFECTIVE_PROMPTS_GUIDE.md:
@@ -77,6 +84,7 @@ Output:
     "entities": []
   }
 ]
+</example>
 
 Key patterns shown above:
 - Each summary is one factual sentence with key identifiers from the response
@@ -85,7 +93,7 @@ Key patterns shown above:
 - Entities are only populated when directly observable in parameters or response
 - Step-4 has no entities because the search failed before operating on any identifiable entity
 - "non-fatal error" in an instruction is a description, not an entity — entities come from parameters and responses only
-</example>`
+` + eventSummaryOutputContract
 
 // LLMEventSummarizer generates actionable, fact-based event summaries using a batched
 // LLM call. For each execution step, it produces a one-sentence summary that includes
@@ -104,6 +112,8 @@ type LLMEventSummarizer struct {
 	maxResponseChars    int
 	maxStepsPerBatch    int
 	tokensPerStepBudget int
+	maxTokens           int // positive overrides the calculated per-batch output budget
+	timeout             time.Duration
 	logger              core.Logger
 	telemetry           core.Telemetry // optional — for span creation
 	debugStore          LLMDebugStore
@@ -113,6 +123,20 @@ type LLMEventSummarizer struct {
 
 // LLMEventSummarizerOption configures LLMEventSummarizer.
 type LLMEventSummarizerOption func(*LLMEventSummarizer) error
+
+// WithSummarizerTimeout bounds only the builtin AI invocation. The default is
+// two minutes; a shorter parent deadline wins. Explicit non-positive durations
+// are invalid. BuildMemoryHooks exposes this through
+// TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT.
+func WithSummarizerTimeout(timeout time.Duration) LLMEventSummarizerOption {
+	return func(s *LLMEventSummarizer) error {
+		if timeout <= 0 {
+			return fmt.Errorf("summarizer timeout must be positive")
+		}
+		s.timeout = timeout
+		return nil
+	}
+}
 
 // WithSummarizerModel sets the model to use for summarization calls.
 // Use a fast, cheap model (e.g., "gpt-4o-mini", "claude-haiku-4-5-20251001").
@@ -168,13 +192,26 @@ func WithSummarizerMaxStepsPerBatch(n int) LLMEventSummarizerOption {
 }
 
 // WithSummarizerTokensPerStep sets the output token budget per step summary.
-// Total MaxTokens = tokensPerStep * batchSize. Default: 100.
+// Total MaxTokens = tokensPerStep * batchSize, with a floor of 300. Default: 150.
+// WithSummarizerMaxTokens overrides this calculated budget when set.
 func WithSummarizerTokensPerStep(n int) LLMEventSummarizerOption {
 	return func(s *LLMEventSummarizer) error {
 		if n <= 0 {
 			return fmt.Errorf("tokensPerStepBudget must be positive, got %d", n)
 		}
 		s.tokensPerStepBudget = n
+		return nil
+	}
+}
+
+// WithSummarizerMaxTokens sets an explicit per-call output-token budget,
+// independent of batch size. Unset preserves the calculated per-step budget.
+func WithSummarizerMaxTokens(n int) LLMEventSummarizerOption {
+	return func(s *LLMEventSummarizer) error {
+		if n <= 0 {
+			return fmt.Errorf("maxTokens must be positive")
+		}
+		s.maxTokens = n
 		return nil
 	}
 }
@@ -193,7 +230,7 @@ func WithSummarizerTelemetry(t core.Telemetry) LLMEventSummarizerOption {
 // Lower values produce more deterministic output. Default: 0.1.
 func WithSummarizerTemperature(t float32) LLMEventSummarizerOption {
 	return func(s *LLMEventSummarizer) error {
-		if t < 0 || t > 2 {
+		if math.IsNaN(float64(t)) || t < 0 || t > 2 {
 			return fmt.Errorf("temperature must be between 0 and 2, got %f", t)
 		}
 		s.temperature = t
@@ -213,12 +250,16 @@ func NewLLMEventSummarizer(aiClient core.AIClient, opts ...LLMEventSummarizerOpt
 		maxResponseChars:    4000,
 		maxStepsPerBatch:    20,
 		tokensPerStepBudget: 150,
+		timeout:             2 * time.Minute,
 		logger:              &core.NoOpLogger{},
 	}
 	for _, opt := range opts {
 		if err := opt(s); err != nil {
 			return nil, fmt.Errorf("invalid event summarizer option: %w", err)
 		}
+	}
+	if s.maxTokens == 0 && s.maxStepsPerBatch > int(^uint(0)>>1)/s.tokensPerStepBudget {
+		return nil, fmt.Errorf("calculated event summary token budget overflows; reduce batch size or tokens per step")
 	}
 	return s, nil
 }
@@ -286,13 +327,18 @@ func (s *LLMEventSummarizer) generateFallbackRequestID() string {
 // Fail-open: returns empty map on any error.
 //
 // Emitted LLMInteraction records hardcode HookPhase: HookPhasePost, which
-// assumes this method is invoked from an AfterSynthesis-style hook (today:
+// groups post-execution hook work (today:
 // MemoryRecordHook). If a future caller invokes this from a different
 // phase, move the HookPhase assignment to the caller or derive it from
 // context baggage — otherwise the registry viewer will misroute the trace.
 func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.StepSummaryInput) (map[string]core.StepSummary, error) {
+	result := s.summarizeWithOutcome(ctx, steps)
+	return result.Valid, nil
+}
+
+func (s *LLMEventSummarizer) summarizeWithOutcome(ctx context.Context, steps []core.StepSummaryInput) summaryParseOutcome {
 	if len(steps) == 0 {
-		return map[string]core.StepSummary{}, nil
+		return newSummaryOutcome(steps)
 	}
 
 	// Create child span for Jaeger visibility (visible as separate bar in trace waterfall)
@@ -333,6 +379,18 @@ func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.St
 		}
 		batch = batch[:s.maxStepsPerBatch]
 	}
+	result := newSummaryOutcome(batch)
+	defer func() {
+		telemetry.Counter("orchestration.event_summarization.outcomes", "module", telemetry.ModuleOrchestration, "outcome", result.Outcome)
+		attrs := []attribute.KeyValue{
+			attribute.String("request_id", requestID), attribute.String("outcome", result.Outcome),
+			attribute.Int("expected", result.Expected), attribute.Int("accepted", result.Accepted),
+			attribute.Int("rejected_entries", result.Rejected), attribute.Int("rejected_entities", result.EntitiesRejected),
+			attribute.Bool("complete_array", result.CompleteArray), attribute.Bool("truncated", result.Truncated),
+		}
+		attrs = append(attrs, result.EntityFields.spanAttributes()...)
+		telemetry.AddSpanEvent(ctx, "memory.event_summarization.outcome", attrs...)
+	}()
 
 	// Build prompt
 	prompt := s.buildPrompt(batch)
@@ -356,6 +414,9 @@ func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.St
 	if maxTokens < 300 {
 		maxTokens = 300
 	}
+	if s.maxTokens > 0 {
+		maxTokens = s.maxTokens
+	}
 
 	aiOpts := &core.AIOptions{
 		Temperature:  s.temperature,
@@ -372,12 +433,28 @@ func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.St
 		Options:        aiOpts,
 		DeferRecording: s.debugStore != nil,
 	}
-	invocationResult, err := invokeAI(ctx, s.aiClient, invocation)
+	callCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	invocationResult, err := invokeAI(callCtx, s.aiClient, invocation)
+	callErr := callCtx.Err()
+	cancel()
 	var aiResp *core.AIResponse
 	if invocationResult != nil {
 		aiResp = invocationResult.Response
 	}
+	if err == nil && aiResp == nil {
+		err = fmt.Errorf("event summarization returned no response")
+	}
 	if err != nil {
+		errorType := "llm_unavailable"
+		if ctx.Err() != nil {
+			errorType = "parent_cancelled"
+		} else if errors.Is(callErr, context.DeadlineExceeded) {
+			errorType = "summary_timeout"
+		}
+		result.Outcome = errorType
+		if aiResp != nil {
+			core.RecordTokenUsage(ctx, "event_summarization", aiResp.Usage)
+		}
 		durationMs := float64(time.Since(startTime).Milliseconds())
 		telemetry.RecordSpanError(ctx, err)
 
@@ -393,20 +470,20 @@ func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.St
 		}, invocationResult, invocation, aiResp, err))
 
 		if s.logger != nil {
-			s.logger.WarnWithContext(ctx, "Event summarization LLM call failed, using heuristic fallback", map[string]interface{}{
+			s.logger.WarnWithContext(ctx, "Event summarization LLM call failed", map[string]interface{}{
 				"operation":   "event_summarization",
 				"request_id":  requestID,
 				"error":       err.Error(),
-				"error_type":  "llm_unavailable",
+				"error_type":  errorType,
 				"step_count":  len(batch),
 				"duration_ms": durationMs,
 			})
 		}
 		telemetry.Counter("orchestration.event_summarization.errors",
 			"module", telemetry.ModuleOrchestration,
-			"error_type", "llm_unavailable",
+			"error_type", errorType,
 		)
-		return map[string]core.StepSummary{}, nil // Fail-open
+		return result // Fail-open; recorder owns fallback.
 	}
 
 	durationMs := float64(time.Since(startTime).Milliseconds())
@@ -438,14 +515,16 @@ func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.St
 	telemetry.AddSpanEvent(ctx, "llm.event_summarization.response", responseAttrs...)
 
 	// Parse response
-	summaries := s.parseResponse(ctx, aiResp.Content, requestID)
+	result = parseEventSummaries(aiResp.Content, batch)
 	if s.logger != nil {
 		logFields := map[string]interface{}{
 			"operation":       "event_summarization",
 			"request_id":      requestID,
 			"step_count":      len(batch),
-			"summaries_count": len(summaries),
+			"summaries_count": result.Accepted,
+			"outcome":         result.Outcome,
 			"duration_ms":     durationMs,
+			"entity_fields":   result.EntityFields,
 		}
 		if s.model != "" {
 			logFields["model"] = s.model
@@ -456,7 +535,7 @@ func (s *LLMEventSummarizer) SummarizeSteps(ctx context.Context, steps []core.St
 		"module", telemetry.ModuleOrchestration,
 	)
 
-	return summaries, nil
+	return result
 }
 
 // buildPrompt constructs the batched summarization prompt.
@@ -464,8 +543,6 @@ func (s *LLMEventSummarizer) buildPrompt(steps []core.StepSummaryInput) string {
 	var sb strings.Builder
 
 	sb.WriteString(`For each tool execution step below, write exactly one factual sentence describing what happened. Include key identifiers from the response (ticket IDs, channel names, deployment names, URLs, error codes, metric values). State only facts — no recommendations, instructions, or opinions.
-
-Return a JSON array: [{"step_id": "step-1", "summary": "..."}, ...]
 
 <steps>
 `)
@@ -494,8 +571,23 @@ Return a JSON array: [{"step_id": "step-1", "summary": "..."}, ...]
 		sb.WriteString("</step>\n\n")
 	}
 
-	sb.WriteString("</steps>")
+	sb.WriteString("</steps>\n\n")
+	sb.WriteString(eventSummaryOutputContract)
 	return sb.String()
+}
+
+// Fixed keys/counts only: no entity identifiers or model payloads in traces.
+func (coverage summaryEntityCoverage) spanAttributes() []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.Int("entity_fields.observed", coverage.Observed),
+		attribute.Int("entity_fields.missing", coverage.Missing),
+		attribute.Int("entity_fields.empty", coverage.Empty),
+		attribute.Int("entity_fields.valid", coverage.Valid),
+		attribute.Int("entity_fields.invalid", coverage.Invalid),
+		attribute.Int("entity_fields.mixed", coverage.Mixed),
+		attribute.Int("entity_fields.accepted_entities", coverage.Accepted),
+		attribute.Int("entity_fields.rejected_entities", coverage.Rejected),
+	}
 }
 
 // stripMarkdownCodeFence removes ```json ... ``` wrapping that LLMs often add.
@@ -512,70 +604,4 @@ func stripMarkdownCodeFence(s string) string {
 		return strings.TrimSpace(trimmed)
 	}
 	return s
-}
-
-// parseResponse extracts step summaries and LLM-identified entities from the
-// LLM response. Returns a map of stepID -> core.StepSummary.
-//
-// Fail-open: on JSON parse failure, returns an empty map and the caller falls
-// back to the heuristic summary path. Empty entities arrays are preserved.
-func (s *LLMEventSummarizer) parseResponse(ctx context.Context, content, requestID string) map[string]core.StepSummary {
-	type stepSummary struct {
-		StepID   string           `json:"step_id"`
-		Summary  string           `json:"summary"`
-		Entities []core.EntityRef `json:"entities,omitempty"`
-	}
-
-	var summaries []stepSummary
-
-	// Strip markdown code fences (```json ... ```) that LLMs frequently add
-	content = stripMarkdownCodeFence(content)
-
-	// Try direct parse first
-	if err := json.Unmarshal([]byte(content), &summaries); err != nil {
-		// Try to find JSON array in prose-wrapped response
-		if extracted := extractJSONArray(content); extracted != "" {
-			if parseErr := json.Unmarshal([]byte(extracted), &summaries); parseErr != nil {
-				telemetry.RecordSpanError(ctx, parseErr)
-				if s.logger != nil {
-					s.logger.WarnWithContext(ctx, "Failed to parse event summarization response", map[string]interface{}{
-						"operation":  "event_summarization",
-						"request_id": requestID,
-						"error":      parseErr.Error(),
-						"error_type": "parse_failure",
-					})
-				}
-				return map[string]core.StepSummary{}
-			}
-		} else {
-			telemetry.RecordSpanError(ctx, fmt.Errorf("LLM response contained no JSON array (length: %d)", len(content)))
-			if s.logger != nil {
-				s.logger.DebugWithContext(ctx, "LLM response contained no JSON array, using heuristic fallback", map[string]interface{}{
-					"operation":       "event_summarization",
-					"request_id":      requestID,
-					"response_length": len(content),
-				})
-			}
-			return map[string]core.StepSummary{}
-		}
-	}
-
-	result := make(map[string]core.StepSummary, len(summaries))
-	for _, entry := range summaries {
-		if entry.StepID == "" || entry.Summary == "" {
-			continue
-		}
-		// Filter out empty/invalid entity entries the LLM might emit.
-		var cleaned []core.EntityRef
-		for _, e := range entry.Entities {
-			if e.Type != "" && e.ID != "" {
-				cleaned = append(cleaned, e)
-			}
-		}
-		result[entry.StepID] = core.StepSummary{
-			Summary:  entry.Summary,
-			Entities: cleaned,
-		}
-	}
-	return result
 }

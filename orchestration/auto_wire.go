@@ -5,6 +5,8 @@ package orchestration
 
 import (
 	"encoding/json"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -130,20 +132,59 @@ func (w *AutoWirer) AutoWireFromMultipleSources(
 			}
 			continue
 		}
-		// Merge into combined data (later steps override earlier for same keys)
-		for k, v := range parsed {
-			mergedData[k] = v
-		}
+		mergedData[stepID] = parsed
 	}
 
-	return w.AutoWireParameters(mergedData, targetParams)
+	return w.autoWireSources(mergedData, targetParams)
+}
+
+// autoWireSources retains source identity and declines conflicting matches.
+// The micro resolver may interpret ambiguity, but map iteration must not.
+func (w *AutoWirer) autoWireSources(sources map[string]interface{}, targetParams []Parameter) *AutoWireResult {
+	start := time.Now()
+	result := &AutoWireResult{Parameters: make(map[string]interface{})}
+	ids := make([]string, 0, len(sources))
+	for id := range sources {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, param := range targetParams {
+		var chosen *autoWireMatch
+		ambiguous := false
+		for _, id := range ids {
+			data, ok := sources[id].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			match, found := w.findMatchingValueWithMetadata(data, param.Name, param.Type)
+			if !found || match.Value == nil {
+				continue
+			}
+			if chosen != nil && !reflect.DeepEqual(chosen.Value, match.Value) {
+				ambiguous = true
+				break
+			}
+			if chosen == nil {
+				match.SourceKey = id + "." + match.SourceKey
+				chosen = match
+			}
+		}
+		if chosen == nil || ambiguous {
+			result.Unmapped = append(result.Unmapped, param.Name)
+			continue
+		}
+		result.Parameters[param.Name] = chosen.Value
+		result.Resolved = append(result.Resolved, ParameterResolution{Name: param.Name, Layer: "auto_wire", MatchType: chosen.MatchType, SourceKey: chosen.SourceKey, Value: chosen.Value})
+	}
+	result.DurationUs = time.Since(start).Microseconds()
+	return result
 }
 
 // findMatchingValueWithMetadata searches for a value matching the parameter name in the source data.
 // Returns match metadata including the match strategy used and the source key.
 func (w *AutoWirer) findMatchingValueWithMetadata(data map[string]interface{}, paramName, paramType string) (*autoWireMatch, bool) {
 	// Strategy 1: Exact name match
-	if val, ok := data[paramName]; ok {
+	if val, ok := data[paramName]; ok && val != nil {
 		extracted := extractNestedValue(val, paramType)
 		matchType := "exact"
 		// Detect if extractNestedValue performed a map→string extraction.
@@ -165,7 +206,7 @@ func (w *AutoWirer) findMatchingValueWithMetadata(data map[string]interface{}, p
 	// Strategy 2: Case-insensitive match
 	paramLower := strings.ToLower(paramName)
 	for key, val := range data {
-		if strings.ToLower(key) == paramLower {
+		if strings.ToLower(key) == paramLower && val != nil {
 			extracted := extractNestedValue(val, paramType)
 			return &autoWireMatch{
 				Value:     coerceType(extracted, paramType),

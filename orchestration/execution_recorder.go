@@ -16,6 +16,7 @@ const defaultExecutionStoreWriteTimeout = 5 * time.Second
 // executionRecordSnapshot is an immutable request-local persistence view.
 // Record is deep-cloned before it is accepted by the recorder.
 type executionRecordSnapshot struct {
+	HookRevision       uint64
 	Record             *StoredExecution
 	CorrelationContext context.Context
 	RequestID          string
@@ -35,6 +36,8 @@ type executionRecorder struct {
 	logger     core.Logger
 	wg         *sync.WaitGroup
 	timeout    time.Duration
+	latest     *executionRecordSnapshot
+	revision   uint64
 
 	retentionMu     sync.Mutex
 	retentionFloors map[string]time.Duration
@@ -80,18 +83,84 @@ func cloneStoredExecution(source *StoredExecution) (*StoredExecution, error) {
 	return &cloned, nil
 }
 
+type executionRecordUpdate uint8
+
+const (
+	recordFull executionRecordUpdate = iota
+	recordEffects
+	recordLifecycle
+)
+
 func (r *executionRecorder) Record(snapshot executionRecordSnapshot) {
+	r.record(snapshot, recordFull)
+}
+
+func (r *executionRecorder) RecordHookEffects(snapshot executionRecordSnapshot) {
+	r.record(snapshot, recordEffects)
+}
+
+// RecordLifecycle returns whether a record exists. Lifecycle-only finalization
+// keeps the most recent admitted phase and any post-response effect evidence.
+func (r *executionRecorder) RecordLifecycle(observation *ExecutionLifecycleObservation, retention time.Duration) bool {
+	return r.record(executionRecordSnapshot{Record: &StoredExecution{Lifecycle: observation}, RetentionTTL: retention}, recordLifecycle)
+}
+
+func (r *executionRecorder) record(snapshot executionRecordSnapshot, update executionRecordUpdate) bool {
 	if r == nil || r.store == nil || snapshot.Record == nil {
-		return
+		return false
 	}
 	copy, err := cloneStoredExecution(snapshot.Record)
 	if err != nil {
 		r.logFailure(snapshot, err, "marshal")
-		return
+		return false
 	}
 	snapshot.Record = copy
 
 	r.mu.Lock()
+	if update != recordFull && r.latest == nil {
+		r.mu.Unlock()
+		return false
+	}
+	if r.latest != nil {
+		latest := r.latest
+		switch update {
+		case recordEffects:
+			if snapshot.HookRevision <= latest.HookRevision {
+				r.mu.Unlock()
+				return true
+			}
+			hooks, revision := copy.PipelineHooks, snapshot.HookRevision
+			merged := *latest.Record
+			merged.PipelineHooks = hooks
+			snapshot = *latest
+			snapshot.Record = &merged
+			snapshot.HookRevision = revision
+		case recordLifecycle:
+			if copy.Lifecycle == nil || (latest.Record.Lifecycle != nil && copy.Lifecycle.Revision <= latest.Record.Lifecycle.Revision) {
+				r.mu.Unlock()
+				return true
+			}
+			merged := *latest.Record
+			merged.Lifecycle = copy.Lifecycle
+			retention := max(snapshot.RetentionTTL, latest.RetentionTTL)
+			snapshot = *latest
+			snapshot.Record = &merged
+			snapshot.RetentionTTL = retention
+		case recordFull:
+			if latest.Record.Lifecycle != nil && (copy.Lifecycle == nil || copy.Lifecycle.Revision < latest.Record.Lifecycle.Revision) {
+				r.mu.Unlock()
+				return true
+			}
+			if snapshot.HookRevision < latest.HookRevision {
+				copy.PipelineHooks = latest.Record.PipelineHooks
+				snapshot.HookRevision = latest.HookRevision
+			}
+		}
+	}
+	r.revision++
+	snapshot.Record.RecordRevision = r.revision
+	latest := snapshot
+	r.latest = &latest
 	previous := r.tail
 	completed := make(chan struct{})
 	r.tail = completed
@@ -125,6 +194,7 @@ func (r *executionRecorder) Record(snapshot executionRecordSnapshot) {
 		}
 		r.preserveLLMDebugRetention(base, snapshot)
 	}()
+	return true
 }
 
 func (r *executionRecorder) preserveLLMDebugRetention(

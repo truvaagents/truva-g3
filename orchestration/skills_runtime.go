@@ -21,7 +21,7 @@ const (
 	skillBudgetProjectionVersion         = "truvag3.skill-runtime-budgets/v1"
 	skillCandidateCacheProjectionVersion = "truvag3.skill-candidate-cache/v1"
 	skillActivationSelectorPolicyVersion = "truvag3.skill-activation-selector/v1"
-	skillResourceSelectorPolicyVersion   = "truvag3.skill-resource-selector/v1"
+	skillResourceSelectorPolicyVersion   = "truvag3.skill-resource-selector/v2"
 	skillEstimationPolicyVersion         = "truvag3.skill-runtime-token-counter/v1"
 	skillCapabilityHintPolicyVersion     = "truvag3.skill-capability-hints/v1"
 	skillBudgetPolicyVersion             = "truvag3.skill-admission/v1"

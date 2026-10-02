@@ -1,5 +1,21 @@
 # Agent Memory User Guide
 
+Activity signals are renewed by the managed request owner while work is running,
+including long model/tool calls. Renewal uses the latest status and original
+request identity every signal TTL / 3. All exits join renewal before bounded
+removal; a suspended request is no longer advertised as active. Process loss
+still relies on signal TTL. This is distinct from advisory investigation claims,
+which are not renewed. Direct hook users retain their own lifecycle ownership.
+Submission effects are not proof of backend health; inspect actual signals and
+provider diagnostics when troubleshooting.
+
+Recent episodic recall selects the newest visible events by their event
+timestamps, rather than when they arrived in storage. Global events participate
+in that same ordering; global visibility does not reserve space on a limited
+page. Older events remain retained according to the backend's retention policy.
+This ordering fix does not by itself establish complete history or safe
+incremental cache advancement during concurrent writes or backend failures.
+
 Hey there! This guide shows you how to give your TruvaG3 agents **shared memory** — so they can see what other agents have done, avoid duplicating work, and learn from past experience. If you've ever had two agents investigate the same incident independently (wasting tokens and time), this is the fix.
 
 > **Working Example**
@@ -229,7 +245,10 @@ if backends != nil {
 }
 
 // Step 2: orchestration module creates hooks from backends
-hooks, activityCoord := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger)
+hooks, activityCoord, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger)
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 ```
 
 Then pass them to your orchestrator:
@@ -263,6 +282,13 @@ backends, _ := memory.NewSharedBackends(redisClient, agent.Logger,
 **What each call does:**
 - `NewSharedBackends` reads `TRUVAG3_AGENT_DOMAIN` and creates all storage backends (episodic memory, coordination, activity signals, digest cache, and optionally Qdrant knowledge store)
 - `BuildMemoryHooks` reads `TRUVAG3_SHARED_MEMORY_*` env vars for tuning and creates all 5 pipeline hooks in the correct order (announcement → enrichment → record → extraction → cleanup)
+- With a lease-aware coordinator, managed requests own their investigation claims
+  until the segment exits. Cleanup also runs after failures, cancellation and
+  HITL suspension; resume acquires fresh ownership from restored request metadata.
+  Event summaries do not determine which claims to release. Cleanup is bounded
+  by `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` (5s default). Claims remain advisory and
+  expire without renewal. Direct hook users and legacy custom coordinators keep
+  the older caller-/name-owned lifecycle rather than gaining these guarantees.
 - Both calls are visible, replaceable, and testable independently
 
 > **Layer 3 (manual control)**: For full control over every hook option, construct hooks individually via `NewMemoryEnrichmentHook`, `NewMemoryRecordHook`, etc. See [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) for the manual hook construction pattern.
@@ -272,13 +298,16 @@ backends, _ := memory.NewSharedBackends(redisClient, agent.Logger,
 For domain-specific importance scoring, custom entity extraction, or different lookback windows, pass options to `BuildMemoryHooks`:
 
 ```go
-hooks, activityCoord := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
+hooks, activityCoord, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithMemoryEntityExtractor(myExtractor),     // override BOTH hooks
     orchestration.WithMemoryImportanceFunc(myScorer),          // domain-specific scoring
     orchestration.WithMemoryRetrievalWeights(myWeights),       // Phase 2 tuning
     orchestration.WithMemoryLookback(48 * time.Hour),          // longer event history
     orchestration.WithMemoryActivityFilter(myFilter),          // custom signal filtering
 )
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 ```
 
 These are **behavioural plugs** — interfaces and functions you swap per-domain. Numeric tuning (token budgets, TTLs, model names) uses [environment variables](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#shared-memory-configuration) instead.
@@ -289,20 +318,42 @@ Entity extraction identifies which domain entities a step operated on (a pod, an
 
 **Auto-default selection:**
 - **Record hook** (post-execution event recording):
-  - When you wire an `AIClient` into `BuildMemoryHooks` (the common case): defaults to `LLMEntityExtractor`. This piggybacks on the existing `EventSummarizer` LLM call that already runs once per step — the LLM identifies entities from the step's parameters and response as a side effect of generating the step summary. **Zero additional LLM calls.** Domain-appropriate entity types (`pod`, `service`, `cluster_component`, `ticket`, `channel`, `endpoint`, ...) are produced by the LLM, not hardcoded by the framework.
+  - When you wire an `AIClient` into `BuildMemoryHooks` (the common case): defaults to `LLMEntityExtractor`. This piggybacks on the existing batched `EventSummarizer` LLM call — the LLM identifies entities from each included step's parameters and response as a side effect of generating its summary. **Zero additional LLM calls.** Domain-appropriate entity types (`pod`, `service`, `cluster_component`, `ticket`, `channel`, `endpoint`, ...) are produced by the LLM, not hardcoded by the framework.
   - When no `AIClient` is wired: defaults to `NoOpEntityExtractor`. Honors explicit `metadata["entity_type"]`/`metadata["entity_id"]` or multi-entity `metadata["entities"]` if your tools populate them; performs no extraction otherwise.
 - **Enrichment hook** (pre-planning context lookup): always defaults to `NoOpEntityExtractor`. Pre-planning, the summarizer hasn't run yet, so `LLMEntityExtractor` would silently return nothing — making `NoOpEntityExtractor` the explicit default removes that ambiguity. Collision avoidance pre-planning is handled by `ActivityCoordinator` (see [Real-Time Coordination](#real-time-coordination-what-are-other-agents-doing-right-now) below), which has zero dependency on entity extraction.
+
+The built-in summary contract includes `entities` even when the array is empty.
+The recording effect's `summary_coverage.batch.entity_fields` reports counts of
+retained summaries with missing, empty, valid, invalid or mixed entity fields,
+plus accepted/rejected entity counts. Duplicate or unusable summaries are excluded
+from these counts. A usable summary with a missing entity field still records an
+event; explicit metadata/custom extractors retain their existing fallback paths.
+Summary completeness, field coverage, factual entity accuracy and durable storage
+are separate properties. Custom summarizers have no built-in `batch` observation;
+its absence means unobserved, not failed or zero entity extraction.
+
+Complete built-in summary arrays can have plain explanatory prose before and/or
+after them, or an outer JSON fence. The parser preserves the array's values and
+rejects ambiguous extra JSON. Complete valid entries before a truncated raw or
+outer-fenced array remain partial coverage; only missing/unusable summaries get
+the recorder's fallback. Prose-wrapped truncated arrays are not salvaged.
 
 **Per-hook override** for fine-grained control:
 
 ```go
 // Opt out of LLM extraction on the record path (use explicit metadata only)
-hooks, _ := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
+hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithBuilderRecordEntityExtractor(orchestration.NoOpEntityExtractor{}))
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 
 // Use a domain-specific extractor on the enrichment path (pre-planning entity-keyed lookup)
-hooks, _ := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
+hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithBuilderEnrichmentEntityExtractor(myDomainExtractor))
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 ```
 
 **Writing a custom extractor:** implement the `orchestration.EntityExtractor` interface. The framework treats `Entity{Type, ID}` as an opaque key — domain semantics are entirely up to you.
@@ -340,20 +391,39 @@ This tells the LLM: "someone else is already working on this." The LLM can decid
 
 ```xml
 <agent_memory>
-Domain activity summary:
-Domain activity (last 2 hours, 106 events):
-- Deployment restart: agent-with-human-approval restarted via rollout (200ms), verified healthy
-- JIRA: ticket DEVOPS-49 created for the restart, comment added with verification details
-- Slack: notification sent to #notifications with JIRA reference
-- Monitoring: 4 Prometheus queries run by event-driven-agent for product-catalog-api metrics
+Memory scope: historical domain/entity evidence at request start. Attribute outcomes to their recorded origin; establish current-request progress from current execution results.
+Event tuple (event-detail/v1): [event_id, origin_request_id, timestamp, agent, action, outcome]. Each record is self-contained.
+Historical domain activity digest:
+{"section":"domain","admitted":1,"omitted":0,"shortened":0,"duplicates":0}
+- {"text":"Historical domain activity: request-a created DEVOPS-52 (event-1, 2026-03-26T23:30Z, success); request-b queried logs (event-2, 2026-03-26T23:31Z, success)."}
 
-Most recent events (detail):
-- [2026-03-26 23:31] devops-chat-agent: Queried logs for request orch-1774567851534733422 (outcome: success)
-- [2026-03-26 23:30] devops-chat-agent: Created JIRA ticket DEVOPS-52 (outcome: success)
+Historical domain events (detail):
+{"section":"domain","admitted":3,"omitted":0,"shortened":0,"duplicates":0}
+- {"event":["event-2","request-b","2026-03-26T23:31:00Z","devops-chat-agent","lookup","success"],"summary":"Queried logs"}
+- {"event":["event-1","request-a","2026-03-26T23:30:00Z","devops-chat-agent","create","success"],"summary":"Created JIRA ticket DEVOPS-52"}
+- {"event":["event-0","request-a","2026-03-26T23:29:00Z","devops-chat-agent","lookup","success"],"summary":"Checked ticket status"}
 </agent_memory>
 ```
 
 The digest gives the LLM situational awareness. The recent events give it detail on what just happened. Together, they enable the LLM to make informed decisions — like "DEVOPS-52 already exists for this entity, add a comment instead of creating a new ticket."
+
+This is a derived historical view, not current execution status. The default
+budget is 8000 encoded bytes (`TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS=2000`),
+including the tuple legend, headings and count markers. The legend precedes
+event detail; each record retains its own exact IDs and origin, with singular
+`entity_type`/`entity_id` as named fields when supplied. Empty tuple positions
+denote absent fields; an absent request origin is labelled `unknown`.
+Sparse histories keep the named-field JSON format instead when estimated
+metadata savings would not repay the legend. The view report identifies the
+chosen format. This is a presentation choice, not a change to stored events.
+JSON records remain complete; shortened
+summaries have `shortened:true`, and omitted records are counted. Repeated entity
+lists may be excluded from detail with `entities_omitted`; stored events and
+compactor inputs retain them. Sections retain domain/entity/investigation/knowledge
+priority. A budget too small for scope and metadata produces no memory text and
+a `budget_too_small` hook effect. These counts describe this presentation, not
+proof that the backend returned complete history. Other hooks' RAG text is outside
+this budget, and compactor input/output limits are separate.
 
 ---
 
@@ -375,7 +445,23 @@ Request 4 (burst of 50 new events):
   Full recompaction triggered → LLM (5-10s) → new digest cached
 ```
 
-**Typical steady-state**: 80% cache hits (0ms) + 15% incremental (0.5s) + 5% full (5s) = ~0.3s average.
+These timings are illustrative, not a measured service-level guarantee.
+Every request still reads its configured retained event window. With built-in
+observed readers, an unchanged window reuses the digest without an AI call,
+including a full-size window with older history omitted. Newly returned events
+can update it incrementally only when all previously represented records remain
+unchanged. Late equal-timestamp events are eligible. Expiry, edits and page
+eviction trigger bounded full compaction. This is not an advancing timestamp
+cursor or a claim to summarize the entire retained history.
+
+Read failures preserve the cache without claiming "nothing new". A failed or
+empty compaction leaves the prior cache stored but exposes current raw details
+in that request. Readers without `core.ObservedEpisodicReader`, or custom
+compactors without a stable behavior identity, bypass digest reuse rather than
+assuming equivalent behavior. The existing raw-event limit bounds cache event
+fingerprints; lookback, limit and digest token target are part of its identity.
+Read-health and cache decisions are recorded as hook effects for execution
+inspection; the corresponding trace events contain bounded classifications.
 
 The cache is shared across all agents in the same domain via Redis — if `event-driven-agent` compacts the digest, `devops-chat-agent` benefits from the cache too. Each cached digest also stores the stable, secret-free AI policy and route fingerprint. A rule, middleware, resolved-model, provider-surface, or semantic-route change causes a cache miss instead of reusing a digest produced under different semantics. When the request fingerprint is unstable, activity compaction bypasses both cache reads and writes; this is correct but forces full compaction until the policy becomes stable.
 
@@ -1003,3 +1089,18 @@ The `<user_profile>` tag must be consumed by the prompt builder. Check the debug
 - **[Environment Variables Guide — User Memory](../reference/ENVIRONMENT_VARIABLES_GUIDE.md#user-memory-configuration)** — All configurable env vars
 - **[Limits Cheatsheet — User Memory](../reference/LIMITS_CHEATSHEET.md#user-memory)** — Quick reference for all limits
 - **[`examples/travel-chat-agent/`](https://github.com/truvaagents/truva-g3/tree/main/examples/travel-chat-agent)** — Full working implementation with user memory
+
+### Bounded event-summary calls
+
+The builtin event summarizer now uses a 2m AI-invocation deadline. Configure
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` with `BuildMemoryHooks`, or
+`WithSummarizerTimeout` when constructing the summarizer directly. Invalid explicit
+values fail startup. A child timeout records `summary_timeout` and leaves the
+recorder's one-per-step heuristic fallback on the parent context. Parent cancellation
+records `parent_cancelled` and stops fallback writes. A successful response returned
+at the deadline is still parsed. Custom summarizers are unchanged.
+
+Direct users can tune the existing `WithSummarizerMaxStepsPerBatch` (20 default).
+Steps beyond the single batch remain recorded with heuristic summaries; their
+model-derived entity coverage is not implied. No new batch environment setting or
+unbounded second call is introduced.

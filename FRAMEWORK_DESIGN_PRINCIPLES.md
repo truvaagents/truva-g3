@@ -98,14 +98,20 @@ The following example demonstrates the principles above using shared memory as t
 ```go
 // Layer 1 — Convenience: most developers (minimal code, env-var-driven)
 backends, _ := memory.NewSharedBackends(redisClient, logger)                         // module creates primitives
-hooks, coord := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger)  // builds hooks
+hooks, coord, err := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger)  // builds hooks
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 deps.PipelineHooks = hooks                                                           // application composes
 // Numeric tuning via env var: TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL=10m
 
 // Layer 2 — Customisation: swap behaviour without dropping convenience
-hooks, coord := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger,
+hooks, coord, err := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger,
     orchestration.WithMemoryEntityExtractor(myExtractor),  // behavioural plug (interface)
 )
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 
 // Layer 3 — Direct construction: full control over every option
 enrichHook, _ := orchestration.NewMemoryEnrichmentHook(episodic, coordinator, name, domain, opts...)
@@ -680,7 +686,7 @@ type BaseTool struct {
 }
 
 // Step 3: Telemetry module provides global singleton
-var globalRegistry atomic.Value  // Stores *OTelProvider
+var globalRegistry atomic.Pointer[Registry] // Telemetry-owned registry; nil after successful shutdown
 
 // Step 4: Application initializes telemetry
 telemetry.Initialize(config)  // Sets up global registry

@@ -1157,6 +1157,7 @@ func TestDefaultPromptBuilder_IncludesIterativePlanningInstructions(t *testing.T
 		`"terminal": true`,
 		"5 phases",
 		"200 total steps",
+		BuildIterativePlanningInstructions(builder.config.IterativePlanConfig),
 	}
 
 	for _, element := range requiredElements {
@@ -1251,6 +1252,9 @@ func TestTemplatePromptBuilder_IterativePlanningInstructionsExposed(t *testing.T
 	}
 	if !strings.Contains(prompt, "5 phases") {
 		t.Error("rendered instructions should contain phase budget")
+	}
+	if !strings.Contains(prompt, BuildIterativePlanningInstructions(config.IterativePlanConfig)) {
+		t.Error("template should include the complete shared terminal-planning guidance")
 	}
 }
 

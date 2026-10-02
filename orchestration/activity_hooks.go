@@ -120,7 +120,10 @@ func NewActivityAnnouncementHook(
 	if coordinator == nil {
 		return nil, fmt.Errorf("activity coordinator is required for ActivityAnnouncementHook")
 	}
-	if maxInPrompt <= 0 {
+	if maxInPrompt < 0 {
+		return nil, fmt.Errorf("activity prompt limit must be non-negative")
+	}
+	if maxInPrompt == 0 {
 		maxInPrompt = 10
 	}
 	h := &ActivityAnnouncementHook{
@@ -157,7 +160,12 @@ func (h *ActivityAnnouncementHook) BeforePlanning(ctx context.Context, pctx *cor
 		TTL:         h.signalTTL,
 	}
 	announceStart := time.Now()
-	announceErr := h.coordinator.AnnounceActivity(ctx, signal)
+	var announceErr error
+	if resources := resourcesFromContext(ctx); resources != nil {
+		announceErr = resources.announceActivity(ctx, h.coordinator, signal)
+	} else {
+		announceErr = h.coordinator.AnnounceActivity(ctx, signal)
+	}
 	announceStatus := core.PipelineHookEffectSucceeded
 	announceSummary := "Submitted the request's activity signal to the coordinator"
 	if announceErr != nil {
@@ -308,6 +316,11 @@ func NewActivityCleanupHook(coordinator core.ActivityCoordinator, logger core.Lo
 func (h *ActivityCleanupHook) Name() string { return "activity-cleanup" }
 
 func (h *ActivityCleanupHook) AfterSynthesis(ctx context.Context, pctx *core.PipelineContext, response string) (string, error) {
+	if managedActivity(ctx) != nil {
+		// The outer request owner stops renewal after delivery, on every exit,
+		// not just successful synthesis. Direct hook users retain legacy cleanup.
+		return response, nil
+	}
 	requestID := GetRequestID(ctx)
 	cleanupStart := time.Now()
 	cleanupErr := h.coordinator.CompleteActivity(ctx, requestID)

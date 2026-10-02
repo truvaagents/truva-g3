@@ -42,7 +42,10 @@ backends, _ := memory.NewSharedBackends(redisClient, logger,
 defer backends.Close()
 
 // Step 2: orchestration module creates hooks from backends
-hooks, activityCoord := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger)
+hooks, activityCoord, err := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger)
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 
 // Step 3: pass to orchestrator
 deps := orchestration.OrchestratorDependencies{
@@ -59,6 +62,7 @@ See [Agent Memory User Guide](../docs/memory-and-chat/AGENT_MEMORY_USER_GUIDE.md
 - **Fail-open**: All operations return graceful fallbacks on error — never block the orchestration pipeline.
 - **Domain-scoped**: Agents in the same `TRUVAG3_AGENT_DOMAIN` share memory. Different domains are isolated.
 - **Multi-entity events**: A single execution step can reference multiple entities via `AgentEvent.Entities []EntityRef`. The episodic store indexes the event under each entity for cross-entity queries.
+- **Newest-first recall**: Recent/event queries order by event timestamp, not insertion time. Global events are visible but do not jump ahead of newer domain events. Filters precede the limit; inclusive time bounds retain full timestamp precision. See the architecture's [retrieval tradeoffs](ARCHITECTURE.md#episodic-newest-first-retrieval), including retained-source scan cost and legacy fail-open read limitations.
 - **Vendor-agnostic naming**: `StreamEpisodicMemory` (not `ValkeyEpisodicMemory`), `VectorSharedKnowledge` (not `QdrantSharedKnowledge`).
 
 ## Configuration

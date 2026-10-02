@@ -662,8 +662,8 @@ func TestHybridResolver_MetadataParametersPerEntry(t *testing.T) {
 	if latR.MatchType != "exact" {
 		t.Errorf("lat: expected MatchType=\"exact\", got %q", latR.MatchType)
 	}
-	if latR.SourceKey != "lat" {
-		t.Errorf("lat: expected SourceKey=\"lat\", got %q", latR.SourceKey)
+	if latR.SourceKey != "step-1.lat" {
+		t.Errorf("lat: expected source-qualified key, got %q", latR.SourceKey)
 	}
 
 	// "lon" should be case_insensitive match from "LON"
@@ -677,8 +677,8 @@ func TestHybridResolver_MetadataParametersPerEntry(t *testing.T) {
 	if lonR.MatchType != "case_insensitive" {
 		t.Errorf("lon: expected MatchType=\"case_insensitive\", got %q", lonR.MatchType)
 	}
-	if lonR.SourceKey != "LON" {
-		t.Errorf("lon: expected SourceKey=\"LON\", got %q", lonR.SourceKey)
+	if lonR.SourceKey != "step-1.LON" {
+		t.Errorf("lon: expected source-qualified key, got %q", lonR.SourceKey)
 	}
 }
 
@@ -906,9 +906,9 @@ func TestHybridResolver_MetadataSourceDataKeyCount(t *testing.T) {
 		t.Fatal("Expected metadata, got nil")
 	}
 
-	// Source has 3 keys: lat, lon, city
-	if result.Metadata.SourceDataKeyCount != 3 {
-		t.Errorf("Expected SourceDataKeyCount=3, got %d", result.Metadata.SourceDataKeyCount)
+	// Source context has one step identity containing lat, lon, city.
+	if result.Metadata.SourceDataKeyCount != 1 {
+		t.Errorf("Expected SourceDataKeyCount=1, got %d", result.Metadata.SourceDataKeyCount)
 	}
 }
 

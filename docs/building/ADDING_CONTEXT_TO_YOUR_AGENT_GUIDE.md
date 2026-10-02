@@ -975,19 +975,31 @@ These hooks are ordered: announcement (first) → enrichment → record → extr
 // Default behaviour — record hook gets LLMEntityExtractor (zero-cost LLM
 // extraction piggybacking on the existing EventSummarizer call), enrichment
 // hook gets NoOpEntityExtractor (pre-planning, the summarizer hasn't run yet).
-hooks, _ := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger)
+hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger)
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 
 // Opt out of LLM extraction (use explicit metadata only)
-hooks, _ := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
+hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithBuilderRecordEntityExtractor(orchestration.NoOpEntityExtractor{}))
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 
 // Use a domain-specific extractor on the enrichment path
-hooks, _ := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
+hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithBuilderEnrichmentEntityExtractor(myDomainExtractor))
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 
 // Use the same extractor for both hooks (shorthand)
-hooks, _ := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
+hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithMemoryEntityExtractor(myExtractor))
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 ```
 
 The framework treats `Entity{Type, ID}` as an opaque key — domain semantics are entirely the application's responsibility. See [Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-entity-extraction-works) for the full design rationale.

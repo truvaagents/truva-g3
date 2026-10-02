@@ -236,7 +236,7 @@ type SharedMemoryConfig struct {
 
 	// RecentEventsLimit controls how many recent domain events the enrichment hook queries
 	// for baseline situational awareness. Higher values show more cross-agent activity but
-	// consume more prompt tokens. Default: 10.
+	// consume more prompt tokens. Default: 20.
 	RecentEventsLimit int `json:"recent_events_limit" env:"TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT" default:"20"`
 
 	// EnrichmentSummaryMaxTokens controls the maximum token budget for the compacted
@@ -467,7 +467,13 @@ func DefaultConfig() *Config {
 				Relevance:  0.34,
 				Importance: 0.33,
 			},
-			AgentDomain: "default",
+			AgentDomain:                "default",
+			RecentEventsLimit:          20,
+			EnrichmentSummaryMaxTokens: 500,
+			CompactionRawLimit:         200,
+			CompactionRecentDetail:     15,
+			DigestCacheTTL:             5 * time.Minute,
+			DigestIncrementalThreshold: 20,
 		},
 		ActivityCoordination: ActivityCoordinationConfig{
 			Enabled:     true,
@@ -892,59 +898,17 @@ func (c *Config) loadFromEnv(deferRedisErrors bool) error {
 	}
 
 	// Shared memory settings
+	if err := c.loadMemoryNumericEnv(os.LookupEnv); err != nil {
+		return err
+	}
 	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_PROVIDER"); v != "" {
 		c.SharedMemory.Provider = v
 	}
 	if v := os.Getenv("TRUVAG3_AGENT_DOMAIN"); v != "" {
 		c.SharedMemory.AgentDomain = v
 	}
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN"); v != "" {
-		if val, err := strconv.ParseInt(v, 10, 64); err == nil && val > 0 {
-			c.SharedMemory.StreamMaxLen = val
-		}
-	}
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL"); v != "" {
-		if val, err := time.ParseDuration(v); err == nil && val > 0 {
-			c.SharedMemory.InvestigationTTL = val
-		}
-	}
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			c.SharedMemory.MaxEnrichmentTokens = val
-		}
-	}
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			c.SharedMemory.RecentEventsLimit = val
-		}
-	}
 	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL"); v != "" {
 		c.SharedMemory.SummarizerModel = v
-	}
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			c.SharedMemory.EnrichmentSummaryMaxTokens = val
-		}
-	}
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			c.SharedMemory.CompactionRawLimit = val
-		}
-	}
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val >= 0 {
-			c.SharedMemory.CompactionRecentDetail = val
-		}
-	}
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL"); v != "" {
-		if val, err := time.ParseDuration(v); err == nil && val > 0 {
-			c.SharedMemory.DigestCacheTTL = val
-		}
-	}
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_DIGEST_INCREMENTAL_THRESHOLD"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			c.SharedMemory.DigestIncrementalThreshold = val
-		}
 	}
 	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_COMPACTION_ENABLED"); v != "" {
 		c.SharedMemory.CompactionEnabled = parseBool(v)
@@ -952,21 +916,6 @@ func (c *Config) loadFromEnv(deferRedisErrors bool) error {
 	// Activity coordination env vars
 	if v := os.Getenv("TRUVAG3_ACTIVITY_COORDINATION_ENABLED"); v != "" {
 		c.ActivityCoordination.Enabled = parseBool(v)
-	}
-	if v := os.Getenv("TRUVAG3_ACTIVITY_SIGNAL_TTL"); v != "" {
-		if val, err := time.ParseDuration(v); err == nil && val > 0 {
-			c.ActivityCoordination.SignalTTL = val
-		}
-	}
-	if v := os.Getenv("TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			c.ActivityCoordination.MaxInPrompt = val
-		}
-	}
-	if v := os.Getenv("TRUVAG3_ACTIVITY_SIGNAL_QUERY_MAX_LEN"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			c.ActivityCoordination.QueryMaxLen = val
-		}
 	}
 
 	// Reuse existing Redis URL for shared memory if not separately configured
@@ -1168,7 +1117,13 @@ func (c *Config) LoadFromFile(path string) error {
 			})
 		}
 
-		if err := json.Unmarshal(data, c); err != nil {
+		if err := validateMemoryJSONPresence(data); err != nil {
+			return err
+		}
+		// Validate the proposed numeric memory configuration before accepting it.
+		// JSON overlays existing defaults; absent fields keep their prior values.
+		next := *c
+		if err := json.Unmarshal(data, &next); err != nil {
 			if c.logger != nil {
 				c.logger.Error("Failed to parse JSON config file", map[string]interface{}{
 					"error":      err,
@@ -1179,6 +1134,10 @@ func (c *Config) LoadFromFile(path string) error {
 			}
 			return fmt.Errorf("failed to parse JSON config file: %w", ErrInvalidConfiguration)
 		}
+		if err := next.validateMemoryNumericConfig(); err != nil {
+			return err
+		}
+		*c = next
 
 		if c.logger != nil {
 			c.logger.Info("Configuration file loaded successfully", map[string]interface{}{
@@ -1265,7 +1224,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	return nil
+	return c.validateMemoryNumericConfig()
 }
 
 // Helper functions

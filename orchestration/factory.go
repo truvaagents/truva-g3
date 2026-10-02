@@ -1047,6 +1047,16 @@ func WithExecutionStoreWriteTimeout(timeout time.Duration) OrchestratorOption {
 	}
 }
 
+// WithExecutionCleanupTimeout bounds joined, cancellation-independent request
+// resource cleanup. The default is five seconds; explicit non-positive values
+// fail construction. Providers must honor the supplied context.
+func WithExecutionCleanupTimeout(timeout time.Duration) OrchestratorOption {
+	return func(c *OrchestratorConfig) {
+		c.executionCleanupTimeout = timeout
+		c.executionCleanupTimeoutSet = true
+	}
+}
+
 // WithHallucinationRetry creates an option for configuring hallucination retry behavior.
 // When enabled, the orchestrator will retry LLM plan generation if the LLM hallucinates
 // agent names that were not in the allowed list provided in the prompt.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -53,6 +54,9 @@ func (runtime *skillRuntime) selectAndAdmitResources(
 	projected []projectedSkill,
 	selectorContext SkillSelectorContext,
 ) ([]projectedSkill, error) {
+	if state == nil {
+		return projected, nil
+	}
 	scope, found := skillResourceScopeForBoundary(boundary)
 	if !found || len(eligibleSkillResourceEntries(projected, scope)) == 0 {
 		return projected, nil
@@ -60,10 +64,22 @@ func (runtime *skillRuntime) selectAndAdmitResources(
 	operationCtx, observation := runtime.startSkillOperation(
 		ctx, "resolve_resources", boundary, phaseNumber,
 	)
+	diagnosticStart := len(state.Diagnostics)
+	selectionStart := len(state.ResourceSelections)
 	result, err := runtime.selectAndAdmitResourcesCore(
 		operationCtx, request, boundary, phaseNumber, state, projected, selectorContext,
 	)
-	observation.Finish("selected", err)
+	outcome := "selected"
+	if len(state.ResourceSelections) == selectionStart {
+		outcome = "empty"
+	}
+	for _, diagnostic := range state.Diagnostics[diagnosticStart:] {
+		if diagnostic.Action == "optional_resource_selection_skipped" {
+			outcome = "omitted"
+			break
+		}
+	}
+	observation.Finish(outcome, err)
 	return result, err
 }
 
@@ -151,7 +167,10 @@ func (runtime *skillRuntime) selectAndAdmitResourcesCore(
 			state.Diagnostics = append(state.Diagnostics, diagnostic)
 			state.Debug.Diagnostics = append(state.Debug.Diagnostics, diagnostic)
 		default:
-			decision, resolverErr = runtime.resolveResourcesWithAI(ctx, input)
+			decision, resolverErr = runtime.resolveResourcesWithAI(ctx, input, state)
+		}
+		if err := ctx.Err(); err != nil {
+			return projected, err
 		}
 		if resolverErr != nil {
 			diagnostic := SkillDiagnostic{
@@ -191,6 +210,7 @@ func (runtime *skillRuntime) selectAndAdmitResourcesCore(
 func (runtime *skillRuntime) resolveResourcesWithAI(
 	ctx context.Context,
 	input SkillResourceResolutionInput,
+	state *SkillExecutionState,
 ) (SkillResourceDecision, error) {
 	if runtime.aiClient == nil {
 		return SkillResourceDecision{}, ErrSkillUnavailable
@@ -217,13 +237,43 @@ func (runtime *skillRuntime) resolveResourcesWithAI(
 	prompt := "<resource_selector_input>\n" + string(payload) + "\n</resource_selector_input>\n\nReturn the JSON object now."
 	var lastErr error
 	for attempt := 1; attempt <= skillSelectorMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return SkillResourceDecision{}, err
+		}
+		attemptCtx := ctx
+		cancel := func() {}
+		if limit := runtime.config.Limits.ResourceSelectionAttemptTimeout; limit > 0 {
+			attemptCtx, cancel = context.WithTimeout(ctx, limit)
+		}
 		result, callErr := runtime.invokeSkillAI(
-			ctx,
+			attemptCtx,
 			aiInvocation{Purpose: "skill_resource_selection", Prompt: prompt, Options: options},
 			input.Boundary,
 			input.PhaseNumber,
 			attempt,
 		)
+		attemptErr := attemptCtx.Err()
+		cancel()
+		if err := ctx.Err(); err != nil {
+			return SkillResourceDecision{}, err
+		}
+		if callErr != nil && errors.Is(attemptErr, context.DeadlineExceeded) {
+			// This layer describes attempts. Admission owns the single terminal
+			// omission after checking parent cancellation.
+			action := "attempt_failed"
+			if attempt < skillSelectorMaxAttempts {
+				action = "retry"
+			}
+			diagnostic := SkillDiagnostic{
+				Code: "skill_resource_selection_timeout", Boundary: input.Boundary,
+				PhaseNumber: input.PhaseNumber, Action: action,
+				Detail: fmt.Sprintf("attempt=%d", attempt),
+			}
+			state.Diagnostics = append(state.Diagnostics, diagnostic)
+			state.Debug.Diagnostics = append(state.Debug.Diagnostics, diagnostic)
+			lastErr = context.DeadlineExceeded
+			continue
+		}
 		if callErr != nil {
 			return SkillResourceDecision{}, callErr
 		}
@@ -246,7 +296,7 @@ func parseSkillResourceSelection(
 	value string,
 	entries []SkillResourceCatalogEntry,
 ) (SkillResourceDecision, error) {
-	data := []byte(strings.TrimSpace(value))
+	data := []byte(unwrapSkillResourceJSONFence(value))
 	if err := rejectDuplicateSkillJSONFields(data); err != nil {
 		return SkillResourceDecision{}, ErrInvalidSkillPackage
 	}
@@ -511,6 +561,9 @@ func classifySkillResourceSelectorFailure(err error) string {
 	if err == nil {
 		return ""
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "skill_resource_selection_timeout"
+	}
 	var featureErr *core.AIRequestFeatureError
 	if errors.As(err, &featureErr) {
 		return "skill_ai_request_feature_unsupported"
@@ -519,4 +572,16 @@ func classifySkillResourceSelectorFailure(err error) string {
 		return "skill_resource_selection_invalid"
 	}
 	return "skill_resource_selection_failed"
+}
+
+// unwrapSkillResourceJSONFence accepts only one complete outer JSON/unlabelled
+// fence. All inner bytes and the strict JSON/schema checks remain unchanged.
+func unwrapSkillResourceJSONFence(value string) string {
+	value = strings.TrimSpace(value)
+	for _, opening := range []string{"```json\n", "```\n", "```json\r\n", "```\r\n"} {
+		if strings.HasPrefix(value, opening) && strings.HasSuffix(value, "\n```") {
+			return strings.TrimSuffix(strings.TrimPrefix(value, opening), "\n```")
+		}
+	}
+	return value
 }

@@ -834,7 +834,7 @@ func TestBuildContinuationPrompt_PhaseContextPropagation(t *testing.T) {
 	}
 	executedStepIDs := []string{"step-1"}
 
-	_, _ = orch.buildContinuationPrompt(
+	prompt, err := orch.buildContinuationPrompt(
 		context.Background(),
 		"get weather in Zurich",
 		completedResults,
@@ -842,6 +842,22 @@ func TestBuildContinuationPrompt_PhaseContextPropagation(t *testing.T) {
 		"Need to geocode and get weather",
 		2,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := BuildIterativePlanningInstructions(&orch.config.IterativePlanning)
+	if strings.Count(prompt.Prompt, shared) != 1 {
+		t.Error("continuation must include the shared iterative contract exactly once")
+	}
+	for _, obsolete := range []string{
+		"false only if you need to discover new entities",
+		"Only use terminal: false if you need to discover new entities",
+		"<optimization_reminder>",
+	} {
+		if strings.Contains(prompt.Prompt, obsolete) {
+			t.Errorf("continuation retains contradictory planning guidance: %s", obsolete)
+		}
+	}
 
 	if capturedMetadata == nil {
 		t.Fatal("expected phaseContext to be passed to GetCapabilities, got nil")

@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -84,7 +85,7 @@ type SmartExecutor struct {
 
 	// Layer 3: LLM-based Error Analysis
 	// When enabled, uses LLM to analyze errors and determine if they can be fixed
-	// with different parameters (replaces the need for tools to set Retryable flags)
+	// with different parameters, subject to the tool's declared retry permission.
 	errorAnalyzer *ErrorAnalyzer // LLM-based error analyzer
 
 	// Layer 4: Contextual Re-Resolution for Semantic Retry
@@ -400,7 +401,7 @@ func (e *SmartExecutor) collectSourceDataFromDependencies(ctx context.Context, d
 	stepResults := e.collectDependencyResults(ctx, dependsOn)
 
 	// Convert each step result to flat key-value pairs
-	for _, result := range stepResults {
+	for sourceID, result := range stepResults {
 		if result == nil || result.Response == "" || !result.Success {
 			continue
 		}
@@ -416,10 +417,7 @@ func (e *SmartExecutor) collectSourceDataFromDependencies(ctx context.Context, d
 			continue
 		}
 
-		// Merge into sourceData (later steps may override earlier for same keys)
-		for k, v := range parsed {
-			sourceData[k] = v
-		}
+		sourceData[sourceID] = deserializeStringValues(parsed)
 	}
 
 	return sourceData
@@ -1046,20 +1044,19 @@ func (e *SmartExecutor) skipStepsWithFailedDeps(
 		// Template-induced set is the union of two sources:
 		//   - refs actually present in step.Metadata["parameters"] (authoritative:
 		//     these are what the runtime will try to resolve)
-		//   - step.ImplicitDeps declared by the LLM (advisory; may be stale or
-		//     missing). Including both gives defense in depth — if the LLM
-		//     forgot to mirror a template ref into ImplicitDeps or vice versa,
-		//     we still propagate the failure.
+		//   - step.ImplicitDeps declarations (validated for newly planned work;
+		//     legacy/resumed plans can contain stale or missing entries).
+		// Including both retains fail-closed behavior for plans that bypass
+		// current plan validation.
 		explicitSet := make(map[string]struct{}, len(step.DependsOn))
 		for _, d := range step.DependsOn {
 			explicitSet[d] = struct{}{}
 		}
 
-		templateRefSet := make(map[string]struct{})
-		if params, ok := step.Metadata["parameters"]; ok {
-			for id := range collectReferencedStepIDs(params) {
-				templateRefSet[id] = struct{}{}
-			}
+		actualTemplateRefs := collectReferencedStepIDs(step.Metadata["parameters"])
+		templateRefSet := make(map[string]struct{}, len(actualTemplateRefs))
+		for id := range actualTemplateRefs {
+			templateRefSet[id] = struct{}{}
 		}
 		for _, d := range step.ImplicitDeps {
 			templateRefSet[d] = struct{}{}
@@ -1159,12 +1156,18 @@ func (e *SmartExecutor) skipStepsWithFailedDeps(
 			errMsg = "skipped due to failed dependencies: " + strings.Join(allFailedDeps, ", ")
 		}
 		if blockingReason == blockingReasonTemplate {
+			// For legacy/resumed plans a declaration may lack a template.
+			// Retain fail-closed behavior without inventing a parameter reference.
+			dependencyDetail := "implicit_deps declares " + failedDep + " but that step failed"
+			if _, referenced := actualTemplateRefs[failedDep]; referenced {
+				dependencyDetail = "parameter references {{" + failedDep + "...}} but that step failed"
+			}
 			// Error string is for user/operator-facing readability. The
 			// structured signal consumed by remediation is on Metadata below —
 			// keeping both in lock-step avoids string-coupling (prefix
 			// remains useful for operator diagnostics only).
 			errMsg = templateInducedSkipErrorPrefix + " " + failedDep +
-				" (parameter references {{" + failedDep + "...}} but that step failed)"
+				" (" + dependencyDetail + ")"
 			if len(allFailedDeps) > 1 {
 				// allFailedDeps is sorted, so failedDep may not be at
 				// position 0 anymore. Filter it out instead of slicing
@@ -1177,7 +1180,7 @@ func (e *SmartExecutor) skipStepsWithFailedDeps(
 					}
 				}
 				errMsg = templateInducedSkipErrorPrefix + " " + failedDep +
-					" (parameter references {{" + failedDep + "...}} but that step failed; additional failed upstreams: " +
+					" (" + dependencyDetail + "; additional failed upstreams: " +
 					strings.Join(others, ", ") + ")"
 			}
 		}
@@ -1197,15 +1200,27 @@ func (e *SmartExecutor) skipStepsWithFailedDeps(
 			metaKeyFailedDependency:      failedDep,
 			metaKeyAllFailedDependencies: allFailedDeps,
 		}
+		if params, ok := step.Metadata["parameters"]; ok {
+			// No payload was resolved or sent: keep the planned input distinct
+			// from StepResult.Parameters, which records dispatched parameters.
+			skipMeta["planned_parameters"] = params
+		}
+		capability, _ := step.Metadata["capability"].(string)
+		now := time.Now()
 		skippedResult := StepResult{
-			StepID:    step.StepID,
-			AgentName: step.AgentName,
-			Namespace: step.Namespace,
-			Success:   false,
-			Error:     errMsg,
-			StartTime: time.Now(),
-			Duration:  0,
-			Metadata:  skipMeta,
+			StepID:      step.StepID,
+			AgentName:   step.AgentName,
+			Capability:  capability,
+			Instruction: step.Instruction,
+			Namespace:   step.Namespace,
+			Success:     false,
+			Skipped:     true,
+			SkipReason:  errMsg,
+			Error:       errMsg,
+			StartTime:   now,
+			EndTime:     now,
+			Duration:    0,
+			Metadata:    skipMeta,
 		}
 		stepResults[step.StepID] = &skippedResult
 		result.Steps = append(result.Steps, skippedResult)
@@ -1283,11 +1298,12 @@ func (e *SmartExecutor) findReadySteps(plan *RoutingPlan, executed map[string]bo
 	return ready
 }
 
-// templateAutoInclude records a dependency that was auto-included because the LLM
-// plan used a {{step-N...}} template but omitted the step from depends_on.
+// templateAutoInclude records a template source loaded outside depends_on.
+// Declared prior-phase sources are valid inputs, not repaired planner mistakes.
 type templateAutoInclude struct {
 	ReferencedStep string `json:"referenced_step"`
 	Template       string `json:"template"`
+	Reason         string `json:"reason"`
 }
 
 // buildStepContext creates context with dependency results for template interpolation.
@@ -1298,7 +1314,7 @@ func (e *SmartExecutor) buildStepContext(ctx context.Context, step RoutingStep, 
 	// This enables templates like {{step-1.response.data.id}} to resolve correctly
 	deps := make(map[string]map[string]interface{})
 	for _, depID := range step.DependsOn {
-		if result, ok := results[depID]; ok && result.Response != "" {
+		if result, ok := results[depID]; ok && result != nil && result.Success && !result.Skipped && result.Response != "" {
 			// Parse the JSON response to enable field access in templates
 			var parsed map[string]interface{}
 			if err := json.Unmarshal([]byte(result.Response), &parsed); err != nil {
@@ -1350,7 +1366,7 @@ func (e *SmartExecutor) buildStepContext(ctx context.Context, step RoutingStep, 
 					continue
 				}
 				// Auto-include the referenced step's result
-				if result, ok := results[referencedStepID]; ok && result.Response != "" {
+				if result, ok := results[referencedStepID]; ok && result != nil && result.Success && !result.Skipped && result.Response != "" {
 					var parsed map[string]interface{}
 					if err := json.Unmarshal([]byte(result.Response), &parsed); err == nil {
 						// Fix double-serialization (see §4.6)
@@ -1358,19 +1374,38 @@ func (e *SmartExecutor) buildStepContext(ctx context.Context, step RoutingStep, 
 							parsed = deserialized
 						}
 						deps[referencedStepID] = map[string]interface{}{"response": parsed}
+						reason := "undeclared_reference"
+						if slices.Contains(step.ImplicitDeps, referencedStepID) {
+							reason = "declared_prior_phase"
+						}
 						autoIncludes = append(autoIncludes, templateAutoInclude{
 							ReferencedStep: referencedStepID,
 							Template:       strVal,
+							Reason:         reason,
 						})
 						if e.logger != nil {
-							e.logger.WarnWithContext(ctx, "Auto-included step for template resolution (missing from depends_on)", map[string]interface{}{
+							fields := map[string]interface{}{
 								"operation":       "template_dependency_auto_include",
 								"request_id":      requestID,
 								"step_id":         step.StepID,
 								"referenced_step": referencedStepID,
 								"template":        strVal,
-							})
+								"reason":          reason,
+							}
+							if reason == "declared_prior_phase" {
+								e.logger.DebugWithContext(ctx, "Loaded declared prior-phase template source", fields)
+							} else {
+								e.logger.WarnWithContext(ctx, "Auto-included step for template resolution (missing from depends_on)", fields)
+							}
 						}
+						telemetry.AddSpanEvent(ctx, "orchestration.template.dependency_inclusion",
+							attribute.String("reason", reason),
+							attribute.String("step_id", step.StepID),
+							attribute.String("referenced_step", referencedStepID))
+						telemetry.Counter("orchestration.template.dependency_inclusion",
+							"reason", reason, "module", telemetry.ModuleOrchestration)
+						// Preserve the legacy inclusion total and its existing labels.
+						// It counts source loads, not planner errors.
 						telemetry.Counter("orchestration.template.auto_dependency",
 							"step_id", step.StepID,
 							"referenced_step", referencedStepID,
@@ -2095,7 +2130,7 @@ func decideRemediation(
 //
 // Prompt-injection note: FailedDepError is sourced from prior StepResult.Error
 // which originates in the framework's own executor (HTTP error bodies, Go
-// error strings). Not user-controlled. Still truncated and single-lined so a
+// error strings). Tool errors may echo caller-controlled values. Truncated and single-lined so a
 // verbose or noisy upstream cannot unbalance the continuation prompt.
 func buildRemediationContinuationNote(
 	skips []TemplateInducedSkip,
@@ -2386,27 +2421,9 @@ func (e *SmartExecutor) substituteTemplates(
 			})
 		}
 
-		// Validate that the resolved value is a primitive type suitable for HTTP parameters
-		switch v := value.(type) {
-		case float64, int, int64, string, bool, json.Number:
-			return value // Safe primitive types (json.Number preserves large-ID digits verbatim)
-		case map[string]interface{}, []interface{}:
-			// Complex types - convert to JSON string for safety
-			if e.logger != nil {
-				e.logger.Info("Template resolved to complex type, converting to JSON", map[string]interface{}{
-					"operation":  "complex_type_conversion",
-					"template":   template,
-					"value_type": fmt.Sprintf("%T", v),
-				})
-			}
-			jsonBytes, err := json.Marshal(v)
-			if err != nil {
-				return template // Fall back to original on marshal error
-			}
-			return string(jsonBytes)
-		default:
-			return value // Other types pass through
-		}
+		// A whole-value reference is a typed binding, not string interpolation.
+		// The schema-aware dispatch boundary decides compatibility before coercion.
+		return cloneGeneratedValue(value)
 	}
 
 	// Multiple templates or template is part of a larger string - substitute as strings
@@ -2516,83 +2533,11 @@ func (e *SmartExecutor) resolveUnresolvedTemplatesWithLLM(
 	if params == nil || e.hybridResolver == nil {
 		return params
 	}
-
-	// Collect all source data from dependencies
-	sourceData := make(map[string]interface{})
-	for _, result := range depResults {
-		for k, v := range result {
-			sourceData[k] = v
-		}
+	result := cloneParameterMap(params)
+	for name, value := range result {
+		result[name] = e.resolveScopedTemplateValue(ctx, value, name, depResults, stepID)
 	}
-
-	// Scan for unresolved templates
-	for paramName, paramValue := range params {
-		strVal, ok := paramValue.(string)
-		if !ok {
-			continue
-		}
-
-		// Check if value still contains unresolved template pattern
-		if !strings.Contains(strVal, "{{") || !strings.Contains(strVal, "}}") {
-			continue
-		}
-
-		// Found unresolved template - try to resolve semantically
-		if e.logger != nil {
-			e.logger.Info("SEMANTIC FALLBACK: Attempting LLM resolution for unresolved template", map[string]interface{}{
-				"step_id":        stepID,
-				"param_name":     paramName,
-				"template_value": strVal,
-				"source_keys":    getMapKeys(sourceData),
-			})
-		}
-
-		// Build a semantic hint based on the template pattern
-		// Extract what the template was trying to get (e.g., "currency" from "{{step-2.response.data.country.currency}}")
-		hint := fmt.Sprintf(
-			"The template '%s' tried to extract a value but the path doesn't exist. "+
-				"Based on the available data, infer what value was intended for parameter '%s'. "+
-				"Look for related information that can be used to determine the correct value.",
-			strVal, paramName)
-
-		// Use hybrid resolver's semantic value resolution
-		resolved, err := e.hybridResolver.ResolveSemanticValue(ctx, sourceData, paramName, hint, "string", stepID)
-		if err != nil {
-			if e.logger != nil {
-				e.logger.Warn("SEMANTIC FALLBACK FAILED: Could not resolve template", map[string]interface{}{
-					"step_id":        stepID,
-					"param_name":     paramName,
-					"template_value": strVal,
-					"error":          err.Error(),
-				})
-			}
-			continue
-		}
-
-		// Successfully resolved - update parameter
-		params[paramName] = resolved
-		if e.logger != nil {
-			e.logger.Info("SEMANTIC FALLBACK SUCCESS: Template resolved via LLM", map[string]interface{}{
-				"step_id":        stepID,
-				"param_name":     paramName,
-				"template_value": strVal,
-				"resolved_value": resolved,
-			})
-		}
-
-		// Telemetry for semantic resolution
-		telemetry.AddSpanEvent(ctx, "semantic_template_resolution",
-			attribute.String("step_id", stepID),
-			attribute.String("param_name", paramName),
-			attribute.String("original_template", strVal),
-		)
-		telemetry.Counter("orchestration.semantic_resolution.success",
-			"param_name", paramName,
-			"module", telemetry.ModuleOrchestration,
-		)
-	}
-
-	return params
+	return result
 }
 
 // getDepResultKeys returns the step IDs available in dependency results (for logging)
@@ -2799,7 +2744,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		result.Capability = cap // Persist in StepResult for downstream consumers (e.g., /query response steps[])
 	}
 	if params, ok := step.Metadata["parameters"].(map[string]interface{}); ok {
-		parameters = params
+		parameters = cloneParameterMap(params)
 	}
 
 	// =========================================================================
@@ -2827,7 +2772,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			attribute.Int("param_count", len(preResolved)),
 		)
 		// Use pre-resolved params directly - these are what the user approved
-		parameters = preResolved
+		parameters = cloneParameterMap(preResolved)
 
 		// Track user-provided parameters in resolution metadata (Phase 8)
 		if result.Metadata == nil {
@@ -2848,6 +2793,14 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			}
 		}
 	} else {
+		// Exact references take precedence, including prior-phase step results.
+		bindingSources, _ := ctx.Value(dependencyResultsKey).(map[string]map[string]interface{})
+		parameters = e.interpolateParameters(parameters, bindingSources)
+		originalParams, _ := step.Metadata["parameters"].(map[string]interface{})
+		if result.Metadata == nil {
+			result.Metadata = make(map[string]interface{})
+		}
+		result.Metadata["bindings"] = parameterBindingEvidence(originalParams, parameters)
 		// Normal flow: resolve parameters from dependencies
 		// Parameter Resolution: Hybrid auto-wiring OR legacy template interpolation
 		// When hybrid resolution is enabled, it uses intelligent name-matching and optional LLM
@@ -2872,6 +2825,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			// Phase 4: Hybrid Parameter Resolution (preferred)
 			// Get the capability schema for target parameter types
 			capabilityForResolution := e.findCapabilitySchema(agentInfo, capability)
+			capabilityForResolution = missingParameterCapability(capabilityForResolution, parameters)
 			if e.logger != nil {
 				e.logger.InfoWithContext(ctx, "findCapabilitySchema result", map[string]interface{}{
 					"step_id":        step.StepID,
@@ -2909,12 +2863,9 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 						parameters = make(map[string]interface{})
 					}
 					for key, val := range resolutionResult.Parameters {
-						existing, exists := parameters[key]
+						_, exists := parameters[key]
 						if !exists {
 							// Key doesn't exist, add resolved value
-							parameters[key] = val
-						} else if strVal, ok := existing.(string); ok && strings.Contains(strVal, "{{") {
-							// Existing value is a template string - replace with resolved value
 							parameters[key] = val
 						}
 						// Otherwise, preserve the existing hardcoded value
@@ -2991,6 +2942,15 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		if e.hybridResolver != nil && e.useHybridResolution && paramsContainUnresolvedFrameworkMacro(parameters) {
 			parameters = e.resolveUnresolvedTemplatesWithLLM(ctx, parameters, depResults, step.StepID)
 		}
+		if bindings, ok := result.Metadata["bindings"].(map[string]interface{}); ok {
+			for key, entry := range bindings {
+				binding := entry.(map[string]interface{})
+				if binding["method"] == "unresolved" && !paramsContainUnresolvedFrameworkMacro(map[string]interface{}{key: parameters[key]}) {
+					binding["method"] = "inferred"
+				}
+				binding["value"] = cloneGeneratedValue(parameters[key])
+			}
+		}
 	} // End of else block for normal parameter resolution (non-resume path)
 
 	// =========================================================================
@@ -3001,6 +2961,26 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 	// This fixes LLM-generated parameters that have incorrect types (e.g., "35.6" instead of 35.6).
 	// The schema is obtained from the tool's InputSummary via the catalog.
 	capabilitySchema := e.findCapabilitySchema(agentInfo, capability)
+	if bindingErr := validateExactBindingShapes(parameters, capabilitySchema, result.Metadata, usePreResolved); bindingErr != nil {
+		result.Parameters = cloneParameterMap(parameters)
+		result.Success = false
+		result.Error = bindingErr.Error()
+		result.EndTime = time.Now()
+		result.Metadata["failure_kind"] = "binding_shape_mismatch"
+		result.Metadata["dispatch_count"] = 0
+		telemetry.RecordSpanError(ctx, bindingErr)
+		telemetry.AddSpanEvent(ctx, "parameter.binding.rejected",
+			attribute.String("request_id", GetRequestID(ctx)), attribute.String("step_id", step.StepID),
+			attribute.String("reason", "shape_mismatch"), attribute.Int("dispatch_count", 0))
+		telemetry.Counter("orchestration.parameter.binding_rejected", "module", telemetry.ModuleOrchestration, "reason", "shape_mismatch")
+		if e.logger != nil {
+			e.logger.ErrorWithContext(ctx, "Exact binding is incompatible with capability input", map[string]interface{}{
+				"operation": "parameter_binding", "request_id": GetRequestID(ctx), "step_id": step.StepID,
+				"error_type": "shape_mismatch", "error": bindingErr.Error(), "dispatch_count": 0,
+			})
+		}
+		return result
+	}
 
 	// INFO: Diagnostic log to understand coercion entry point
 	if e.logger != nil {
@@ -3019,7 +2999,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		})
 	}
 
-	if capabilitySchema != nil && len(capabilitySchema.Parameters) > 0 {
+	if !usePreResolved && capabilitySchema != nil && len(capabilitySchema.Parameters) > 0 {
 		coerced, coercionLog := coerceParameterTypes(parameters, capabilitySchema.Parameters)
 		if len(coercionLog) > 0 {
 			// Telemetry: Add span event for distributed tracing visibility
@@ -3275,9 +3255,27 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 	}
 	validationRetries := 0
 	previousErrors := []string{} // Layer 4: tracks error history for semantic retry
+	// Exact references and approved input cannot be changed by local correction.
+	protected := make(map[string]interface{})
+	if bindings, ok := result.Metadata["bindings"].(map[string]interface{}); ok {
+		for key, entry := range bindings {
+			if entry.(map[string]interface{})["method"] == "exact" {
+				protected[key] = cloneGeneratedValue(parameters[key])
+			}
+		}
+	}
+	if usePreResolved {
+		protected = cloneParameterMap(parameters)
+	}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		result.Attempts = attempt
+		if validationErr := validateDispatchParameters(parameters, capabilitySchema); validationErr != nil {
+			result.Error = validationErr.Error()
+			telemetry.RecordSpanError(ctx, validationErr)
+			break
+		}
+		result.Parameters = cloneParameterMap(parameters)
 		isTransientErrorDetected := false // Reset for each attempt - tracks if LLM identified transient error
 
 		if e.logger != nil {
@@ -3317,6 +3315,12 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			// Tools expect raw parameters (default for backward compatibility)
 			response, responseBody, err = e.callTool(callCtx, url, parameters)
 		}
+		result.DispatchCount++
+		dispatch := StepDispatch{Number: result.DispatchCount, Parameters: cloneParameterMap(parameters), Response: responseBody, Success: err == nil}
+		if err != nil {
+			dispatch.Error = err.Error()
+		}
+		result.Dispatches = append(result.Dispatches, dispatch)
 		if err == nil {
 			if e.logger != nil {
 				e.logger.DebugWithContext(ctx, "Agent HTTP call successful", map[string]interface{}{
@@ -3333,6 +3337,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			// successful result so consumers never receive Success=true and a
 			// stale failure at the same time.
 			result.Error = ""
+			result.ToolError = nil
 			result.Response = response
 
 			// Aggregate child orchestrator's token usage into parent accumulator
@@ -3348,11 +3353,10 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			break
 		}
 
-		// Component errors and error bodies are untrusted external text. Sanitize
-		// them once at the execution boundary before they can reach retry prompts,
-		// step state, logs, traces, HITL checkpoints, or execution debug records.
-		// This preserves diagnostic structure while preventing credentials embedded
-		// in an upstream URL or error body from spreading through the lifecycle.
+		// Structured errors and dispatch records retain the original payload.
+		// The following legacy text transformation is not a lifecycle-wide
+		// sanitization guarantee; application data protection is adopter-owned.
+		result.ToolError = componentError(responseBody)
 		responseBody = core.RedactSensitiveText(responseBody)
 		err = sanitizeExecutionError(err)
 		// Preserve the sanitized component failure before any analyzer or
@@ -3361,15 +3365,32 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		// retry block below; leaving Error empty makes downstream callbacks
 		// unable to classify the authoritative tool outcome.
 		result.Error = err.Error()
+		status := extractHTTPStatusFromError(err)
+		policy := componentRetryPolicy(dispatch.Response)
+		if policy != nil && !*policy {
+			if e.logger != nil {
+				e.logger.InfoWithContext(ctx, "Component forbids retry; stopping step", map[string]interface{}{
+					"operation": "step_retry_stopped", "step_id": step.StepID,
+					"request_id":  GetRequestID(ctx),
+					"http_status": status, "reason": "component_retry_forbidden",
+				})
+			}
+			break
+		}
+		correctionAllowed := !usePreResolved
+		if terminalHTTPStatus(status) || (!correctionAllowed && !transientHTTPStatus(status)) {
+			break
+		}
 		// Layer 3: LLM-based Error Analysis (Phase 4 Enhancement)
 		// When ErrorAnalyzer is configured, use LLM to determine if error can be fixed
-		// with different parameters. This replaces the need for tools to set Retryable flags.
+		// with different parameters when correction is permitted. An explicit
+		// retryable:false on any response has already stopped the retry loop.
 		// HTTP Status Routing:
 		//   - 400, 404, 409, 422 → LLM Error Analyzer (might be fixable with different input)
 		//   - 408, 429, 5xx      → Resilience module (same payload + exponential backoff)
 		//   - 401, 403, 405      → Fail immediately (auth/permission issues)
 		isOrchestrator := capabilitySchema != nil && capabilitySchema.Type == core.CapabilityOrchestrator
-		if e.errorAnalyzer != nil && e.errorAnalyzer.IsEnabled() && !isOrchestrator && validationRetries < e.maxValidationRetries {
+		if correctionAllowed && e.errorAnalyzer != nil && e.errorAnalyzer.IsEnabled() && !isOrchestrator && validationRetries < e.maxValidationRetries {
 			httpStatus := extractHTTPStatusFromError(err)
 
 			// Build error analysis context
@@ -3463,13 +3484,25 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 					}
 				}
 
-				// Merge suggested changes into parameters (no-op if empty)
-				for key, val := range analysisResult.SuggestedChanges {
-					parameters[key] = val
+				corrected := cloneParameterMap(parameters)
+				if corrected == nil {
+					corrected = make(map[string]interface{})
 				}
-
-				attempt-- // Retry with corrected parameters (don't count as regular retry)
-				continue
+				for key, val := range analysisResult.SuggestedChanges {
+					corrected[key] = cloneGeneratedValue(val)
+				}
+				if capabilitySchema != nil {
+					corrected, _ = coerceParameterTypes(corrected, capabilitySchema.Parameters)
+				}
+				if !validParameterCorrection(parameters, corrected, protected) || validateDispatchParameters(corrected, capabilitySchema) != nil {
+					if !transientHTTPStatus(status) {
+						break
+					}
+				} else {
+					parameters = corrected
+					attempt-- // Corrected-input budget is distinct from regular retries.
+					continue
+				}
 			} else if !analysisResult.ShouldRetry {
 				// LLM determined this error is not fixable
 				if e.logger != nil {
@@ -3501,7 +3534,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 				// ============================================================
 				if e.contextualReResolver != nil && validationRetries < e.maxSemanticRetries {
 					// Collect source data from dependencies (may be empty for independent steps)
-					sourceData := e.collectSourceDataFromDependencies(ctx, step.DependsOn)
+					sourceData := e.collectSourceDataFromDependencies(ctx, append(append([]string(nil), step.DependsOn...), step.ImplicitDeps...))
 
 					// Check if semantic retry for independent steps is enabled
 					// When disabled, skip Layer 4 for steps without dependencies (old behavior)
@@ -3531,56 +3564,66 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 						}
 
 						reResult, reErr := e.contextualReResolver.ReResolve(ctx, execCtx)
-						if reErr == nil && reResult.ShouldRetry && len(reResult.CorrectedParameters) > 0 {
-							validationRetries++
-							previousErrors = append(previousErrors, responseBody)
+						if reErr == nil && reResult != nil && reResult.ShouldRetry && len(reResult.CorrectedParameters) > 0 {
+							corrected := cloneParameterMap(reResult.CorrectedParameters)
+							if capabilitySchema != nil {
+								corrected, _ = coerceParameterTypes(corrected, capabilitySchema.Parameters)
+							}
+							validCorrection := validParameterCorrection(parameters, corrected, protected) && validateDispatchParameters(corrected, capabilitySchema) == nil
+							if !validCorrection && !transientHTTPStatus(status) {
+								break
+							}
+							if validCorrection {
+								validationRetries++
+								previousErrors = append(previousErrors, responseBody)
 
-							// Telemetry: Record semantic retry
-							correctedJSON, _ := json.Marshal(reResult.CorrectedParameters)
-							telemetry.AddSpanEvent(ctx, "semantic_retry_applied",
-								attribute.String("step_id", step.StepID),
-								attribute.String("capability", capability),
-								attribute.String("analysis", reResult.Analysis),
-								attribute.String("corrected_params", string(correctedJSON)),
-								attribute.Bool("independent_step", isIndependentStep),
-							)
+								// Telemetry: Record semantic retry
+								correctedJSON, _ := json.Marshal(reResult.CorrectedParameters)
+								telemetry.AddSpanEvent(ctx, "semantic_retry_applied",
+									attribute.String("step_id", step.StepID),
+									attribute.String("capability", capability),
+									attribute.String("analysis", reResult.Analysis),
+									attribute.String("corrected_params", string(correctedJSON)),
+									attribute.Bool("independent_step", isIndependentStep),
+								)
 
-							// Separate metric for independent step retries
-							if isIndependentStep {
-								telemetry.Counter("orchestration.semantic_retry.independent_step",
+								// Separate metric for independent step retries
+								if isIndependentStep {
+									telemetry.Counter("orchestration.semantic_retry.independent_step",
+										"capability", capability,
+										"module", telemetry.ModuleOrchestration,
+									)
+								}
+
+								telemetry.Counter("orchestration.semantic_retry.applied",
 									"capability", capability,
 									"module", telemetry.ModuleOrchestration,
 								)
-							}
 
-							telemetry.Counter("orchestration.semantic_retry.applied",
-								"capability", capability,
-								"module", telemetry.ModuleOrchestration,
-							)
-
-							if e.logger != nil {
-								e.logger.InfoWithContext(ctx, "SEMANTIC RETRY: Applying corrected parameters", map[string]interface{}{
-									"operation":            "semantic_retry_applied",
-									"step_id":              step.StepID,
-									"capability":           capability,
-									"analysis":             reResult.Analysis,
-									"corrected_parameters": reResult.CorrectedParameters,
-									"semantic_retry_count": validationRetries,
-									"independent_step":     isIndependentStep,
-								})
-							}
-
-							// Update resolution metadata with semantic retry count (Phase 8)
-							if result.Metadata != nil {
-								if resMeta, ok := result.Metadata["resolution"].(*ResolutionMetadata); ok {
-									resMeta.SemanticRetryCount = validationRetries
+								if e.logger != nil {
+									e.logger.InfoWithContext(ctx, "SEMANTIC RETRY: Applying corrected parameters", map[string]interface{}{
+										"operation":            "semantic_retry_applied",
+										"step_id":              step.StepID,
+										"capability":           capability,
+										"analysis":             reResult.Analysis,
+										"corrected_parameters": reResult.CorrectedParameters,
+										"semantic_retry_count": validationRetries,
+										"independent_step":     isIndependentStep,
+									})
 								}
-							}
 
-							// Replace parameters and retry
-							parameters = reResult.CorrectedParameters
-							attempt-- // Don't count as regular retry
-							continue  // Go back to HTTP call with new params
+								// Update resolution metadata with semantic retry count (Phase 8)
+								if result.Metadata != nil {
+									if resMeta, ok := result.Metadata["resolution"].(*ResolutionMetadata); ok {
+										resMeta.SemanticRetryCount = validationRetries
+									}
+								}
+
+								// Replace parameters and retry
+								parameters = corrected
+								attempt-- // Don't count as regular retry
+								continue  // Go back to HTTP call with new params
+							}
 						}
 
 						// Re-resolution failed or said don't retry
@@ -3602,7 +3645,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 				// resilience retry (same payload + exponential backoff) instead
 				// of breaking out of the retry loop.
 				// ============================================================
-				if analysisResult.IsTransientError {
+				if transientHTTPStatus(httpStatus) {
 					isTransientErrorDetected = true // Flag to skip isNonRetryableToolError check below
 					if e.logger != nil {
 						e.logger.InfoWithContext(ctx, "Transient error detected, continuing with resilience retry", map[string]interface{}{
@@ -3642,7 +3685,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		// 1. Type-related errors (string patterns like "cannot unmarshal", "type mismatch")
 		// 2. Tool errors with Retryable: true (structured ToolResponse.Error.Retryable)
 		// This ensures AI correction for ALL retryable errors per INTELLIGENT_ERROR_HANDLING.md
-		if e.errorAnalyzer == nil && e.validationFeedbackEnabled && e.correctionCallback != nil &&
+		if correctionAllowed && !isOrchestrator && !terminalHTTPStatus(status) && e.errorAnalyzer == nil && e.validationFeedbackEnabled && e.correctionCallback != nil &&
 			validationRetries < e.maxValidationRetries && shouldAttemptAICorrection(err, responseBody) {
 
 			validationRetries++
@@ -3676,34 +3719,43 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			}
 
 			// Request correction from LLM via callback
-			correctedParams, corrErr := e.correctionCallback(ctx, step, parameters, err.Error(), capabilitySchema)
+			correctedParams, corrErr := e.correctionCallback(ctx, step, cloneParameterMap(parameters), err.Error(), capabilitySchema)
 			if corrErr == nil && correctedParams != nil {
-				// Telemetry: Record successful correction with corrected parameters
-				// Serialize corrected params for visibility in distributed traces
-				correctedParamsJSON, _ := json.Marshal(correctedParams)
-				telemetry.AddSpanEvent(ctx, "validation_feedback_success",
-					attribute.String("step_id", step.StepID),
-					attribute.Int("retries_used", validationRetries),
-					attribute.String("corrected_params", truncateString(string(correctedParamsJSON), 500)),
-				)
-				telemetry.Counter("orchestration.validation_feedback.success",
-					"capability", capability,
-					"module", telemetry.ModuleOrchestration,
-				)
-
-				if e.logger != nil {
-					e.logger.DebugWithContext(ctx, "Parameters corrected by LLM", map[string]interface{}{
-						"operation":  "validation_feedback_success",
-						"step_id":    step.StepID,
-						"capability": capability,
-						"new_params": correctedParams,
-					})
+				correctedParams = cloneParameterMap(correctedParams)
+				if capabilitySchema != nil {
+					correctedParams, _ = coerceParameterTypes(correctedParams, capabilitySchema.Parameters)
 				}
+				if validParameterCorrection(parameters, correctedParams, protected) && validateDispatchParameters(correctedParams, capabilitySchema) == nil {
+					// Telemetry: Record successful correction with corrected parameters
+					// Serialize corrected params for visibility in distributed traces
+					correctedParamsJSON, _ := json.Marshal(correctedParams)
+					telemetry.AddSpanEvent(ctx, "validation_feedback_success",
+						attribute.String("step_id", step.StepID),
+						attribute.Int("retries_used", validationRetries),
+						attribute.String("corrected_params", truncateString(string(correctedParamsJSON), 500)),
+					)
+					telemetry.Counter("orchestration.validation_feedback.success",
+						"capability", capability,
+						"module", telemetry.ModuleOrchestration,
+					)
 
-				// Update parameters and retry without incrementing attempt count
-				parameters = correctedParams
-				attempt-- // Retry with corrected parameters (don't count as regular retry)
-				continue
+					if e.logger != nil {
+						e.logger.DebugWithContext(ctx, "Parameters corrected by LLM", map[string]interface{}{
+							"operation":  "validation_feedback_success",
+							"step_id":    step.StepID,
+							"capability": capability,
+							"new_params": correctedParams,
+						})
+					}
+
+					// Update parameters and retry without incrementing attempt count
+					parameters = correctedParams
+					attempt-- // Retry with corrected parameters (don't count as regular retry)
+					continue
+				}
+				if !transientHTTPStatus(status) {
+					break
+				}
 			}
 
 			// Correction failed
@@ -3722,7 +3774,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 					"operation":  "validation_feedback_failed",
 					"step_id":    step.StepID,
 					"capability": capability,
-					"error":      corrErr.Error(),
+					"error":      fmt.Sprint(corrErr),
 				})
 			}
 		}
@@ -3730,9 +3782,9 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		// Check if error is explicitly non-retryable - don't waste retries on permanent errors
 		// This prevents blind retries when a tool explicitly says "don't retry"
 		// (e.g., LOCATION_NOT_FOUND, INVALID_SYMBOL, COUNTRY_NOT_FOUND)
-		// IMPORTANT: Skip this check if LLM detected a transient error - LLM's assessment
-		// takes precedence over the tool's retryable flag for infrastructure issues
-		if !isTransientErrorDetected && isNonRetryableToolError(responseBody) {
+		// Transient HTTP retries are separate from corrected-input permission;
+		// a model's claim of transience cannot override the HTTP classification.
+		if !transientHTTPStatus(status) && !isTransientErrorDetected && isNonRetryableToolError(responseBody) {
 			// Telemetry: Record that we stopped early due to non-retryable error
 			telemetry.AddSpanEvent(ctx, "non_retryable_error_detected",
 				attribute.String("step_id", step.StepID),
@@ -3758,6 +3810,10 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			break
 		}
 
+		// Permission to correct never permits an unchanged non-transient 4xx.
+		if nonTransientClientError(status) {
+			break
+		}
 		// Regular error handling
 		logLevel := "Debug" // Use DEBUG for retry attempts
 		if attempt == maxAttempts {
@@ -4049,6 +4105,13 @@ func coerceParameterTypes(params map[string]interface{}, schema []Parameter) (ma
 			result[key] = value
 			continue
 		}
+		// Literal or bound strings already satisfy a string contract. In
+		// particular, JSON-looking application text is not a request to extract
+		// an ID. Semantic map extraction remains in the resolver/coerceValue.
+		if _, isString := value.(string); isString && expectedType == "string" {
+			result[key] = value
+			continue
+		}
 
 		coerced, wasCoerced := coerceValue(value, expectedType)
 		result[key] = coerced
@@ -4287,31 +4350,8 @@ func shouldAttemptAICorrection(err error, responseBody string) bool {
 //	  }
 //	}
 func isRetryableToolError(responseBody string) bool {
-	if responseBody == "" {
-		return false
-	}
-
-	// Try to parse as ToolResponse structure
-	var response struct {
-		Success bool `json:"success"`
-		Error   *struct {
-			Code      string `json:"code"`
-			Message   string `json:"message"`
-			Category  string `json:"category"`
-			Retryable bool   `json:"retryable"`
-		} `json:"error"`
-	}
-
-	if err := json.Unmarshal([]byte(responseBody), &response); err != nil {
-		return false
-	}
-
-	// Check if it's a failed response with a retryable error
-	if !response.Success && response.Error != nil && response.Error.Retryable {
-		return true
-	}
-
-	return false
+	policy := componentRetryPolicy(responseBody)
+	return policy != nil && *policy
 }
 
 // isNonRetryableToolError parses the response body as a ToolResponse and checks
@@ -4326,32 +4366,8 @@ func isRetryableToolError(responseBody string) bool {
 //
 // Returns true if the response explicitly has success:false AND retryable:false
 func isNonRetryableToolError(responseBody string) bool {
-	if responseBody == "" {
-		return false
-	}
-
-	// Try to parse as ToolResponse structure
-	var response struct {
-		Success bool `json:"success"`
-		Error   *struct {
-			Code      string `json:"code"`
-			Message   string `json:"message"`
-			Retryable bool   `json:"retryable"`
-		} `json:"error"`
-	}
-
-	if err := json.Unmarshal([]byte(responseBody), &response); err != nil {
-		return false
-	}
-
-	// Check if it's a failed response with error info explicitly marked as non-retryable
-	// Note: We check for Error != nil and explicitly !Retryable
-	// This only returns true when the tool explicitly said "don't retry"
-	if !response.Success && response.Error != nil && !response.Error.Retryable {
-		return true
-	}
-
-	return false
+	policy := componentRetryPolicy(responseBody)
+	return policy != nil && !*policy
 }
 
 // extractHTTPStatusFromError extracts the HTTP status code from an error message.

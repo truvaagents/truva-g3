@@ -58,6 +58,11 @@ func TestConvertBasicCapabilities_OutputSummary(t *testing.T) {
 	if fields[2].Default != "3773" {
 		t.Errorf("Expected default '3773', got %v", fields[2].Default)
 	}
+	for i, want := range []string{"Full analysis in markdown", "Model used", "Token count"} {
+		if fields[i].Description != want {
+			t.Errorf("field %d description lost during conversion: got %q, want %q", i, fields[i].Description, want)
+		}
+	}
 }
 
 func TestConvertBasicCapabilities_NoOutputSummary(t *testing.T) {
@@ -186,9 +191,9 @@ func TestFormatForLLM_ReturnFields(t *testing.T) {
 
 	expectedStrings := []string{
 		"Return Fields:",
-		"analysis: string - Full analysis",
-		"model: string - Model used",
-		"tokens_used: number - Token count",
+		"analysis:string",
+		"model:string",
+		"tokens_used:number",
 	}
 
 	for _, expected := range expectedStrings {

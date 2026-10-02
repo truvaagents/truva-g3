@@ -31,13 +31,7 @@ func GetHealth() Health {
 		}
 	}
 
-	r, ok := registry.(*Registry)
-	if !ok || r == nil {
-		return Health{
-			Enabled:     false,
-			Initialized: false,
-		}
-	}
+	r := registry
 
 	// Get last error
 	lastErr := ""
@@ -110,7 +104,7 @@ func GetInternalMetrics() InternalMetrics {
 	registry := globalRegistry.Load()
 	emitted := int64(0)
 	if registry != nil {
-		r := registry.(*Registry)
+		r := registry
 		emitted = r.emitted.Load()
 	}
 
@@ -128,7 +122,7 @@ func ResetInternalMetrics() {
 
 	registry := globalRegistry.Load()
 	if registry != nil {
-		r := registry.(*Registry)
+		r := registry
 		r.emitted.Store(0)
 	}
 }

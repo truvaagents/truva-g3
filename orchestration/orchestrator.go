@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -677,6 +678,12 @@ func NewAIOrchestrator(config *OrchestratorConfig, discovery core.Discovery, aiC
 	// Propagate result trim config and synthesis parameters to synthesizer
 	o.synthesizer.SetResultTrimConfig(&config.ResultTrim)
 	o.synthesizer.SetAIOptionsOverride(config.SynthesisAIOptions)
+	if err := o.synthesizer.SetFailedOperationView(config.FailedOperationView); err != nil {
+		cancel()
+		recordingCancel()
+		o.constructionErr = err
+		return o
+	}
 
 	// Initialize capability provider based on configuration
 	switch config.CapabilityProviderType {
@@ -1405,6 +1412,9 @@ func (o *AIOrchestrator) storeExecutionSnapshotAsync(
 	if o.executionStore == nil {
 		return
 	}
+	if terminal {
+		result = executionWithRequestID(result, requestID)
+	}
 
 	// Capture timestamp now, not when goroutine runs (avoids timing drift)
 	createdAt := time.Now()
@@ -1432,6 +1442,7 @@ func (o *AIOrchestrator) storeExecutionSnapshotAsync(
 	resumeCheckpointID, isResume := IsResumeMode(ctx)
 
 	stored := &StoredExecution{
+		Lifecycle:           executionLifecycleSnapshot(ctx),
 		RequestID:           requestID,
 		OriginalRequestID:   originalRequestID,
 		TraceID:             traceID,
@@ -1507,6 +1518,7 @@ func (o *AIOrchestrator) storeExecutionSnapshotAsync(
 	}
 	recorder := o.executionRecorderFor(requestID)
 	recordSnapshot := executionRecordSnapshot{
+		HookRevision:       hookRevision,
 		Record:             stored,
 		CorrelationContext: ctx,
 		RequestID:          requestID,
@@ -1535,7 +1547,8 @@ func (o *AIOrchestrator) storeExecutionSnapshotAsync(
 				updated.PipelineHooks = hooks
 				updateSnapshot := recordSnapshot
 				updateSnapshot.Record = &updated
-				recorder.Record(updateSnapshot)
+				updated.PipelineHooks, updateSnapshot.HookRevision = hookHolder.SnapshotWithRevision()
+				recorder.RecordHookEffects(updateSnapshot)
 			},
 		)
 		hookHolder.SetTerminalPublisher(hookRevision, publisher)
@@ -1973,11 +1986,10 @@ func (o *AIOrchestrator) executePhaseLoop(
 		clarificationNeeded *ClarificationRequest    // set when planner emits NeedsUserInput
 		// One-shot guard for template-induced-skip remediation. Flipped to true
 		// the first time failed-dependency skips produce a remediation
-		// replan; prevents infinite loops if the remediation attempt also
-		// produces skips (the second skip round falls through to normal
-		// termination, and the synthesizer tells the user the service is
-		// unavailable).
+		// replan. Repeated dependency-only phases are bounded separately.
 		remediationAttempted bool
+		previousBlockedRoots []string
+		terminationReason    string
 		activePhaseSpan      core.Span
 		activePhaseCancel    context.CancelFunc
 	)
@@ -2067,7 +2079,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 			if phaseCount == 1 {
 				status = "executing"
 			}
-			if err := o.activityCoordinator.UpdateStatus(ctx, requestID, status); err != nil && o.logger != nil {
+			if err := updateExecutionActivity(ctx, o.activityCoordinator, requestID, status); err != nil && o.logger != nil {
 				o.logger.WarnWithContext(ctx, "Failed to update activity status", map[string]interface{}{
 					"operation":  "activity_status_update",
 					"request_id": requestID,
@@ -2118,6 +2130,9 @@ func (o *AIOrchestrator) executePhaseLoop(
 			phaseSpan = &core.NoOpSpan{}
 		}
 		activePhaseSpan = phaseSpan
+		// The selected prompt and correction history belong to this phase alone.
+		phaseAttempt := &phasePlanAttempt{}
+		phaseCtx = withPhasePlanAttempt(phaseCtx, phaseAttempt)
 
 		// --- Plan generation ---
 		var plan *RoutingPlan
@@ -2228,7 +2243,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 			// Build executedStepCaps from prior-phase completed results so
 			// (validateTemplatePaths) can validate cross-phase references. Sourced from actual
 			// StepResult data, NOT from LLM-declared implicit_deps:
-			// implicit_deps is advisory, not authoritative). Stable across the loop.
+			// declarations are not proof of existence). Stable across the loop.
 			var executedStepCaps map[string]stepCapability
 			if len(allStepResults) > 0 {
 				executedStepCaps = make(map[string]stepCapability, len(allStepResults))
@@ -2247,15 +2262,36 @@ func (o *AIOrchestrator) executePhaseLoop(
 				maxRounds = defaultMaxValidationRounds
 			}
 			validationStart := time.Now() // for duration_ms on the give-up path
+			var regenerationParseErr error
 
 			for round := 0; ; round++ {
-				// A2: collapse terminal synthesis pseudo-steps (→ zero-step terminal plan if all
-				// dropped). knownStepIDs rebuilt each round because regeneration changes plan.Steps.
-				o.normalizeTerminalSynthesisPlan(phaseCtx, plan, knownStepIDSet(executedStepIDs, plan), requestID)
-
-				valErr := o.runPlanValidationGauntlet(phaseCtx, plan, executedStepCaps, executedStepIDs, phaseCount, requestID)
+				valErr := regenerationParseErr
+				rawCandidate := plan
+				if valErr == nil {
+					// A2: normalize each parsed candidate before running every validator.
+					// A malformed regeneration has no candidate to normalize or validate.
+					o.normalizeTerminalSynthesisPlan(phaseCtx, plan, knownStepIDSet(executedStepIDs, plan), requestID)
+					var normalized *RoutingPlan
+					var normalizationCount int
+					normalized, normalizationCount, valErr = normalizeGeneratedPlan(plan, allStepResults)
+					if valErr == nil {
+						plan = normalized
+						if normalizationCount > 0 {
+							telemetry.AddSpanEvent(phaseCtx, "orchestrator.plan.normalized",
+								attribute.String("request_id", requestID),
+								attribute.Int("phase_number", phaseCount),
+								attribute.Int("changes", normalizationCount),
+							)
+						}
+						valErr = o.runPlanValidationGauntlet(phaseCtx, plan, executedStepCaps, executedStepIDs, phaseCount, requestID)
+					}
+				}
 				if valErr == nil {
 					break // passed every validator
+				}
+				phaseAttempt.rememberError(valErr)
+				if regenerationParseErr == nil {
+					phaseAttempt.rememberCandidate(rawCandidate)
 				}
 				if round >= maxRounds {
 					// Give up: an explicit phase failure beats dispatching a known-bad plan.
@@ -2289,7 +2325,10 @@ func (o *AIOrchestrator) executePhaseLoop(
 					if phaseCancel != nil {
 						phaseCancel()
 					}
-					return failedPhaseResult(nil), err
+					failed := failedPhaseResult(nil)
+					failed.CombinedResult.Metadata["termination_reason"] = "plan_validation_exhausted"
+					failed.CombinedResult.Metadata[MetadataKeyExecutionRequestID] = requestID
+					return failed, err
 				}
 
 				// Regenerate from the validation error and loop (re-normalize + re-validate from top).
@@ -2305,6 +2344,22 @@ func (o *AIOrchestrator) executePhaseLoop(
 					plan, err = o.regeneratePlan(phaseCtx, request, requestID, valErr)
 				}
 				if err != nil {
+					var parseErr *planRegenerationParseError
+					if errors.As(err, &parseErr) && phaseCtx.Err() == nil {
+						// Spend the same validation-regeneration budget on malformed output.
+						// Retain only the last parsed candidate's context (including terminal);
+						// it cannot reach hooks or execution without passing validation.
+						plan = originalPlan
+						regenerationParseErr = err
+						telemetry.AddSpanEvent(phaseCtx, "orchestrator.plan_validation.regeneration_parse_error",
+							attribute.String("request_id", requestID),
+							attribute.Int("phase_number", phaseCount),
+							attribute.Int("round", round+1),
+							attribute.Bool("will_retry", round+1 < maxRounds),
+							attribute.String("error", err.Error()),
+						)
+						continue
+					}
 					phaseSpan.RecordError(err)
 					phaseSpan.End()
 					if phaseCancel != nil {
@@ -2312,6 +2367,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 					}
 					return failedPhaseResult(nil), fmt.Errorf("failed to generate valid plan (phase %d): %w", phaseCount, err)
 				}
+				regenerationParseErr = nil
 				regenEvents = append(regenEvents, map[string]interface{}{
 					"phase_number":         phaseCount,
 					"validation_error":     valErr.Error(),
@@ -2685,6 +2741,25 @@ func (o *AIOrchestrator) executePhaseLoop(
 		}
 		activePhaseCancel = nil
 
+		// Completed failures are immutable: another all-skipped phase rooted
+		// in the same failures cannot supply new evidence. Give the planner
+		// one continuation to adapt, then synthesize the preserved results.
+		// Actual attempts (including polling and failed retries) reset this guard.
+		blockedRoots := blockedPhaseRoots(phaseResult.Steps, allStepResults)
+		if iterativeEnabled && !plan.IsTerminal() && len(blockedRoots) > 0 && slices.Equal(blockedRoots, previousBlockedRoots) {
+			forcedTerminal = true
+			terminationReason = "repeated_failed_dependencies"
+			telemetry.AddSpanEvent(ctx, "orchestrator.forced_terminal",
+				attribute.String("request_id", requestID),
+				attribute.String("reason", terminationReason),
+				attribute.Int("phase_number", phaseCount),
+				attribute.StringSlice("failed_dependencies", blockedRoots),
+			)
+			telemetry.RecordSpanError(ctx, errors.New("planning stopped after repeated dependency-only phases"))
+			break
+		}
+		previousBlockedRoots = blockedRoots
+
 		// --- Remediation on template-induced skips ---
 		// When one or more steps in this phase were skipped because their
 		// upstream template-referenced dependencies failed, detection alone
@@ -2948,6 +3023,9 @@ func (o *AIOrchestrator) executePhaseLoop(
 	combinedResult.Metadata[MetadataKeyPhasePlans] = phasePlans
 	combinedResult.Metadata[MetadataKeyPhaseCount] = phaseCount
 	combinedResult.Metadata[MetadataKeyForcedTerminal] = forcedTerminal
+	if terminationReason != "" {
+		combinedResult.Metadata["termination_reason"] = terminationReason
+	}
 	if len(regenEvents) > 0 {
 		combinedResult.Metadata[MetadataKeyPlanRegenerations] = regenEvents
 	}
@@ -3444,11 +3522,13 @@ func (o *AIOrchestrator) buildPreparedSynthesisPrompt(
 		budgetMeta = bm
 	}
 
+	failureViews, err := synthesisFailureViews(ctx, result.Steps, o.config.FailedOperationView)
+	if err != nil {
+		return "", fmt.Errorf("prepare synthesis failure evidence: %w", err)
+	}
 	for i, step := range result.Steps {
 		if !step.Success {
-			preparedAgent, preparedInstruction, preparedError, prepareErr := prepareSynthesisStepValues(
-				ctx, step.AgentName, step.Instruction, step.Error, promptFieldPriorResultError,
-			)
+			preparedAgent, preparedInstruction, preparedError, prepareErr := prepareFailedSynthesisStep(ctx, step, failureViews)
 			if prepareErr != nil {
 				return "", prepareErr
 			}
@@ -3679,6 +3759,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 	if err != nil {
 		return nil, err
 	}
+	planAttemptFromContext(ctx).captureBase(promptResult)
 
 	// Determine max attempts: 1 initial + retries (if enabled)
 	maxAttempts := 1
@@ -3851,6 +3932,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 		}
 
 		// Parse the LLM response into a plan
+		planAttemptFromContext(ctx).rememberOutput(aiResponse.Content)
 		plan, parseErr := o.parsePlan(aiResponse.Content)
 		if parseErr == nil {
 			// Collapse a terminal synthesis pseudo-step BEFORE the hallucination check below, so an
@@ -3994,6 +4076,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 						// Fall back to original prompt result if enhanced retry fails
 						retryPromptResult = promptResult
 					}
+					planAttemptFromContext(ctx).captureBase(retryPromptResult)
 
 					// Update allowed agents list from the NEW prompt (may have different tools)
 					newAllowedList := make([]string, 0, len(retryPromptResult.AllowedAgents))
@@ -4115,6 +4198,7 @@ STRICT RULES FOR THIS RETRY:
 					})
 
 					// Parse the retry response
+					planAttemptFromContext(ctx).rememberOutput(retryResponse.Content)
 					plan, retryErr = o.parsePlan(retryResponse.Content)
 					if retryErr != nil {
 						// Parse error on retry - log and continue to next retry attempt
@@ -4341,6 +4425,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 	if err != nil {
 		return nil, fmt.Errorf("failed to build continuation prompt: %w", err)
 	}
+	planAttemptFromContext(ctx).captureBase(promptResult)
 
 	if o.logger != nil {
 		o.logger.DebugWithContext(ctx, "Continuation prompt constructed", map[string]interface{}{
@@ -4517,6 +4602,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 		})
 
 		// Parse the plan
+		planAttemptFromContext(ctx).rememberOutput(responseContent)
 		plan, parseErr := o.parsePlan(responseContent)
 		if parseErr != nil {
 			lastParseErr = parseErr
@@ -4591,6 +4677,11 @@ func (o *AIOrchestrator) generateContinuationPlan(
 
 				// Retry with hallucination feedback if retries are enabled
 				if o.config.HallucinationRetryEnabled {
+					// A real discovery miss may need a new capability selection.
+					if phaseAttempt := planAttemptFromContext(ctx); phaseAttempt != nil {
+						phaseAttempt.rememberCandidate(plan)
+						phaseAttempt.base = nil
+					}
 					retryPlan, retryErr := o.regenerateContinuationPlan(
 						ctx, request, requestID, completedResults, executedStepIDs,
 						continuationNote, phaseNumber, hallErr,
@@ -4708,40 +4799,36 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 		return nil, fmt.Errorf("AI client not configured for plan regeneration")
 	}
 
-	promptResult, err := o.buildContinuationPrompt(
-		ctx, request, completedResults, executedStepIDs,
-		continuationNote, phaseNumber,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build continuation retry prompt: %w", err)
+	phaseAttempt := planAttemptFromContext(ctx)
+	if phaseAttempt == nil {
+		phaseAttempt = &phasePlanAttempt{}
 	}
-	validationFeedback, err := prepareValidationFeedback(ctx, promptRegeneration, validationErr)
-	if err != nil {
-		return nil, fmt.Errorf("prepare continuation regeneration feedback: %w", err)
+	selectionReused := phaseAttempt.base != nil
+	var promptResult *PlanningPromptResult
+	if selectionReused {
+		promptResult, err = o.buildRegenerationPrompt(ctx, phaseAttempt, validationErr, originalTerminal)
+		if err != nil {
+			return nil, fmt.Errorf("build continuation correction prompt: %w", err)
+		}
+	} else {
+		promptResult, err = o.buildContinuationPrompt(ctx, request, completedResults, executedStepIDs, continuationNote, phaseNumber)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build continuation retry prompt: %w", err)
+		}
+		phaseAttempt.captureBase(promptResult)
+		promptResult, err = o.buildRegenerationPrompt(ctx, phaseAttempt, validationErr, originalTerminal)
+		if err != nil {
+			return nil, fmt.Errorf("build continuation correction prompt: %w", err)
+		}
 	}
-
-	// Build terminal preservation instruction (Issue 9A-3)
-	terminalInstruction := ""
-	if originalTerminal != nil {
-		terminalInstruction = fmt.Sprintf(
-			"\n\nThe original plan set \"terminal\": %t. "+
-				"Preserve this value — the validation error is about plan structure, "+
-				"not about whether more phases are needed.",
-			*originalTerminal,
-		)
-	}
-
-	prompt := fmt.Sprintf(
-		"%s\n\nThe previous continuation plan failed validation with error: %s%s\n\n"+
-			"Please generate a corrected plan that addresses this error.",
-		promptResult.Prompt, validationFeedback, terminalInstruction,
-	)
+	prompt := promptResult.Prompt
 
 	// Span event: pre-LLM call
 	contRegenEventAttrs := []attribute.KeyValue{
 		attribute.String("request_id", requestID),
 		attribute.Int("prompt_length", len(prompt)),
 		attribute.Int("phase_number", phaseNumber),
+		attribute.Bool("selection_reused", selectionReused),
 		attribute.String("validation_error", truncateString(validationErr.Error(), 200)),
 	}
 	regenOpts := o.planAIOptions(0.2, promptResult.SystemPrompt)
@@ -4877,6 +4964,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 		CallDescription:  fmt.Sprintf("Phase %d continuation plan REGENERATION (trigger: %s)", phaseNumber, truncateString(validationErr.Error(), 200)),
 	})
 
+	phaseAttempt.rememberOutput(aiResponse.Content)
 	plan, err := o.parsePlan(aiResponse.Content)
 	if err != nil {
 		if o.logger != nil {
@@ -4888,7 +4976,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 				"response_preview": truncateString(aiResponse.Content, 500),
 			})
 		}
-		return nil, fmt.Errorf("continuation plan retry parse failed: %w", err)
+		return nil, &planRegenerationParseError{err: fmt.Errorf("continuation plan retry parse failed: %w", err)}
 	}
 
 	if validateErr := validateNoStepIDConflicts(plan, executedStepIDs); validateErr != nil {
@@ -5214,9 +5302,18 @@ func (o *AIOrchestrator) buildSystemPromptFromInput(ctx context.Context, input P
 // succeeded with empty output and the planner re-issues downstream steps
 // that depend on it. Error is reduced to a single line and capped at 200
 // chars so a verbose HTTP body cannot unbalance the continuation prompt.
-func renderContinuationStepResult(result *StepResult, response string) string {
+func renderContinuationStepResult(result *StepResult, response string, projected ...bool) string {
 	if result.Success {
 		return response
+	}
+	if len(projected) > 0 && projected[0] {
+		if response == "" {
+			return fmt.Sprintf("[FAILED: %s] [evidence view omitted for budget; original execution record retained]", truncateRunes(firstLine(result.Error), 200))
+		}
+		return "[FAILED: attempted inputs and error evidence; not successful output] " + response
+	}
+	if len(result.ToolError) > 0 {
+		return "[FAILED: structured component error; details are not successful output] " + response
 	}
 	errMsg := truncateRunes(firstLine(result.Error), 200)
 	return fmt.Sprintf("[FAILED: %s]", errMsg)
@@ -5270,9 +5367,9 @@ func intOrDefault(v, d int) int {
 // stepRenderCost estimates the rendered size of one step in <completed_steps> for the greedy
 // recency-fill: a failed step renders its [FAILED: <error>] marker (response ignored); a successful
 // step renders its digest/floor body.
-func stepRenderCost(s *StepResult, body string) int {
+func stepRenderCost(s *StepResult, body string, projected ...bool) int {
 	cost := continuationStepOverhead + len(s.Instruction)
-	if s.Success {
+	if s.Success || len(s.ToolError) > 0 || (len(projected) > 0 && projected[0]) {
 		return cost + len(body)
 	}
 	// renderContinuationStepResult caps the failed marker's error at 200 runes — mirror that here so the
@@ -5401,6 +5498,36 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 		maxKeys:    intOrDefault(o.config.ContinuationDigestMaxKeys, defaultDigestMaxKeys),
 	}
 	bodies, digestMeta := renderContinuationDigests(steps, digestOpts)
+	failedCount := 0
+	for _, step := range steps {
+		if !step.Success {
+			failedCount++
+		}
+	}
+	failureBudget := min(digestOpts.floorChars, totalBudget/(failedCount+1))
+	legacyFailureCost := 0
+	for i := range steps {
+		if !steps[i].Success {
+			legacyBody := bodies[i]
+			if len(steps[i].ToolError) > 0 {
+				legacyBody = boundedFailureProjection(steps[i].ToolError, failureBudget, digestOpts)
+			}
+			legacyFailureCost += stepRenderCost(&steps[i], legacyBody)
+		}
+	}
+	failureViews, err := projectFailedOperations(ctx, steps, o.config.FailedOperationView, failureBudget, func(raw string) (string, error) {
+		return preparePromptValue(ctx, promptContinuationPlan, promptValuePriorResult, promptFieldPriorResultError, raw)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prepare continuation failure evidence: %w", err)
+	}
+	for i := range steps {
+		if view, ok := failureViews[steps[i].StepID]; ok {
+			bodies[i] = view.raw
+		} else if !steps[i].Success && len(steps[i].ToolError) > 0 {
+			bodies[i] = boundedFailureProjection(steps[i].ToolError, failureBudget, digestOpts)
+		}
+	}
 
 	// A: greedy recency-fill. Failed steps are always kept (high-signal, small); successful steps fill
 	// newest-first until the aggregate budget is spent (recency = eviction order). The newest successful
@@ -5410,7 +5537,8 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	for i := range steps {
 		if !steps[i].Success {
 			keep[i] = true
-			spent += stepRenderCost(&steps[i], bodies[i])
+			_, projected := failureViews[steps[i].StepID]
+			spent += stepRenderCost(&steps[i], bodies[i], projected)
 		}
 	}
 	keptSuccess := false
@@ -5425,6 +5553,16 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 		keep[i] = true
 		keptSuccess = true
 		spent += cost
+	}
+	if len(failureViews) > 0 {
+		before := continuationSuccessfulRetention(steps, bodies, legacyFailureCost, totalBudget)
+		var after []string
+		for i := range steps {
+			if keep[i] && steps[i].Success {
+				after = append(after, steps[i].StepID)
+			}
+		}
+		telemetry.AddSpanEvent(ctx, "failure_evidence.continuation_retention", attribute.String("request_id", requestID), attribute.StringSlice("successful_steps_without_projection", before), attribute.StringSlice("successful_steps_with_projection", after), attribute.Int("legacy_parent_budget_bytes", totalBudget))
 	}
 
 	// Decide which kept non-JSON steps escalate to C — NEWEST-first, capped — so the budget is spent on
@@ -5499,10 +5637,20 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 		}
 		preparedBody := body
 		preparedResult := *result
-		if result.Success {
+		view, projected := failureViews[result.StepID]
+		if projected {
+			preparedBody = view.prepared
+			if preparedBody == "" {
+				preparedResult.Error, err = preparePromptValue(ctx, promptContinuationPlan, promptValuePriorResult, promptFieldPriorResultError, truncateRunes(firstLine(result.Error), 200))
+			}
+		} else if result.Success || len(result.ToolError) > 0 {
+			field := promptFieldPriorResultResponse
+			if !result.Success {
+				field = promptFieldPriorResultError
+			}
 			preparedBody, err = preparePromptValue(
 				ctx, promptContinuationPlan, promptValuePriorResult,
-				promptFieldPriorResultResponse, body,
+				field, body,
 			)
 		} else {
 			preparedResult.Error, err = preparePromptValue(
@@ -5525,7 +5673,7 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 
 		fmt.Fprintf(&resultsSb, "Step %s (%s):\n  Task: %s\n  Result: %s\n",
 			preparedStepID, preparedAgentName, preparedInstruction,
-			renderContinuationStepResult(&preparedResult, preparedBody))
+			renderContinuationStepResult(&preparedResult, preparedBody, projected))
 
 		if childSummary != "" {
 			fmt.Fprintf(&resultsSb,
@@ -5634,13 +5782,8 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	}
 	sb.WriteString("</phase_budget>\n\n")
 
-	// Optimization reminder (Issue 4: reduce unnecessary phase splits)
-	sb.WriteString("<optimization_reminder>\n")
-	sb.WriteString("If remaining steps can reference completed step data via {{step-N.response.data.field}}\n")
-	sb.WriteString("templates, include them in THIS phase with depends_on chains rather than requesting\n")
-	sb.WriteString("another continuation. Each step using {{step-N...}} templates lists the referenced step-N in its depends_on.\n")
-	sb.WriteString("Only use terminal: false if you need to discover new entities.\n")
-	sb.WriteString("</optimization_reminder>\n\n")
+	// Phase splitting and optimization use the shared iterative instructions
+	// below, including the distinction between same- and prior-phase references.
 
 	if preparedContinuationNote != "" {
 		sb.WriteString("<previous_note>\n")
@@ -5705,9 +5848,9 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	sb.WriteString("- Reference completed step outputs using \"{{step-N.response.data.field}}\" syntax (always quoted)\n")
 	sb.WriteString("- Each Result above is a structure-preserving digest (object keys, array sizes, sample values); sample values are illustrative — reference any field shown with the same {{step-N...}} syntax and the full value resolves at execution\n")
 	sb.WriteString("- \"depends_on\" may ONLY reference step IDs within THIS phase's steps array\n")
-	sb.WriteString("- For step IDs from PRIOR phases referenced via templates, list them in \"implicit_deps\"\n")
-	sb.WriteString("- Set \"terminal\": true if this phase completes the user's request\n")
-	sb.WriteString("- Set \"terminal\": false only if you need to discover new entities from results\n")
+	sb.WriteString("- The framework derives \"implicit_deps\" for PRIOR-phase parameter references; you may omit it. If supplied, list exactly those prior-phase references. Earlier planning context is not a dependency.\n")
+	// Terminal decisions use the shared iterative instructions in FormatRules.
+	// Duplicating them here previously contradicted the task-completeness rule.
 	sb.WriteString("</planning_instructions>\n\n")
 
 	// Concrete example demonstrating implicit_deps for prior-phase references.
@@ -5942,12 +6085,12 @@ Error: %s
 <json_rules>
 1. All values are literals — use 46828.5, not 100 * 468.285
 2. String values and keys use double quotes
-3. All string values use plain text only
+3. Preserve literal string contents, including code and Markdown, using valid JSON escaping
 4. Omit trailing commas: {"a": 1} is valid, {"a": 1,} is not
 5. Template references are quoted strings: "{{step-1.response.data.field}}"
 </json_rules>
 
-Regenerate the execution plan. Output raw JSON — no markdown, no code blocks. Start with { and end with }.`,
+Regenerate the execution plan as one JSON object. Start with { and end with }; these delimit the entire response.`,
 		parseErr.Error())
 
 	// Reuse previous prompt, AllowedAgents, and SystemPrompt — no fresh tiered selection
@@ -5958,40 +6101,6 @@ Regenerate the execution plan. Output raw JSON — no markdown, no code blocks. 
 	}, nil
 }
 
-// unquotedTemplateRegex matches unquoted {{...}} template references in JSON.
-// Matches after : (key-value) or after [ or , (array elements).
-// Already-quoted templates are not matched because " separates the delimiter from {{.
-var unquotedTemplateRegex = regexp.MustCompile(`(?::\s*|[\[,]\s*)({{[^}]+}})`)
-
-// quoteUnquotedTemplates converts unquoted template references to quoted strings
-// so that json.Unmarshal can parse the plan. Templates are resolved later by the executor.
-//
-// IMPORTANT: Only call as a recovery step after json.Unmarshal fails (try-parse-first).
-// The regex cannot distinguish structural , from , inside quoted strings, so running
-// unconditionally risks false positives on strings like "{{city}}, {{country}}".
-func quoteUnquotedTemplates(jsonStr string) string {
-	return unquotedTemplateRegex.ReplaceAllStringFunc(jsonStr, func(match string) string {
-		tmplStart := strings.Index(match, "{{")
-		prefix := match[:tmplStart]
-		tmpl := match[tmplStart:]
-		return prefix + "\"" + tmpl + "\""
-	})
-}
-
-// trailingCommaRegex matches trailing commas before } or ] in JSON.
-var trailingCommaRegex = regexp.MustCompile(`,\s*([}\]])`)
-
-// attemptJSONRepair tries to fix common JSON issues that LLMs produce.
-// Returns (repairedJSON, true) if changes were made, (original, false) otherwise.
-func attemptJSONRepair(jsonStr string) (string, bool) {
-	repaired := jsonStr
-	// Strip BOM and zero-width characters
-	repaired = strings.TrimLeft(repaired, "\uFEFF\u200B\u200C\u200D")
-	// Remove trailing commas before } or ]
-	repaired = trailingCommaRegex.ReplaceAllString(repaired, "$1")
-	return repaired, repaired != jsonStr
-}
-
 // parsePlan parses the LLM response into a RoutingPlan.
 // Recovery chain: try raw → try quoted templates (C2) → try structural repair (B3) → return error.
 func (o *AIOrchestrator) parsePlan(llmResponse string) (*RoutingPlan, error) {
@@ -6000,7 +6109,10 @@ func (o *AIOrchestrator) parsePlan(llmResponse string) (*RoutingPlan, error) {
 	var plan RoutingPlan
 	if err := json.Unmarshal([]byte(cleaned), &plan); err != nil {
 		// C2: Try quoting unquoted templates (try-parse-first recovery)
-		quoted := quoteUnquotedTemplates(cleaned)
+		quoted := cleaned
+		if !json.Valid([]byte(cleaned)) {
+			quoted = quoteUnquotedTemplates(cleaned)
+		}
 		if quoted != cleaned {
 			if err2 := json.Unmarshal([]byte(quoted), &plan); err2 == nil {
 				if o.logger != nil {
@@ -6015,7 +6127,7 @@ func (o *AIOrchestrator) parsePlan(llmResponse string) (*RoutingPlan, error) {
 			}
 		}
 		// B3: Attempt structural repair (trailing commas, BOM)
-		if repaired, ok := attemptJSONRepair(cleaned); ok {
+		if repaired, ok := repairInvalidPlanJSON(cleaned); ok {
 			if err2 := json.Unmarshal([]byte(repaired), &plan); err2 == nil {
 				if o.logger != nil {
 					o.logger.Info("Plan parsed after structural JSON repair", map[string]interface{}{
@@ -6231,9 +6343,10 @@ func (o *AIOrchestrator) normalizeTerminalSynthesisPlan(ctx context.Context, pla
 
 // runPlanValidationGauntlet runs the plan validators in order and returns the FIRST failure,
 // emitting that validator's WARN log + span event (and a rejection counter for the macro,
-// dependency, and template-path validators; validatePlan and the step-ID-conflict check emit no counter). Telemetry strings
-// (log messages, operation values, span-event names, counter names) are preserved VERBATIM from
-// the former inline blocks in executePhaseLoop — Loki/Jaeger/Grafana key off them. It does NOT
+// dependency, and template-path validators; validatePlan and the step-ID-conflict check emit no counter).
+// Existing operation values, span-event names, and counter names are preserved for
+// Loki/Jaeger/Grafana consumers; legacy missing_dependency names cover dependency
+// consistency errors, including surplus declarations. It does NOT
 // regenerate: the caller's fixpoint loop owns regeneration, so every validator re-runs after a
 // regeneration.
 func (o *AIOrchestrator) runPlanValidationGauntlet(
@@ -6296,7 +6409,7 @@ func (o *AIOrchestrator) runPlanValidationGauntlet(
 	// Enforce templates ⊆ depends_on (same-phase) ∪ implicit_deps (cross-phase).
 	if depErr := o.validateDependencyConsistency(plan); depErr != nil {
 		if o.logger != nil {
-			o.logger.WarnWithContext(ctx, "Missing depends_on/implicit_deps for templated step — triggering regeneration", map[string]interface{}{
+			o.logger.WarnWithContext(ctx, "Inconsistent depends_on/implicit_deps for templated step — triggering regeneration", map[string]interface{}{
 				"operation":        "missing_dependency_validation",
 				"request_id":       requestID,
 				"phase":            phaseCount,
@@ -6521,7 +6634,7 @@ func validateNoUnknownMacros(plan *RoutingPlan) error {
 						"step %s contains malformed framework template %q. "+
 							"Framework templates must have the shape {{step-N.response.data.FIELD}} "+
 							"where N is a step id and FIELD names a declared output — "+
-							"fix the template or remove it",
+							"use dot-numeric array indices (e.g. {{step-1.response.data.items.0.id}}), not brackets; fix the template or remove it",
 						step.StepID, token)
 				}
 			}
@@ -6540,6 +6653,8 @@ func validateNoUnknownMacros(plan *RoutingPlan) error {
 //     implicit_deps (plan self-documentation; existence is checked separately
 //     by validateTemplatePaths against executedStepCaps)
 //   - self-references are always rejected: a step cannot consume its own output
+//   - implicit_deps contains only actual prior-phase parameter references;
+//     historical context is not a runtime data dependency
 //
 // Rejection triggers regeneration so the LLM fixes its own
 // plan without the orchestration wasting retries on a broken dispatch.
@@ -6607,6 +6722,14 @@ func (o *AIOrchestrator) validateDependencyConsistency(plan *RoutingPlan) error 
 					"step %s references {{%s...}} from a prior phase but does not declare %s in implicit_deps — "+
 						"add %q to %s's implicit_deps so the plan documents the cross-phase dependency",
 					step.StepID, refID, refID, refID, step.StepID)
+			}
+		}
+		for _, dep := range step.ImplicitDeps {
+			if _, inPlan := planStepSet[dep]; inPlan {
+				return fmt.Errorf("step %s lists same-phase step %s in implicit_deps — use depends_on for same-phase dependencies", step.StepID, dep)
+			}
+			if _, used := referenced[dep]; !used {
+				return fmt.Errorf("step %s lists %s in implicit_deps without a matching parameter template — remove that entry; prior steps used only as planning context are not dependencies", step.StepID, dep)
 			}
 		}
 	}
@@ -6736,21 +6859,27 @@ func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, req
 	// Inject requestID into context for child components
 	ctx = WithRequestID(ctx, requestID)
 
-	basePromptResult, err := o.buildPlanningPrompt(ctx, request)
-	if err != nil {
-		return nil, err
+	phaseAttempt := planAttemptFromContext(ctx)
+	if phaseAttempt == nil {
+		phaseAttempt = &phasePlanAttempt{}
 	}
-	validationFeedback, err := prepareValidationFeedback(ctx, promptRegeneration, validationErr)
-	if err != nil {
-		return nil, fmt.Errorf("prepare regeneration feedback: %w", err)
+	selectionReused := phaseAttempt.base != nil
+	if phaseAttempt.base == nil {
+		basePromptResult, buildErr := o.buildPlanningPrompt(ctx, request)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		phaseAttempt.captureBase(basePromptResult)
 	}
-
-	prompt := fmt.Sprintf(`%s
-
-The previous plan failed validation with error: %s
-
-Please generate a corrected plan that addresses this error.`,
-		basePromptResult.Prompt, validationFeedback)
+	telemetry.AddSpanEvent(ctx, "orchestrator.plan_regeneration.selection",
+		attribute.String("request_id", requestID),
+		attribute.Bool("selection_reused", selectionReused),
+	)
+	basePromptResult, err := o.buildRegenerationPrompt(ctx, phaseAttempt, validationErr, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build correction prompt: %w", err)
+	}
+	prompt := basePromptResult.Prompt
 
 	planOpts := o.planAIOptions(0.2, basePromptResult.SystemPrompt)
 
@@ -6807,8 +6936,23 @@ Please generate a corrected plan that addresses this error.`,
 		Success:          true,
 	})
 
-	return o.parsePlan(aiResponse.Content)
+	phaseAttempt.rememberOutput(aiResponse.Content)
+	plan, err := o.parsePlan(aiResponse.Content)
+	if err != nil {
+		return nil, &planRegenerationParseError{err: err}
+	}
+	return plan, nil
 }
+
+// planRegenerationParseError identifies only local parsing failures of regenerated
+// model output. Provider and boundary errors must not enter the validation retry
+// loop, even if they wrap a JSON error themselves.
+type planRegenerationParseError struct {
+	err error
+}
+
+func (e *planRegenerationParseError) Error() string { return e.err.Error() }
+func (e *planRegenerationParseError) Unwrap() error { return e.err }
 
 // extractAgentsFromPlan gets list of agents involved in a plan
 func (o *AIOrchestrator) extractAgentsFromPlan(plan *RoutingPlan) []string {
@@ -7241,100 +7385,6 @@ func findJSONEndStringSafe(s string, start int) int {
 		}
 	}
 	return -1
-}
-
-// markdownCodeBlockRegex removes markdown code block fences from LLM responses.
-// Handles both ```json and ``` formats (case-insensitive).
-var markdownCodeBlockRegex = regexp.MustCompile("(?si)```(?:json)?\\s*([\\s\\S]*?)\\s*```")
-
-// markdownBoldRegex matches **bold** patterns inside JSON string values
-var markdownBoldRegex = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-
-// Note: Italic handling uses manual parsing in stripMarkdownFromJSON() rather than regex
-// because single asterisks are harder to match reliably without false positives.
-
-// cleanLLMResponse aggressively cleans LLM responses to extract valid JSON.
-// It handles:
-// - Markdown code blocks (```json ... ```)
-// - Bold markers inside string values (**text** → text)
-// - Italic markers inside string values (*text* → text)
-// - Intro text like "Here's the plan:"
-//
-// This is a defensive measure since LLMs (especially Gemini) often add markdown
-// formatting despite explicit instructions not to. See research:
-// - https://community.openai.com/t/how-to-prevent-gpt-from-outputting-responses-in-markdown-format/961314
-// - https://datachain.ai/blog/enforcing-json-outputs-in-commercial-llms
-func cleanLLMResponse(s string) string {
-	// Step 1: Try to extract from code blocks first (most reliable)
-	if matches := markdownCodeBlockRegex.FindStringSubmatch(s); len(matches) > 1 {
-		s = strings.TrimSpace(matches[1])
-	} else {
-		// Step 2: Find the JSON object directly by locating { and its matching }
-		// This handles cases where LLM wraps JSON in other text
-		jsonStart := strings.Index(s, "{")
-		if jsonStart == -1 {
-			return s
-		}
-
-		// Find the matching closing brace using string-safe detection
-		jsonEnd := findJSONEndStringSafe(s, jsonStart)
-		if jsonEnd == -1 {
-			return s
-		}
-
-		// Extract just the JSON portion
-		s = strings.TrimSpace(s[jsonStart:jsonEnd])
-	}
-
-	// Step 3: Strip markdown formatting from string values
-	// This handles cases where LLM puts **bold** or *italic* inside JSON strings
-	s = stripMarkdownFromJSON(s)
-
-	return s
-}
-
-// stripMarkdownFromJSON removes markdown bold/italic formatting from JSON string values.
-// Converts "**Paris**" → "Paris" and "*weather*" → "weather"
-// This is safe for JSON because:
-// - ** and * inside quoted strings are the only place markdown appears
-// - We only strip when the pattern matches complete words
-func stripMarkdownFromJSON(s string) string {
-	// Strip bold: **text** → text
-	s = markdownBoldRegex.ReplaceAllString(s, "$1")
-
-	// Strip italic: *text* → text (but not **)
-	// We need to be more careful here to avoid breaking valid content
-	// Only strip if it looks like markdown (word boundaries)
-	result := strings.Builder{}
-	result.Grow(len(s))
-
-	i := 0
-	for i < len(s) {
-		// Look for potential italic marker
-		if s[i] == '*' && i+1 < len(s) && s[i+1] != '*' {
-			// Check if this looks like italic markdown: *word*
-			// Must have matching * and contain actual content
-			endIdx := strings.Index(s[i+1:], "*")
-			if endIdx > 0 && endIdx < 100 { // Reasonable word length
-				// Check the end isn't a double asterisk
-				fullEndIdx := i + 1 + endIdx
-				if fullEndIdx+1 >= len(s) || s[fullEndIdx+1] != '*' {
-					// Check content doesn't contain special chars that would make this not markdown
-					content := s[i+1 : fullEndIdx]
-					if !strings.ContainsAny(content, "\n\t{}[]\"") && len(strings.TrimSpace(content)) > 0 {
-						// This looks like italic markdown, strip the asterisks
-						result.WriteString(content)
-						i = fullEndIdx + 1
-						continue
-					}
-				}
-			}
-		}
-		result.WriteByte(s[i])
-		i++
-	}
-
-	return result.String()
 }
 
 // truncateString truncates a string to maxLen characters for logging

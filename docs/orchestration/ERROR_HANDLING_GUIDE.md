@@ -156,7 +156,12 @@ This is the authoritative mapping. The first two columns show what the tool does
 
 ### Non-Retryable Tool Errors
 
-If a tool's `ToolResponse.Error.Retryable` is `false`, the executor in `orchestration/executor.go:2473` stops its step retry loop — unless the LLM Error Analyzer has already identified the error as transient (in which case the LLM's assessment takes precedence over the tool's `Retryable` flag).
+An explicit `ToolResponse.Error.Retryable=false` stops same-step retries before
+LLM correction. An omitted, null or wrongly typed declaration is not an explicit
+false. A non-transient 4xx is not resent unchanged when correction is unavailable
+or exhausted. Authentication/method errors remain terminal; authorized later
+planning is distinct from a same-step retry. See `dispatch_policy.go` and the
+dispatch guards in `executor.go` for the current policy.
 
 ---
 

@@ -128,6 +128,7 @@ func NewDefaultOrchestratorConfig() *OrchestratorConfig {
 		EnableTelemetry:                true,
 		EnableFallback:                 true,
 		EnableHybridResolution:         true,
+		FailedOperationView:            FailedOperationViewConfig{MaxValueBytes: 4096, MaxStepBytes: 16384, MaxPromptBytes: 32768},
 		PlanParseRetryEnabled:          true,
 		PlanParseMaxRetries:            2,
 		PlanMaxTokens:                  planMaxTokens,
@@ -146,11 +147,12 @@ func NewDefaultOrchestratorConfig() *OrchestratorConfig {
 			MaxRetries:         2,
 		},
 		IterativePlanning: IterativePlanConfig{
-			Enabled:             true,
-			MaxPhases:           5,
-			MaxTotalSteps:       200,
-			PhaseTimeout:        180 * time.Second,
-			MaxValidationRounds: defaultMaxValidationRounds,
+			Enabled:                      true,
+			MaxPhases:                    5,
+			MaxTotalSteps:                200,
+			PhaseTimeout:                 180 * time.Second,
+			MaxValidationRounds:          defaultMaxValidationRounds,
+			RegenerationFeedbackMaxBytes: defaultRegenerationFeedbackMaxBytes,
 		},
 		SemanticRetry: SemanticRetryConfig{
 			Enabled:                   true,
@@ -201,6 +203,7 @@ func NewDefaultOrchestratorConfig() *OrchestratorConfig {
 		ExecutionStore:             DefaultExecutionStoreConfig(),
 		stepRetryBackoff:           core.DefaultBackoffConfig(),
 		executionStoreWriteTimeout: defaultExecutionStoreWriteTimeout,
+		executionCleanupTimeout:    5 * time.Second,
 	}
 }
 
@@ -304,6 +307,13 @@ func emitConfigFallbackMetrics(diagnostics []ConfigDiagnostic) {
 }
 
 func normalizeOrchestratorConfig(config *OrchestratorConfig) {
+	// Zero code values are unset; negative values remain invalid for validation.
+	if resolved, err := resolveFailedOperationView(config.FailedOperationView); err == nil {
+		config.FailedOperationView = resolved
+	}
+	if !config.executionCleanupTimeoutSet && config.executionCleanupTimeout == 0 {
+		config.executionCleanupTimeout = 5 * time.Second
+	}
 	if config.executionStoreWriteTimeout == 0 {
 		config.executionStoreWriteTimeout = defaultExecutionStoreWriteTimeout
 	}
@@ -320,6 +330,9 @@ func normalizeOrchestratorConfig(config *OrchestratorConfig) {
 func ValidateOrchestratorConfig(config *OrchestratorConfig) error {
 	if config == nil {
 		return fmt.Errorf("%w: config is nil", ErrInvalidOrchestratorConfig)
+	}
+	if _, err := resolveFailedOperationView(config.FailedOperationView); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidOrchestratorConfig, err)
 	}
 	if err := validateSynthesisStrategy(config.SynthesisStrategy); err != nil {
 		return err
@@ -343,6 +356,7 @@ func ValidateOrchestratorConfig(config *OrchestratorConfig) error {
 		{"iterative.max_phases", config.IterativePlanning.MaxPhases},
 		{"iterative.max_total_steps", config.IterativePlanning.MaxTotalSteps},
 		{"iterative.max_validation_rounds", config.IterativePlanning.MaxValidationRounds},
+		{"iterative.regeneration_feedback_max_bytes", config.IterativePlanning.RegenerationFeedbackMaxBytes},
 		{"tiered.min_tools", config.TieredResolution.MinToolsForTiering},
 		{"tiered.selection_max_tokens", config.TieredResolution.SelectionMaxTokens},
 		{"result_trim.max_result_bytes", config.ResultTrim.MaxResultBytes},
@@ -372,6 +386,7 @@ func ValidateOrchestratorConfig(config *OrchestratorConfig) error {
 		{"step_retry.initial_delay", config.stepRetryBackoff.InitialDelay},
 		{"step_retry.max_delay", config.stepRetryBackoff.MaxDelay},
 		{"execution_store.write_timeout", config.executionStoreWriteTimeout},
+		{"execution.cleanup_timeout", config.executionCleanupTimeout},
 	}
 	for _, field := range positiveDurations {
 		if field.value <= 0 {
@@ -483,9 +498,10 @@ func ResolveOrchestratorConfigIdentity(config *OrchestratorConfig) (Orchestrator
 		"capability_circuit_breaker": config.CapabilityService.CircuitBreaker != nil,
 	}
 	summary["private_runtime_policy"] = map[string]interface{}{
-		"step_retry_initial_delay_ms": config.stepRetryBackoff.InitialDelay.Milliseconds(),
-		"step_retry_max_delay_ms":     config.stepRetryBackoff.MaxDelay.Milliseconds(),
-		"execution_store_timeout_ms":  config.executionStoreWriteTimeout.Milliseconds(),
+		"step_retry_initial_delay_ms":  config.stepRetryBackoff.InitialDelay.Milliseconds(),
+		"step_retry_max_delay_ms":      config.stepRetryBackoff.MaxDelay.Milliseconds(),
+		"execution_store_timeout_ms":   config.executionStoreWriteTimeout.Milliseconds(),
+		"execution_cleanup_timeout_ns": config.executionCleanupTimeout.Nanoseconds(),
 	}
 	promptIdentity, promptStable := promptConfigContentIdentity(config.PromptConfig)
 	planIdentity, planStable := aiOptionsContentIdentity(config.PlanAIOptions)
@@ -496,6 +512,9 @@ func ResolveOrchestratorConfigIdentity(config *OrchestratorConfig) (Orchestrator
 	distillIdentity, distillStable := aiOptionsContentIdentity(config.ResultDistillAIOptions)
 	cacheEligible := promptStable && planStable && synthesisStable && microStable &&
 		tieredStable && errorStable && distillStable
+	// Arbitrary restriction behavior has no inferred semantic identity.
+	cacheEligible = cacheEligible && config.FailedOperationView.InputPolicy == nil
+	summary["failed_operation_input_policy_present"] = config.FailedOperationView.InputPolicy != nil
 	summary["content_identity"] = map[string]interface{}{
 		"prompt_config":               promptIdentity,
 		"plan_ai_options":             planIdentity,
@@ -923,6 +942,22 @@ func (r *configEnvResolver) applySkills(config *OrchestratorConfig) error {
 		}
 	}
 
+	if limits.ResourceSelectionAttemptTimeout == 0 {
+		const variable = "TRUVAG3_SKILL_RESOURCE_SELECTION_ATTEMPT_TIMEOUT"
+		if raw, present, err := r.skillRaw(variable); err != nil {
+			return err
+		} else if present {
+			value, parseErr := time.ParseDuration(raw)
+			if parseErr != nil {
+				return &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonInvalidDuration}
+			}
+			if value < 0 {
+				return &ConfigEnvironmentError{Variable: variable, Reason: ConfigReasonOutOfRange}
+			}
+			limits.ResourceSelectionAttemptTimeout = value
+		}
+	}
+
 	active := config.Skills.Enabled && len(config.Skills.Bindings) > 0
 	if !active {
 		return nil
@@ -1087,6 +1122,15 @@ func (r *configEnvResolver) apply(config *OrchestratorConfig, includePrompt bool
 	if err := setPositiveDuration("TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT", &config.executionStoreWriteTimeout); err != nil {
 		return err
 	}
+	// This new lifecycle control fails fast in both environment modes; omission
+	// alone selects its default. Do not silently disable bounded cleanup.
+	if raw, present := r.lookup("TRUVAG3_EXECUTION_CLEANUP_TIMEOUT"); present {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value <= 0 {
+			return &ConfigEnvironmentError{Variable: "TRUVAG3_EXECUTION_CLEANUP_TIMEOUT", Reason: ConfigReasonOutOfRange}
+		}
+		config.executionCleanupTimeout, config.executionCleanupTimeoutSet = value, true
+	}
 
 	serviceURL, set, err := r.aliasedText("CAPABILITY_SERVICE_URL", "TRUVAG3_CAPABILITY_SERVICE_URL")
 	if err != nil {
@@ -1115,6 +1159,7 @@ func (r *configEnvResolver) apply(config *OrchestratorConfig, includePrompt bool
 		{"TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL", &config.HITL.RequirePlanApproval},
 		{"TRUVAG3_RESULT_TRIM_ENABLED", &config.ResultTrim.Enabled},
 		{"TRUVAG3_RESULT_DISTILL_ENABLED", &config.ResultDistill.Enabled},
+		{"TRUVAG3_FAILED_OPERATION_VIEW_DISABLED", &config.FailedOperationView.Disabled},
 		{"TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED", &config.ExecutionStore.Enabled},
 	} {
 		if err := setBoolean(setting.variable, setting.target); err != nil {
@@ -1149,11 +1194,15 @@ func (r *configEnvResolver) apply(config *OrchestratorConfig, includePrompt bool
 		{"TRUVAG3_ITERATIVE_MAX_PHASES", &config.IterativePlanning.MaxPhases},
 		{"TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS", &config.IterativePlanning.MaxTotalSteps},
 		{"TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS", &config.IterativePlanning.MaxValidationRounds},
+		{"TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES", &config.IterativePlanning.RegenerationFeedbackMaxBytes},
 		{"TRUVAG3_RESULT_TRIM_MAX_BYTES", &config.ResultTrim.MaxResultBytes},
 		{"TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES", &config.ResultTrim.MaxTotalPromptBytes},
 		{"TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES", &config.ResultTrim.MaxMicroResolutionBytes},
 		{"TRUVAG3_CONTINUATION_RESULT_MAX_CHARS", &config.ContinuationResultMaxChars},
 		{"TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS", &config.ContinuationResultMaxTotalChars},
+		{"TRUVAG3_FAILED_OPERATION_MAX_VALUE_BYTES", &config.FailedOperationView.MaxValueBytes},
+		{"TRUVAG3_FAILED_OPERATION_MAX_STEP_BYTES", &config.FailedOperationView.MaxStepBytes},
+		{"TRUVAG3_FAILED_OPERATION_MAX_PROMPT_BYTES", &config.FailedOperationView.MaxPromptBytes},
 		{"TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE", &config.ContinuationDigestArraySample},
 		{"TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX", &config.ContinuationDigestScalarMax},
 		{"TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS", &config.ContinuationDigestMaxKeys},

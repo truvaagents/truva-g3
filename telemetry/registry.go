@@ -12,13 +12,17 @@ import (
 
 var (
 	// globalRegistry holds the singleton Registry instance.
-	// We use atomic.Value for lock-free reads on the hot path (metric emission).
-	// This is only written once during Initialize() and read many times during Emit().
-	globalRegistry atomic.Value // *Registry
+	// A typed pointer provides lock-free reads and a real nil after Shutdown.
+	// Initialize publishes it once; successful Shutdown clears it.
+	globalRegistry atomic.Pointer[Registry]
 
 	// initOnce ensures Initialize() can only succeed once.
 	// Multiple calls to Initialize() will return the same result.
 	initOnce sync.Once
+
+	// shutdownMu serializes teardown (including core unregistration), not
+	// emission. Concurrent callers observe the completed teardown before return.
+	shutdownMu sync.Mutex
 
 	// declaredMetrics stores metric declarations from init() functions.
 	// This allows packages to declare their metrics before the telemetry
@@ -304,7 +308,7 @@ func Emit(name string, value float64, labels ...string) {
 		return // Telemetry not initialized, silent no-op
 	}
 
-	r := registry.(*Registry)
+	r := registry
 	if err := r.emit(name, value, parseLabels(labels...)); err != nil {
 		telemetryErrors.Add(1)
 		r.lastError.Store(err.Error())
@@ -359,12 +363,15 @@ func parseLabels(labels ...string) map[string]string {
 
 // Shutdown gracefully shuts down the telemetry system
 func Shutdown(ctx context.Context) error {
+	shutdownMu.Lock()
+	defer shutdownMu.Unlock()
+
 	registry := globalRegistry.Load()
 	if registry == nil {
 		return nil
 	}
 
-	r := registry.(*Registry)
+	r := registry
 
 	// Log shutdown start
 	if r.logger != nil {
@@ -419,11 +426,7 @@ func Shutdown(ctx context.Context) error {
 
 // GetRegistry returns the current registry (for testing)
 func GetRegistry() *Registry {
-	r := globalRegistry.Load()
-	if r == nil {
-		return nil
-	}
-	return r.(*Registry)
+	return globalRegistry.Load()
 }
 
 // GetTelemetryProvider returns the OTelProvider as core.Telemetry interface.
@@ -443,7 +446,7 @@ func GetTelemetryProvider() core.Telemetry {
 	if r == nil {
 		return nil
 	}
-	registry := r.(*Registry)
+	registry := r
 	if registry.provider == nil {
 		return nil
 	}

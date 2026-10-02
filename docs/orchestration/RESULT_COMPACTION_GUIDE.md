@@ -25,6 +25,34 @@ This guide explains how TruvaG3 keeps large tool and agent results from overwhel
 
 ## 1. What Is Result Compaction (and Why You Need It)
 
+### Failed-operation evidence
+
+Continuation and built-in synthesis include bounded facts from failed actual
+dispatches: same-attempt inputs and structured error code, plus the existing
+terminal error separately. This is a derived view; raw execution records retain
+their original bytes. Partial/omitted views are labelled, legacy records have
+unavailable dispatch evidence, and pre-dispatch binding rejections are not tool
+failures. Successful attempts are excluded from this view.
+
+`FailedOperationViewConfig` defaults to 4,096 encoded bytes per input value,
+16,384 per failed step and 32,768 per prompt. Continuation additionally limits
+each view to the existing failure share (`min(per-step floor, total/(failed+1))`).
+That parent's legacy accounting counts pre-encoding bytes despite its `CHARS`
+names; the new child ceilings count final rendered UTF-8 bytes including escapes.
+Every failed step and the newest success retain their existing soft-retention
+guarantee. Larger failure views can displace older successes: the
+`failure_evidence.continuation_retention` span event reports successful step IDs
+with and without projection. Synthesis bounds combined error/input views
+separately from its existing success-result budget. Framing and legacy short
+failure markers are outside these child JSON ceilings.
+
+Use `WithFailedOperationView` or the config field to restrict/disable the view.
+The typed `FailedOperationInputPolicy` can allow or omit inputs, not rewrite
+them; errors omit all inputs of that attempt. The policy must be immutable and
+concurrency-safe. It is an application disclosure policy, not framework
+redaction. Applications explicitly call `ProjectFailedOperationEvidence` when
+authorizing comparable facts in a delegated result. See API Reference for code.
+
 When an agent runs a multi-step plan, each step produces a result, and those results have to be fed back into the LLM in two places:
 
 1. **Synthesis** — the final-answer prompt, which includes the step results the answer is built from.

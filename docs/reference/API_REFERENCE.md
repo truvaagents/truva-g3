@@ -1,6 +1,43 @@
 # API Reference
 
+### Failed-operation view configuration
+
+```go
+resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
+    Base: orchestration.NewDefaultOrchestratorConfig(),
+    Environment: orchestration.EnvironmentStrict,
+    Options: []orchestration.OrchestratorOption{
+        orchestration.WithFailedOperationView(orchestration.FailedOperationViewConfig{
+            MaxValueBytes: 4096, MaxStepBytes: 16384, MaxPromptBytes: 32768,
+            // Disabled: true restores legacy prompt rendering.
+            // InputPolicy: applicationOwnedRestriction,
+        }),
+    },
+})
+```
+
+Check `err` before construction. `FailedOperationInputPolicy` implements
+`AllowFailedOperationInput(context.Context, FailedOperationIdentity, string, interface{}) (bool, error)`.
+It may restrict disclosure but cannot replace values. Policy errors omit inputs;
+implementations must be concurrency-safe and immutable. An injected policy makes
+semantic config cache identity ineligible. Limits apply to derived views, not raw
+execution retention. `ProjectFailedOperationEvidence(ctx, steps, config)` is an
+explicit application seam for authorized delegation; it returns JSON keyed by
+failed step ID, with a null value for a budget-omitted view. It does not authorize
+recipients or change result status. Custom synthesizers opt in separately.
+
+Exact whole-value step templates retain native JSON types. Object/array values
+cannot silently become string identifiers under a known scalar schema. Select
+the scalar path explicitly. Semantic auto-wire nested extraction remains supported.
+
 A comprehensive guide to TruvaG3's APIs with practical examples and best practices.
+
+Execution debug records and list summaries expose optional
+`ExecutionLifecycleObservation` (`state`, request-local `revision`, `observed_at`)
+and `record_revision`. Managed requests transition running → completed / failed /
+cancelled / suspended after delivery. These fields are independent of step
+success and domain outcome; omitted lifecycle on legacy/direct-plan records means
+unknown. Late hook effects advance the record revision without reverting phases.
 
 ## Quick Navigation
 
@@ -629,11 +666,19 @@ func NewConfig(options ...Option) (*Config, error)
 func DefaultConfig() *Config
 ```
 
-**Configuration priority (highest to lowest):**
-1. Explicit options in code
-2. Environment variables
-3. Config file (if specified)
-4. Default values
+**Configuration application order:** defaults, environment, then code options in
+the order supplied. `WithConfigFile` is itself an option: its file overlays the
+values resolved so far, and later options can override valid file values.
+
+Core-owned numeric shared-memory/activity values fail validation when explicitly
+empty, malformed, out of range or overflowing. This also applies when memory is
+disabled. Missing values retain defaults; compaction detail `0` remains valid.
+Invalid environment input fails before options are applied. `LoadFromFile`
+rejects invalid numeric values and explicit nulls in these sections, and final
+`Validate` catches invalid typed options, including non-finite retrieval weights.
+Start direct configuration from `DefaultConfig`; `Validate` does not install
+defaults into an unresolved zero-value `Config`. Hook-only options and memory
+backend constructors have their own validation contracts.
 
 **Example - Different Configuration Styles:**
 ```go
@@ -1147,15 +1192,28 @@ Options: `WithDomain(string)`, `WithAgentName(string)`, `WithKnowledgeDisabled()
 
 **`orchestration.BuildMemoryHooks`** — creates pipeline hooks from backends:
 
+Built-in investigation providers also implement `core.InvestigationLeaseCoordinator`:
+`AcquireInvestigation(ctx, core.InvestigationLeaseRequest)` returns an exact
+handle (or contention holder); `ReleaseInvestigationLease(ctx, handle)` reports
+`released`, `absent`, `not_owned`, or `unknown` with an error. Each request segment
+uses a fresh private acquisition ID. Managed `ProcessRequest*` cleans these
+handles on every exit, bounded by `WithExecutionCleanupTimeout` / the matching
+environment variable (5s default). Direct hooks/`ExecutePlan*` retain caller-owned
+lifecycle; legacy custom coordinators retain name-only semantics. Claims expire
+without renewal and remain advisory. Ownership handles are excluded from JSON.
+
 ```go
-hooks, activityCoord := orchestration.BuildMemoryHooks(
+hooks, activityCoord, err := orchestration.BuildMemoryHooks(
     backends.ToDeps(), aiClient, logger,
     orchestration.WithMemoryEntityExtractor(e),    // optional: override BOTH hooks
     orchestration.WithMemoryImportanceFunc(fn),    // optional behavioural override
 )
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 ```
 
-Returns `([]core.PipelineHook, core.ActivityCoordinator)`. Pass both to `OrchestratorDependencies`.
+Returns `([]core.PipelineHook, core.ActivityCoordinator, error)`. Check the error before serving; pass hooks and coordinator to `OrchestratorDependencies`. Invalid explicit numeric settings and options fail construction even without AI or episodic dependencies. With valid configuration, absent episodic memory returns `(nil, nil, nil)`. Runtime memory fail-open behavior is unchanged.
 
 **Default extractor selection:** when `aiClient != nil`, the record hook defaults to `LLMEntityExtractor` (zero-cost LLM extraction piggybacking on the existing `EventSummarizer` call). The enrichment hook always defaults to `NoOpEntityExtractor` (pre-planning, the summarizer hasn't run yet, so LLM extraction would silently return nothing). When `aiClient == nil`, both default to `NoOpEntityExtractor`.
 
@@ -2212,6 +2270,14 @@ Unless an explicit option wins, a positive `TRUVAG3_AI_RETRY_ATTEMPTS` value
 overrides the constructor-specific default for single clients,
 `ProviderEntry`, and legacy `NewChainClient`; it never reconfigures an injected
 `ClientEntry`.
+
+OpenAI-compatible entries use `providers.BaseClient.ExecuteWithRetryDecoded` to
+share this same budget across HTTP/transport and eligible decoded API failures.
+The provider-owned `ResponseAttemptDecoder` returns a `DecodedAttempt` containing
+result/error, same-provider `Retryable`, semantic status and optional sanitized
+response identity. The helper closes decoded bodies and retains terminal partial
+results. Stream output prevents replay. `ExecuteWithRetry` / `ExecuteWithRetryPrepared`
+remain HTTP-only; other providers and injected clients retain their existing policy.
 
 #### Provider factory extension contracts
 
@@ -4295,7 +4361,14 @@ eligible.
 
 The built-in selectors deliberately leave the provider-native response-format
 option unset. A fixed JSON prompt, strict decoding and identity validation, and
-one bounded correction retry form the portable structured-output contract.
+two attempts form the portable structured-output contract. Activation retries
+malformed output only. Resource selector v2 additionally accepts a complete
+outer JSON/unlabelled fence and retries a child-attempt timeout. Configure
+`SkillConfig.Limits.ResourceSelectionAttemptTimeout` through
+`TRUVAG3_SKILL_RESOURCE_SELECTION_ATTEMPT_TIMEOUT` (default `0s`, inherit parent).
+Zero in code is unset; nonzero code wins. Invalid consulted env values fail in
+strict and compatible modes. Parent cancellation is terminal and optional
+selection omission is visible in diagnostics and operation outcome.
 Applications that require a provider-specific protocol use a custom resolver.
 
 Trusted host code can request an `explicit` activation or named resource using
@@ -7214,6 +7287,7 @@ TruvaG3 supports configuration through environment variables:
 
 **Activity Compaction (LLM-powered digest):**
 - `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` - Model for summarization/compaction LLM calls. Accepts aliases such as `fast` and `smart` only when the selected provider defines them, or a concrete model ID (default: agent's model)
+- `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` - Positive fixed output-token allowance per event-summary call, read by `BuildMemoryHooks` at startup. Unset retains max(300, 150 × batch size); invalid explicit values fail construction, including without an AI client. Direct construction uses `WithSummarizerMaxTokens(n)`, which rejects non-positive values and overrides `WithSummarizerTokensPerStep(n)` regardless of option order. Independent of synthesis and compaction budgets.
 - `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` - Max tokens for compacted digest output (default: `500`)
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` - Max events fetched before compaction (default: `200`)
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` - Raw events appended after digest for detail (default: `15`)
@@ -7270,3 +7344,16 @@ export TRUVAG3_DEV_MODE=true
 - GitHub Issues: [github.com/truvaagents/truva-g3/issues](https://github.com/truvaagents/truva-g3/issues)
 - Documentation: [github.com/truvaagents/truva-g3/docs](https://github.com/truvaagents/truva-g3/docs)
 - Examples: [github.com/truvaagents/truva-g3/examples](https://github.com/truvaagents/truva-g3/examples)
+
+### Terminal correlation and event-summary timeout
+
+`orchestration.MetadataKeyExecutionRequestID` identifies the owning request segment
+on existing terminal execution results, returned and stored. Older results can lack
+it. `orchestration.WithRequestID(ctx, id)` binds it for post-return evidence projection.
+
+`orchestration.WithSummarizerTimeout(time.Duration)` configures a positive builtin
+AI-invocation timeout (default 2m). Invalid explicit values fail construction.
+The standard `BuildMemoryHooks` layer instead resolves environment then default;
+a direct-constructor option does not override an independently built hook bundle.
+`WithSummarizerMaxStepsPerBatch(int)` already controls direct-construction batch
+size (default 20); remaining steps use heuristic summaries, without extra model calls.

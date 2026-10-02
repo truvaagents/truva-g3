@@ -670,8 +670,8 @@ func TestAIOrchestrator_BuildPlanningPromptWithParseError(t *testing.T) {
 		t.Error("Expected arithmetic expression warning in prompt")
 	}
 
-	if !strings.Contains(promptResult.Prompt, "plain text only") {
-		t.Error("Expected markdown formatting warning in prompt")
+	if !strings.Contains(promptResult.Prompt, "code and Markdown") || strings.Contains(promptResult.Prompt, "plain text only") {
+		t.Error("Expected literal payload preservation guidance in prompt")
 	}
 
 	if !strings.Contains(promptResult.Prompt, "Omit trailing commas") {

@@ -33,6 +33,7 @@ const (
 	promptValuePriorResult        promptDynamicValueKind = "prior_result"
 	promptValueContinuationNote   promptDynamicValueKind = "continuation_note"
 	promptValueValidationFeedback promptDynamicValueKind = "validation_feedback"
+	promptValueRejectedPlan       promptDynamicValueKind = "rejected_plan"
 )
 
 const (
@@ -40,6 +41,8 @@ const (
 	promptFieldCapabilityCatalog              = "capability_catalog"
 	promptFieldContinuationNote               = "continuation_note"
 	promptFieldValidationFeedback             = "validation_feedback"
+	promptFieldRejectedPlan                   = "rejected_plan"
+	promptFieldValidationHistory              = "validation_history"
 	promptFieldPriorResultStepID              = "prior_result.step_id"
 	promptFieldPriorResultAgentName           = "prior_result.agent_name"
 	promptFieldPriorResultInstruction         = "prior_result.instruction"
@@ -146,6 +149,7 @@ func prepareSynthesisStepValues(
 	instruction string,
 	content string,
 	contentField string,
+	contentAlreadyPrepared ...bool,
 ) (string, string, string, error) {
 	preparedAgent, err := preparePromptValue(
 		ctx, promptSynthesis, promptValuePriorResult,
@@ -160,6 +164,9 @@ func prepareSynthesisStepValues(
 	)
 	if err != nil {
 		return "", "", "", err
+	}
+	if len(contentAlreadyPrepared) > 0 && contentAlreadyPrepared[0] {
+		return preparedAgent, preparedInstruction, content, nil
 	}
 	preparedContent, err := preparePromptValue(
 		ctx, promptSynthesis, promptValuePriorResult, contentField, content,

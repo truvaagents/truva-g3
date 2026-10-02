@@ -122,8 +122,11 @@ type SkillRuntimeLimits struct {
 	MaxResourcesPerExecution   int           `json:"max_resources_per_execution"`
 	ResolutionMaxTokens        int           `json:"resolution_max_tokens"`
 	RegistryReadTimeout        time.Duration `json:"registry_read_timeout"`
-	SynthesisTokenBudget       int           `json:"synthesis_token_budget"`
-	EffectiveInputTokenBudget  int           `json:"effective_input_token_budget,omitempty"`
+	// ResourceSelectionAttemptTimeout bounds each built-in resource AI attempt.
+	// Zero inherits the parent deadline and is omitted from legacy budget identity.
+	ResourceSelectionAttemptTimeout time.Duration `json:"resource_selection_attempt_timeout,omitempty"`
+	SynthesisTokenBudget            int           `json:"synthesis_token_budget"`
+	EffectiveInputTokenBudget       int           `json:"effective_input_token_budget,omitempty"`
 }
 
 // SkillContentCacheConfig configures only process-local immutable-body cache

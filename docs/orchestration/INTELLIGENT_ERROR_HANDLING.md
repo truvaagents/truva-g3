@@ -1089,7 +1089,10 @@ A special case arises with **503 errors** containing structured tool responses. 
    - With changes: "Change 'Tokio' to 'Tokyo'" → Retry with corrected params
    - Without changes: "Timeout, service may recover" → Retry with same params
 3. **`IsTransientError` flag** - LLM sets this for infrastructure issues (timeouts, service unavailable)
-4. **Tool's `retryable: false` is overridden** - When LLM identifies a transient error, the executor continues retrying even if the tool said "don't retry"
+4. **Explicit retry policy is authoritative** - `retryable:false` stops same-step
+   retries before analysis. Omission is distinct from false; non-transient 4xx
+   requests are not resent unchanged when correction cannot proceed. A later
+   planner decision is a new operation, not an override of that retry policy.
 
 **Decision Matrix:**
 

@@ -211,16 +211,20 @@ func WithEnrichmentKnowledge(knowledge core.SharedKnowledge, embedder core.Embed
 // WithEnrichmentWeights sets custom retrieval weights.
 func WithEnrichmentWeights(weights core.RetrievalWeights) MemoryEnrichmentOption {
 	return func(h *MemoryEnrichmentHook) error {
+		if err := validateMemoryRetrievalWeights(weights); err != nil {
+			return err
+		}
 		h.weights = weights
 		return nil
 	}
 }
 
-// WithEnrichmentMaxTokens sets the maximum tokens of memory context to inject.
+// WithEnrichmentMaxTokens bounds this hook's derived memory view at four encoded
+// bytes per token (an approximation, not a tokenizer count).
 func WithEnrichmentMaxTokens(maxTokens int) MemoryEnrichmentOption {
 	return func(h *MemoryEnrichmentHook) error {
-		if maxTokens <= 0 {
-			return fmt.Errorf("maxTokens must be positive, got %d", maxTokens)
+		if maxTokens <= 0 || maxTokens > int(^uint(0)>>1)/4 {
+			return fmt.Errorf("maxTokens must be positive and fit its four-byte budget, got %d", maxTokens)
 		}
 		h.maxTokens = maxTokens
 		return nil
@@ -250,7 +254,7 @@ func WithEnrichmentEntityExtractor(extractor EntityExtractor) MemoryEnrichmentOp
 }
 
 // WithEnrichmentRecentEventsLimit sets how many recent domain events to include
-// as baseline situational awareness (regardless of entity extraction). Default: 10.
+// as baseline situational awareness (regardless of entity extraction). Default: 20.
 func WithEnrichmentRecentEventsLimit(limit int) MemoryEnrichmentOption {
 	return func(h *MemoryEnrichmentHook) error {
 		if limit <= 0 {
@@ -414,8 +418,9 @@ func (h *MemoryEnrichmentHook) SetLLMDebugStore(store LLMDebugStore) {
 
 // BeforePlanning queries shared memory and injects context into the planning prompt.
 func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.PipelineContext) (*core.PipelineShortCircuit, error) {
-	var sections []string
+	var sections []memoryViewSection
 	var memoryContext string
+	var viewReport memoryViewReport
 
 	startTime := time.Now()
 
@@ -449,7 +454,8 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 	// This ensures the LLM knows what happened recently even when no entities
 	// are extracted from natural language chat queries.
 	// When compactor is available, fetch more events (compactionRawLimit) and compress them.
-	seen := make(map[string]bool) // Dedup event IDs across recent + entity queries
+	// Deduplicate admitted display records, not fetched events. A domain event
+	// excluded from the detail view remains eligible in entity-specific history.
 	if h.episodic != nil {
 		since := time.Now().Add(-h.lookbackWindow)
 
@@ -459,149 +465,67 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 			queryLimit = h.compactionRawLimit
 		}
 
-		recentEvents, err := h.episodic.QueryRecentEvents(ctx, h.agentDomain, since, queryLimit)
+		recentEvents, observedRead, err := h.readRecentWindow(ctx, since, queryLimit)
 		if err != nil {
-			h.logger.WarnWithContext(ctx, "Recent events query failed, skipping", map[string]interface{}{
-				"operation":  "memory_enrichment",
-				"request_id": requestID,
-				"error":      err.Error(),
-				"error_type": "episodic_recent_read",
-			})
+			if h.logger != nil {
+				h.logger.WarnWithContext(ctx, "Recent events query failed, skipping", map[string]interface{}{
+					"operation":  "memory_enrichment",
+					"request_id": requestID,
+					"error_type": "episodic_recent_read",
+				})
+			}
 			telemetry.Counter("memory.enrichment.episodic_query_errors",
 				"module", telemetry.ModuleOrchestration,
 			)
 		} else if len(recentEvents) > 0 {
-			for _, e := range recentEvents {
-				seen[e.EventID] = true
-			}
-
 			// Compact if available, otherwise raw
 			if h.compactor != nil {
-				var digest string
-				var detailEvents []core.AgentEvent
-
-				// Check digest cache for incremental compaction
 				cacheDecisionStart := time.Now()
-				policyFingerprint := ""
-				cacheSafe := true
-				if semantic, hasAI := h.compactor.(aiSemanticCacheFingerprinter); hasAI {
-					policyFingerprint, cacheSafe = semantic.aiSemanticFingerprint(ctx)
+				digest, cachePath, cacheHit, coverage := h.compactWindow(ctx, recentEvents, observedRead)
+				effectStatus := core.PipelineHookEffectSucceeded
+				if digest == "" {
+					effectStatus = core.PipelineHookEffectSkipped
 				}
-				var cached *cachedDigestData
-				if cacheSafe {
-					cached, _ = h.getCachedDigest(ctx, policyFingerprint)
-				}
-				var cachePath string
-
-				if cached == nil {
-					// Cache miss (or no cache) — full compaction
-					cachePath = "full"
-					telemetry.Counter("orchestration.digest_cache.miss", "module", telemetry.ModuleOrchestration)
-					compactionCtx := ctx
-					var producedFingerprint *aiFingerprintCapture
-					if policyFingerprint != "" {
-						compactionCtx, producedFingerprint = withAIFingerprintCapture(ctx)
-					}
-					d, compactErr := h.compactor.CompactEvents(compactionCtx, recentEvents, h.compactionMaxTokens)
-					if compactErr == nil && d != "" {
-						h.storeCachedDigest(ctx, d, newestEventTS(recentEvents), policyFingerprint,
-							cacheSafe && producedFingerprint.matches(policyFingerprint))
-						digest = d
-					} else {
-						// Fail-open: fall back to raw events
-						if compactErr != nil {
-							telemetry.RecordSpanError(ctx, compactErr)
-						}
-						fallbackEvents := recentEvents
-						if len(fallbackEvents) > h.recentEventsLimit {
-							fallbackEvents = fallbackEvents[:h.recentEventsLimit]
-						}
-						section := formatEpisodicEvents(fallbackEvents, "Recent activity in this domain:")
-						sections = append(sections, section)
-					}
-					detailEvents = recentEvents
-				} else {
-					// Cache hit — check for new events since last compaction
-					telemetry.Counter("orchestration.digest_cache.hit", "module", telemetry.ModuleOrchestration)
-					newEvents, _ := h.episodic.QueryRecentEvents(ctx, h.agentDomain, cached.LastEventTS, h.compactionRawLimit)
-
-					if len(newEvents) == 0 {
-						// No new events — use cached digest (0ms, no LLM)
-						cachePath = "cached"
-						digest = cached.Content
-					} else if len(newEvents) <= h.incrementalThreshold {
-						// Incremental update
-						cachePath = "incremental"
-						compactionCtx := ctx
-						var producedFingerprint *aiFingerprintCapture
-						if policyFingerprint != "" {
-							compactionCtx, producedFingerprint = withAIFingerprintCapture(ctx)
-						}
-						updated, err := h.compactor.UpdateDigest(compactionCtx, cached.Content, newEvents, h.compactionMaxTokens)
-						if err == nil && updated != "" {
-							h.storeCachedDigest(ctx, updated, newestEventTS(newEvents), policyFingerprint,
-								cacheSafe && producedFingerprint.matches(policyFingerprint))
-							digest = updated
-						} else {
-							digest = cached.Content // fallback to stale cache
-						}
-					} else {
-						// Burst — full recompaction
-						cachePath = "full_recompact"
-						allEvents, _ := h.episodic.QueryRecentEvents(ctx, h.agentDomain, since, h.compactionRawLimit)
-						compactionCtx := ctx
-						var producedFingerprint *aiFingerprintCapture
-						if policyFingerprint != "" {
-							compactionCtx, producedFingerprint = withAIFingerprintCapture(ctx)
-						}
-						d, err := h.compactor.CompactEvents(compactionCtx, allEvents, h.compactionMaxTokens)
-						if err == nil && d != "" {
-							h.storeCachedDigest(ctx, d, newestEventTS(allEvents), policyFingerprint,
-								cacheSafe && producedFingerprint.matches(policyFingerprint))
-							digest = d
-						} else {
-							digest = cached.Content // fallback to stale cache
-						}
-						detailEvents = allEvents
-					}
-
-					// For detail section on cache hit: only query the N most recent
-					if detailEvents == nil {
-						detailEvents, _ = h.episodic.QueryRecentEvents(ctx, h.agentDomain, since, h.compactionRecentDetail)
-					}
+				reportStructuredPipelineHookEffect(ctx, "memory_digest_window", "Activity digest window", effectStatus,
+					"Bounded digest selection; coverage is not a full-history guarantee",
+					map[string]interface{}{"path": cachePath, "cache_entry_found": cacheHit, "coverage": coverage, "returned_events": len(recentEvents)}, nil, cacheDecisionStart)
+				detailEvents := recentEvents
+				if digest == "" {
+					fallbackEvents := recentEvents[:min(len(recentEvents), h.recentEventsLimit)]
+					sections = append(sections, eventMemorySection("domain", "Historical domain events:", fallbackEvents))
 				}
 
 				// Cache decision observability (§6.7.7)
 				telemetry.AddSpanEvent(ctx, "activity.compaction.cache_decision",
 					attribute.String("request_id", requestID),
-					attribute.Bool("cache_hit", cached != nil),
+					attribute.Bool("cache_hit", cacheHit),
+					attribute.String("coverage", coverage),
 					attribute.String("path", cachePath),
 					attribute.Int64("duration_ms", time.Since(cacheDecisionStart).Milliseconds()),
 				)
 				h.logger.DebugWithContext(ctx, "Digest cache decision", map[string]interface{}{
 					"operation":   "memory_enrichment",
 					"request_id":  requestID,
-					"cache_hit":   cached != nil,
+					"cache_hit":   cacheHit,
+					"coverage":    coverage,
 					"path":        cachePath,
 					"duration_ms": time.Since(cacheDecisionStart).Milliseconds(),
 				})
 
 				// Inject digest + recent detail events
 				if digest != "" {
-					sections = append(sections, "Domain activity summary:\n"+digest)
+					sections = append(sections, textMemorySection("domain", "Historical domain activity digest:", "Coverage: bounded returned event window; older history may be omitted.\n"+digest))
 					recentDetailCount := h.compactionRecentDetail
 					if detailEvents != nil && recentDetailCount > len(detailEvents) {
 						recentDetailCount = len(detailEvents)
 					}
 					if detailEvents != nil && recentDetailCount > 0 {
-						section := formatEpisodicEvents(detailEvents[:recentDetailCount], "Most recent events (detail):")
-						sections = append(sections, section)
+						sections = append(sections, eventMemorySection("domain", "Historical domain events (detail):", detailEvents[:recentDetailCount]))
 					}
 				}
 			} else {
 				// No compactor — use raw events (Phase 5 behavior)
-				section := formatEpisodicEvents(recentEvents, "Recent activity in this domain:")
-				sections = append(sections, section)
+				sections = append(sections, eventMemorySection("domain", "Historical domain events:", recentEvents))
 			}
 		}
 
@@ -624,17 +548,10 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 					)
 					continue
 				}
-				// Deduplicate against recent events
-				for _, e := range events {
-					if !seen[e.EventID] {
-						seen[e.EventID] = true
-						entityEvents = append(entityEvents, e)
-					}
-				}
+				entityEvents = append(entityEvents, events...)
 			}
 			if len(entityEvents) > 0 {
-				section := formatEpisodicEvents(entityEvents)
-				sections = append(sections, section)
+				sections = append(sections, eventMemorySection("entity", "Historical activity for the requested entities:", entityEvents))
 			}
 		}
 	}
@@ -645,19 +562,33 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 		if err == nil && len(active) > 0 {
 			section := formatActiveInvestigations(active, entities)
 			if section != "" {
-				sections = append(sections, section)
+				sections = append(sections, textMemorySection("investigation", "Investigation snapshot at request start:", section))
 			}
 		}
 
 		// Claim investigation on discovered entities (prevents duplicate work by other agents)
+		seenClaims := make(map[string]bool)
 		for _, entity := range entities {
-			claimed, holder, claimErr := h.coordinator.ClaimInvestigation(ctx, h.agentName, entity.ID, 0) // 0 = use default TTL
+			if seenClaims[entity.ID] {
+				continue
+			}
+			seenClaims[entity.ID] = true
+			var claimed bool
+			var holder string
+			var claimErr error
+			if coordinator, ok := h.coordinator.(core.InvestigationLeaseCoordinator); ok && resourcesFromContext(ctx) != nil {
+				claimed, holder, claimErr = resourcesFromContext(ctx).acquire(ctx, coordinator, h.agentName, entity.ID)
+			} else {
+				claimed, holder, claimErr = h.coordinator.ClaimInvestigation(ctx, h.agentName, entity.ID, 0)
+				telemetry.AddSpanEvent(ctx, "memory.investigation.legacy_ownership", attribute.String("ownership", "agent_name_only"))
+			}
 			if claimErr != nil {
+				h.logger.WarnWithContext(ctx, "Investigation acquisition could not confirm ownership", map[string]interface{}{"operation": "investigation_acquire", "error_type": "ownership_unknown", "request_id": GetRequestID(ctx)})
 				continue // Fail-open
 			}
 			if !claimed {
 				// Another agent already investigating — add to context
-				sections = append(sections, fmt.Sprintf("Note: %s/%s is currently being investigated by %s. Consider coordinating rather than duplicating work.", entity.Type, entity.ID, holder))
+				sections = append(sections, textMemorySection("investigation", "Investigation claim observation:", fmt.Sprintf("Note: %s/%s is currently being investigated by %s. Consider coordinating rather than duplicating work.", entity.Type, entity.ID, holder)))
 			}
 		}
 	}
@@ -689,20 +620,31 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 
 		if len(knowledge) > 0 {
 			section := formatKnowledgeFragments(knowledge)
-			sections = append(sections, section)
+			sections = append(sections, textMemorySection("knowledge", "Retrieved shared knowledge:", section))
 		}
 	}
 
 	// 5. Assemble and inject into enrichments
-	if len(sections) > 0 {
-		memoryContext = strings.Join(sections, "\n\n")
-
-		// Truncate to max tokens (approximate: 1 token ≈ 4 chars)
-		maxChars := h.maxTokens * 4
-		if len(memoryContext) > maxChars {
-			memoryContext = memoryContext[:maxChars] + "\n[memory context truncated]"
-		}
-
+	memoryContext, viewReport = renderMemoryView(sections, h.maxTokens*4)
+	telemetry.AddSpanEvent(ctx, "memory.enrichment.view_bounded",
+		attribute.String("request_id", requestID),
+		attribute.String("view_version", viewReport.ViewVersion),
+		attribute.String("event_format", viewReport.EventFormat),
+		attribute.Int("budget_bytes", viewReport.BudgetBytes),
+		attribute.Int("context_bytes", viewReport.UsedBytes),
+		attribute.String("outcome", viewReport.Outcome),
+	)
+	for _, counts := range viewReport.Sections {
+		telemetry.AddSpanEvent(ctx, "memory.enrichment.section_bounded",
+			attribute.String("request_id", requestID),
+			attribute.String("section", counts.Kind),
+			attribute.Int("admitted", counts.Admitted),
+			attribute.Int("omitted", counts.Omitted),
+			attribute.Int("shortened", counts.Shortened),
+			attribute.Int("duplicates", counts.Duplicates),
+		)
+	}
+	if memoryContext != "" {
 		if pctx.Enrichments == nil {
 			pctx.Enrichments = make(map[string]interface{})
 		}
@@ -719,6 +661,9 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 			"request_id":     requestID,
 			"entities_found": len(entities),
 			"context_chars":  len(memoryContext),
+			"context_bytes":  viewReport.UsedBytes,
+			"budget_bytes":   viewReport.BudgetBytes,
+			"view_outcome":   viewReport.Outcome,
 			"duration_ms":    time.Since(startTime).Milliseconds(),
 		})
 
@@ -727,6 +672,9 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 			attribute.String("request_id", requestID),
 			attribute.Int("entities_found", len(entities)),
 			attribute.Int("context_chars", len(memoryContext)),
+			attribute.Int("context_bytes", viewReport.UsedBytes),
+			attribute.Int("budget_bytes", viewReport.BudgetBytes),
+			attribute.String("view_outcome", viewReport.Outcome),
 		)
 		// Pattern 5: Counter with module label
 		telemetry.Counter("memory.enrichment.injected",
@@ -739,6 +687,13 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 		effectStatus = core.PipelineHookEffectSkipped
 		effectSummary = "No shared-memory context was available to inject"
 	}
+	if viewReport.Outcome == "budget_too_small" {
+		effectSummary = "Memory view omitted: budget_too_small for scope and section metadata"
+		h.logger.DebugWithContext(ctx, "Memory view budget too small", map[string]interface{}{
+			"operation": "memory_enrichment", "request_id": requestID,
+			"budget_bytes": viewReport.BudgetBytes, "view_outcome": viewReport.Outcome,
+		})
+	}
 	reportStructuredPipelineHookEffect(
 		ctx,
 		"memory_planning_context",
@@ -749,10 +704,12 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 			AgentDomain string           `json:"agent_domain"`
 			Entities    []core.EntityRef `json:"entities"`
 			Sections    int              `json:"sections"`
+			View        memoryViewReport `json:"view"`
 		}{
 			AgentDomain: h.agentDomain,
 			Entities:    toEntityRefs(entities),
 			Sections:    len(sections),
+			View:        viewReport,
 		},
 		nil,
 		startTime,
@@ -914,15 +871,17 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 	}
 
 	// Get request_id for span events and nested delegation tagging
-	parentRequestID := ""
 	requestID := GetRequestID(ctx)
+	parentRequestID := requestID
 	if baggage := getBaggageFromContext(ctx); baggage != nil {
 		parentRequestID = baggage["request_id"]
 	}
 
 	// Batch-summarize steps via LLM if summarizer is configured
 	var llmSummaries map[string]core.StepSummary
+	summaryCoverage := memorySummaryCoverage{Source: "heuristic"}
 	if h.summarizer != nil {
+		summaryCoverage.Source = "custom"
 		var inputs []core.StepSummaryInput
 		for _, step := range execResult.Steps {
 			if step.Skipped {
@@ -939,7 +898,21 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 			})
 		}
 		if len(inputs) > 0 {
-			summaries, err := h.summarizer.SummarizeSteps(ctx, inputs)
+			var summaries map[string]core.StepSummary
+			var err error
+			if builtin, ok := h.summarizer.(*LLMEventSummarizer); ok {
+				parsed := builtin.summarizeWithOutcome(ctx, inputs)
+				summaryCoverage.Source, summaryCoverage.Batch = "builtin", &parsed
+				if ctx.Err() != nil {
+					reportStructuredPipelineHookEffect(ctx, "episodic_memory_records", "Episodic memory records",
+						core.PipelineHookEffectFailed, "Parent request cancelled during summarization; no fallback writes attempted",
+						summaryCoverage, ctx.Err(), effectStart)
+					return ctx.Err()
+				}
+				summaries = parsed.Valid
+			} else {
+				summaries, err = h.summarizer.SummarizeSteps(ctx, inputs)
+			}
 			if err != nil {
 				h.logger.WarnWithContext(ctx, "Event summarizer failed, using heuristic fallback", map[string]interface{}{
 					"operation":  "memory_record",
@@ -961,7 +934,16 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 
 	for _, step := range execResult.Steps {
 		if step.Skipped {
-			continue // Skipped steps had no execution — nothing to record
+			// Neither dependency-blocked nor refinement-satisfied steps were
+			// dispatched. Record actual attempts, including root failures;
+			// retain skip reasons and causal links in execution evidence only.
+			continue
+		}
+		summaryCoverage.Eligible++
+		if summary, ok := llmSummaries[step.StepID]; ok && summary.Summary != "" {
+			summaryCoverage.Summarized++
+		} else {
+			summaryCoverage.Fallback++
 		}
 
 		// Build the per-step metadata bag. Augment with llm_entities from
@@ -1131,7 +1113,8 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 	}
 
 	// Release investigation claims for all entities we acted on
-	if h.coordinator != nil {
+	_, tokenCoordinator := h.coordinator.(core.InvestigationLeaseCoordinator)
+	if h.coordinator != nil && (!tokenCoordinator || resourcesFromContext(ctx) == nil) {
 		for _, entityID := range investigatedEntities {
 			releaseErr := h.coordinator.ReleaseInvestigation(ctx, h.agentName, entityID)
 			releaseEffect := memoryClaimReleaseEffect{
@@ -1187,6 +1170,15 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 			totalEffects,
 		)
 	}
+	summaryAttrs := []attribute.KeyValue{
+		attribute.String("request_id", requestID), attribute.String("source", summaryCoverage.Source),
+		attribute.Int("eligible", summaryCoverage.Eligible), attribute.Int("summarized", summaryCoverage.Summarized),
+		attribute.Int("fallback", summaryCoverage.Fallback),
+	}
+	if summaryCoverage.Batch != nil {
+		summaryAttrs = append(summaryAttrs, summaryCoverage.Batch.EntityFields.spanAttributes()...)
+	}
+	telemetry.AddSpanEvent(ctx, "memory.record.summary_coverage", summaryAttrs...)
 	reportStructuredPipelineHookEffect(
 		ctx,
 		"episodic_memory_records",
@@ -1196,7 +1188,8 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 		struct {
 			Events        []memoryEventEffect        `json:"events"`
 			ClaimReleases []memoryClaimReleaseEffect `json:"claim_releases"`
-		}{Events: eventEffects, ClaimReleases: releaseEffects},
+			Summaries     memorySummaryCoverage      `json:"summary_coverage"`
+		}{Events: eventEffects, ClaimReleases: releaseEffects, Summaries: summaryCoverage},
 		firstEffectErr,
 		effectStart,
 	)
@@ -1270,31 +1263,23 @@ func min64(a, b float64) float64 {
 
 // --- Formatting Helpers ---
 
+// Keep this scope notice before digest/detail text so bounded selectors retain
+// it. This enrichment is a request-start snapshot, not current phase progress.
+const historicalMemoryScopeNotice = "Memory scope: historical domain/entity evidence at request start. Attribute outcomes to their recorded origin; establish current-request progress from current execution results."
+
 func formatEpisodicEvents(events []core.AgentEvent, headers ...string) string {
-	header := "Recent agent activity for entities in this request:"
+	header := "Historical activity for the requested entities:"
 	if len(headers) > 0 && headers[0] != "" {
 		header = headers[0]
 	}
 	var sb strings.Builder
 	sb.WriteString(header)
 	for _, e := range events {
-		if e.Summary != "" {
-			fmt.Fprintf(&sb, "\n- [%s] %s: %s (outcome: %s)",
-				e.Timestamp.Format("2006-01-02 15:04"),
-				e.AgentName,
-				e.Summary,
-				e.Outcome,
-			)
-		} else {
-			fmt.Fprintf(&sb, "\n- [%s] %s %s on %s/%s (outcome: %s)",
-				e.Timestamp.Format("2006-01-02 15:04"),
-				e.AgentName,
-				e.ActionType,
-				e.EntityType,
-				e.EntityID,
-				e.Outcome,
-			)
-		}
+		// All fields are strings or entity references; JSON encoding preserves
+		// literal data and prevents it from terminating a surrounding XML section.
+		data, _ := json.Marshal(eventMemoryView(e, false))
+		sb.WriteString("\n- ")
+		sb.Write(data)
 	}
 	return sb.String()
 }
@@ -1469,9 +1454,9 @@ func getBaggageFromContext(ctx context.Context) map[string]string {
 	return result
 }
 
-// memoryTraceID extracts a trace/correlation ID from context for episodic event tagging.
+// memoryTraceID returns only an actual trace ID, not request correlation identity.
 func memoryTraceID(ctx context.Context) string {
-	return GetRequestID(ctx)
+	return telemetry.GetTraceContext(ctx).TraceID
 }
 
 // getParentEventFromContext extracts the parent event ID for nested delegation.
@@ -1493,11 +1478,15 @@ func getParentEventFromContext(ctx context.Context) string {
 
 // --- Digest caching helpers ---
 
+const activityDigestViewVersion = "historical-origin/v4-window"
+
 type cachedDigestData struct {
-	Content           string    `json:"content"`
-	LastEventTS       time.Time `json:"last_event_ts"`
-	GeneratedAt       time.Time `json:"generated_at"`
-	PolicyFingerprint string    `json:"policy_fingerprint,omitempty"`
+	Window            *digestWindow `json:"window,omitempty"`
+	ViewVersion       string        `json:"view_version,omitempty"`
+	Content           string        `json:"content"`
+	LastEventTS       time.Time     `json:"last_event_ts"`
+	GeneratedAt       time.Time     `json:"generated_at"`
+	PolicyFingerprint string        `json:"policy_fingerprint,omitempty"`
 }
 
 func (h *MemoryEnrichmentHook) getCachedDigest(ctx context.Context, policyFingerprint string) (*cachedDigestData, error) {
@@ -1523,7 +1512,7 @@ func (h *MemoryEnrichmentHook) getCachedDigest(ctx context.Context, policyFinger
 		telemetry.RecordSpanError(ctx, err)
 		return nil, err
 	}
-	if cached.PolicyFingerprint != policyFingerprint {
+	if cached.ViewVersion != activityDigestViewVersion || cached.PolicyFingerprint != policyFingerprint || strings.TrimSpace(cached.Content) == "" {
 		return nil, nil
 	}
 	return &cached, nil
@@ -1535,15 +1524,20 @@ func (h *MemoryEnrichmentHook) storeCachedDigest(
 	lastEventTS time.Time,
 	policyFingerprint string,
 	cacheSafe bool,
+	windows ...*digestWindow,
 ) {
 	if h.digestCache == nil || !cacheSafe {
 		return
 	}
 	cached := cachedDigestData{
+		ViewVersion:       activityDigestViewVersion,
 		Content:           content,
 		LastEventTS:       lastEventTS,
 		GeneratedAt:       time.Now(),
 		PolicyFingerprint: policyFingerprint,
+	}
+	if len(windows) > 0 {
+		cached.Window = windows[0]
 	}
 	data, err := json.Marshal(cached)
 	if err != nil {

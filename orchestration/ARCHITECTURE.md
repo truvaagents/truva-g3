@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.28
+**Version**: 1.37
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -374,7 +374,7 @@ When the Smart Executor runs a multi-step DAG, each step may depend on data prod
 
 #### Resolution Flow
 
-Layer 0 runs at plan time, before any step dispatches. Layers 1–4 run at step execution time. A dispatch-time guard sits immediately before the HTTP call and fails the step if any `{{…}}` token survived the runtime layers.
+Layer 0 runs at plan time, before any step dispatches. Layers 1–4 run at step execution time. A dispatch-time guard sits immediately before the HTTP call and fails the step if reserved framework-form `{{step-…}}` tokens survived the runtime layers. Unrelated tool-owned syntax such as `{{now}}` is excluded. Preserving literal strings during JSON parsing does not disable intentional framework template binding at execution time.
 
 ```
 [Plan validation]   →  Layer 0: Template / Macro / Depends-On Validation  ─  (regenerate on failure)
@@ -398,11 +398,23 @@ Runs once per plan, before the DAG executes, and rejects plans whose template re
 
 | Check | Purpose |
 |---|---|
-| Template shape | Every `{{…}}` must match `{{stepId.fieldPath}}`; unknown framework macros (e.g. `{{today_plus_1}}`) are rejected |
+| Template shape | Framework-form `{{step-…}}` macros must match `{{stepId.fieldPath}}`; unrelated tool-owned templates are left alone |
 | Cross-phase awareness | A template reference is valid if the step exists in the current plan **or** in a completed prior phase |
-| `depends_on` ⊆ templates | Every step ID referenced by a template must appear in `depends_on` (same-phase) or `implicit_deps` (prior-phase) |
+| Template declaration consistency | Every step ID referenced by a template must appear in `depends_on` (same-phase) or `implicit_deps` (prior-phase) |
+| Exact prior-phase declarations | `implicit_deps` contains only prior-phase step IDs actually referenced by parameter templates, not historical planning context; surplus declarations trigger regeneration |
 
-**Implementation**: `validateTemplatePaths`, `validateNoUnknownMacros`, `validateDependencyConsistency` in `executor.go`. The pre-dispatch guard shown in the diagram above is the runtime safety net for anything that slips past Layer 0.
+Freshly generated plans first normalize numeric bracket aliases (such as `items[0]` to `items.0`) and derive their exact prior-phase `implicit_deps` from parameter templates. This is a syntax/declaration correction, not a path-existence waiver: all normal validators still run, surplus declarations still fail, and hook-mutated, caller-supplied, and approved HITL plans are not normalized. The canonical array form remains `{{step-1.response.data.items.0.id}}`; keyed and expression brackets remain invalid.
+
+**Implementation**: `normalizeGeneratedPlan` in `plan_normalization.go`; `validateTemplatePaths`, `validateNoUnknownMacros`, and `validateDependencyConsistency` in `orchestrator.go`. The pre-dispatch guard shown in the diagram above remains the runtime safety net.
+
+At execution, template sources loaded outside `depends_on` retain their existing
+`template_auto_includes` metadata, with an additive `reason`: `declared_prior_phase`
+for `implicit_deps` sources (Debug), or `undeclared_reference` (existing Warn).
+The legacy `orchestration.template.auto_dependency` metric remains a count of
+inclusions, not planner errors. A new `orchestration.template.dependency_inclusion`
+counter splits the closed reason set without step-ID labels; the same-named span
+event carries reason and step/source IDs. Scheduling, admitted dependencies and
+successful/non-skipped source requirements are unchanged.
 
 #### Layer 1: Auto-Wiring (No LLM Cost)
 
@@ -416,6 +428,34 @@ Fast, deterministic matching with zero LLM calls. Handles the common case where 
 | Type coercion | `"48.85"` (string) → `48.85` (number) | (applied on top) |
 
 **Implementation**: `AutoWirer` in `auto_wire.go`
+
+The executor copies admitted parameters and resolves explicit templates first,
+including prior-phase sources. Exact bindings and literal inputs cannot be
+overwritten by hybrid mapping. Missing parameters use source-ID-keyed outputs;
+conflicting auto-wire matches remain unmapped. Missing-path semantic fallback
+uses only that template's named source and records inferred provenance; null
+inference remains unresolved rather than becoming an empty string.
+
+Exact whole-value references preserve native objects/arrays. A known
+container-to-scalar schema mismatch fails before coercion and dispatch; the
+planner can select a scalar field explicitly. Embedded interpolation remains
+text. Literal JSON-looking strings stay strings when the destination is a
+string. This does not retire semantic `nested_extraction`, numeric/bool coercion,
+or unknown-schema behavior. Approved pre-resolved HITL inputs bypass repeat
+coercion; the existing snapshot/application-transform ordering is unchanged.
+The final dispatch validator rechecks container shape after transforms and
+retry corrections. A rejected local binding records zero dispatches.
+
+Failed-operation prompt evidence is a bounded derived view of immutable
+`StepDispatch` records, not a rewritten tool result. Each failed attempt carries
+its own parameters and structured response code; planned inputs and successful
+attempts are excluded. Existing terminal error text remains separate. Built-in
+continuation and both synthesis paths use the same projector; custom synthesizers
+are unchanged. `FailedOperationViewConfig` provides numeric ceilings, an explicit
+disable switch and a typed restrictive `InputPolicy`; policy failure omits that
+attempt's inputs. An unknown custom policy disables semantic cache eligibility.
+Delegation uses the explicit `ProjectFailedOperationEvidence` application seam,
+not automatic cross-agent disclosure. See the Result Compaction Guide for budgets.
 
 #### Layer 2: LLM Micro-Resolution (On-Demand)
 
@@ -436,6 +476,24 @@ When the HTTP call to a tool returns a 4xx error, the `ErrorAnalyzer` uses an LL
 - Determines if the error is fixable (bad params) vs. permanent (resource not found)
 - Can suggest corrected parameter values
 - Identifies transient errors (503, timeouts) for simple retry
+
+The executor enforces tool-declared correction permission before any analyzer,
+contextual retry, or legacy callback. Explicit `retryable:false` forbids both
+semantic correction and unchanged executor resends, including for 408, 429 and
+5xx responses; omission retains bounded status-based compatibility. Framework Go
+tools serialize the zero Boolean as false, so producers must deliberately mark
+correctable errors true. Non-transient 4xx responses are never resent unchanged,
+and exact-bound/HITL-approved inputs cannot be rewritten by correction. Ordinary
+bounded transient retries remain available when not explicitly forbidden; orchestrator delegations remain
+single-dispatch. `StepResult.dispatch_count` and `dispatches` expose physical
+requests independently of the legacy regular-retry `attempts` counter.
+
+Failed responses retain their structured `tool_error` without promoting it to
+successful output. Continuation uses a bounded, explicitly labelled projection;
+full errors, dispatch history, and binding provenance remain in execution records.
+Template source admission uses `StepResult.Success` and `Skipped`, not a domain
+payload's `success` field. Failed, skipped and nil results are not binding sources;
+missing-parameter inference considers required fields only.
 
 **Implementation**: `ErrorAnalyzer` in `error_analyzer.go`
 
@@ -654,6 +712,18 @@ Request → Plan (Phase 1) → HITL → Execute → [terminal?]
 
 The LLM planner can set `terminal: false` on a `RoutingPlan` to signal that the plan is **partial** — it covers the steps that can be planned now, but more steps will be needed after seeing the results.
 
+Terminal-planning guidance is based on task completeness, not whether entity
+names or parameter shapes are already known. Use a non-terminal phase when
+interpreting its results determines whether further investigation or action is
+needed, including for already-known entities. Keep predictable, template-linked
+actions together; a terminal plan is appropriate when those actions are expected
+to satisfy the objective and only answer composition will remain. When no
+available action can resolve an uncertainty, report the limitation rather than
+continuing without useful work. Initial and continuation planning share these
+instructions. This is planner guidance, not a post-execution completion check
+or a guarantee of model reasoning correctness; runtime termination and safety
+limits are unchanged.
+
 ```go
 // RoutingPlan with iterative planning fields
 type RoutingPlan struct {
@@ -685,15 +755,68 @@ The orchestrator's `executePhaseLoop()` method drives the cycle:
 
 ```go
 type IterativePlanConfig struct {
-    Enabled             bool          // Default: true
-    MaxPhases           int           // Default: 5
-    MaxTotalSteps       int           // Default: 200
-    PhaseTimeout        time.Duration // Default: 180s per phase
-    MaxValidationRounds int           // Default: 4 — regenerations after first validation failure
+    Enabled                      bool          // Default: true
+    MaxPhases                    int           // Default: 5
+    MaxTotalSteps                int           // Default: 200
+    PhaseTimeout                 time.Duration // Default: 180s per phase
+    MaxValidationRounds          int           // Default: 4 — regenerations after first validation failure
+    RegenerationFeedbackMaxBytes int           // Default: 16 KiB of added correction context
 }
 ```
 
 When safety limits are reached without a terminal plan, the orchestrator forces termination (`ForcedTerminal: true`) and synthesizes with all results collected so far.
+
+Plan parsing preserves application-owned strings byte-for-byte after JSON
+decoding, including source code, Markdown and embedded fences. Valid JSON is
+passed directly to typed plan decoding; a type mismatch does not trigger syntax
+repair. Supported outer prose/Markdown envelopes are recovered with string-aware
+object matching. Unquoted-template and trailing-comma recovery modify only
+structure outside strings; they do not remove Markdown or rewrite payloads.
+Dependency, schema, hook and dispatch validation still apply to recovered plans.
+The parse-retry prompt constrains the outer JSON envelope while allowing code and
+Markdown within escaped string values. See `plan_json.go` and `parsePlan`.
+
+Validation failure is different: the phase fails without executing the rejected
+candidate. `MaxValidationRounds` bounds regeneration attempts after the first
+validation failure. Malformed JSON returned by regeneration consumes an attempt
+from this same budget and its parse error is fed back to the planner. A recovered
+candidate restarts normalization and the full validation gauntlet before hooks,
+HITL, or execution. Provider, boundary-preparation, and cancellation errors are
+not retried by this loop. Initial-generation retry policies and HITL checkpoint
+resume behavior are unchanged. Parse failures emit
+`orchestrator.plan_validation.regeneration_parse_error` span events; exhaustion
+uses the existing validation-exhaustion event and counter. Structural corrections
+reuse the phase's selected capability prompt and add bounded, encoded feedback
+containing the rejected candidate and distinct errors. A new phase selects again;
+a genuine discovery miss may also refresh selection. Normalization and selection
+reuse emit span events without inventing LLM calls. On exhaustion, the request
+still fails, but its returned and stored execution retains admitted steps plus
+`termination_reason=plan_validation_exhausted` and `execution_request_id` metadata.
+
+The phase loop also detects a dependency-only fixed point: if consecutive
+non-empty phases contain only unsuccessful dependency-skipped steps rooted in
+the same failed step IDs, a non-terminal continuation is stopped. The first
+blocked phase allows the planner to adapt; actual attempted work, including
+polling and unsuccessful retries, resets this check. This is a structural
+no-progress invariant, not a comparison of domain responses or a prescribed
+recovery workflow. Cyclic or incomplete dependency evidence is ineligible.
+The result retains every admitted plan and step, sets `ForcedTerminal`, and
+records `termination_reason=repeated_failed_dependencies` in result metadata.
+Existing `ExecutionResult.Success` semantics are unchanged.
+
+Dependency skips carry `Skipped=true`, `Success=false`, capability, instruction,
+zero attempts, and the exact skip reason. Their original inputs are retained
+under `Metadata.planned_parameters`; `Parameters` remains unset because no
+request was dispatched. Legacy/resumed plans still receive fail-closed
+dependency checks even if their declarations predate the stricter validator.
+
+`MemoryRecordHook` excludes dependency skips from LLM event summarization and
+episodic recording, just as it excludes refinement skips: neither dispatched
+an action. Actual failed attempts remain eligible for recording. Causal links,
+planned inputs, and skip reasons remain in execution evidence; existing
+episodic records are not deleted. Registry Viewer classifies unsuccessful
+dependency skips as skipped but preserves successful refinement-satisfied
+steps as completed, including when displaying older stored executions.
 
 #### Phase Number Propagation
 
@@ -1269,6 +1392,139 @@ spec:
 ```
 
 ### Memory Wiring Boundary
+
+Managed `ProcessRequest*` segments carry a private execution resource scope.
+When an investigation coordinator implements `core.InvestigationLeaseCoordinator`,
+memory enrichment acquires fresh execution-owned claims, and the outer request
+finalizer releases those exact handles on every exit, including panic, failure,
+cancellation and HITL suspension. Recording events does not release unrelated
+step entities in this mode. Each resumed request runs enrichment with restored
+checkpoint metadata (explicit adapter metadata wins), acquiring fresh handles.
+Handles are never serialized into checkpoints, prompts or diagnostic payloads.
+
+Cleanup is joined and uses a cancellation-independent, correlated context bounded
+by `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` (5s default) or `WithExecutionCleanupTimeout`.
+Invalid explicit values fail construction in both config modes. Providers must
+honor context; Go cannot forcibly stop a non-cooperative implementation. Cleanup
+failure is optional and cannot replace the original result/panic. Pending hook
+effects become observed release outcomes before terminal recorder publication.
+The scope does not renew investigation TTLs or promise crash-durable cleanup.
+Legacy custom coordinators and directly invoked hooks retain their existing
+name-owned behavior; direct `ExecutePlan*` callers do not gain managed ownership.
+An ordinary trace records the ownership mode so this limitation stays visible.
+
+`BuildMemoryHooks` also resolves `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS`
+for both raw and AI-compacted enrichment. The default is 2000, interpreted as
+8000 encoded bytes, not exact model tokens. Invalid explicit numeric tuning fails
+construction, even without AI or episodic dependencies. The builder returns
+hooks, coordinator and error; applications check it synchronously before serving.
+Absent episodic memory with valid configuration is a successful no-op. All
+selected hooks must construct successfully before a bundle is returned. Direct
+numeric options use the same validation; no new module edge or builder knob is
+added. Runtime backend failures retain their existing fail-open behavior.
+
+The derived historical view reserves scope/headings/counts and admits complete
+JSON records in the existing domain → entity → investigation → knowledge order.
+Request-local event detail uses `event-detail/v1`: an `event` tuple containing
+the exact event ID, origin request ID, timestamp, agent, action and outcome,
+alongside named summary/entity fields. The complete tuple legend precedes all
+records, follows the historical-scope notice, and is charged to the same budget.
+Records remain self-contained; there is no shared provenance lookup table.
+Sparse histories retain named fields when estimated metadata savings do not
+repay the legend; duplicate IDs do not inflate that estimate. This choice does
+not reinterpret summary content or change admission priority. The version and
+chosen `event_format` (`named` or `tuple`) are included in the hook view report
+and `view_bounded` trace event.
+Only admitted event IDs are deduplicated. Display summaries may be shortened at
+UTF-8 boundaries and explicitly labelled; immutable provenance either fits or
+the record is omitted. Stored events, query order, entity/claim semantics, other
+hooks' RAG context and compactor generation budgets are unchanged. Detail views
+omit the repeated multi-entity list with an explicit count; compactor input still
+retains that list. Cached digests never contain these tuples. The
+`historical-origin/v4-window` cache joins the existing AI fingerprint with a
+bounded returned-window identity: complete event-content hashes, domain,
+lookback, raw-event limit and output-token target. Unchanged windows reuse a
+digest without a model call even at the configured limit. A strict extension
+updates from only new events, including equal-timestamp arrivals; changed,
+expired or displaced records require a bounded full rebaseline. Summary and
+window metadata are written together. Concurrent stale writes may cause a
+later cache miss, but are not treated as coverage of a different current window.
+No cursor, atomic read snapshot or full-history guarantee is asserted.
+Legacy/custom episodic readers without the observed-read extension, or custom
+compactors without a known stable behavior identity, remain functional but
+bypass digest cache reuse. Backend read failure leaves the cache untouched;
+compaction failure exposes current raw events instead of an uncovered stale
+digest. Old view versions are cache misses, not automatically deleted records.
+Mixed-version writers sharing a domain cache can recompact until rollout converges.
+View completeness describes presentation of fetched records, not backend health
+or complete historical coverage.
+
+Existing hook effects carry byte budgets and per-section admission/omission
+counts; bounded trace events contain counts, not event payloads. Legacy
+`context_chars` remains byte-valued for compatibility alongside `context_bytes`.
+Optional resource-selector attempt diagnostics remain distinct from the one
+terminal omission owned by admission, after its parent-cancellation check.
+
+Event-summary output budgeting remains owned by the orchestration memory-hook
+builder, independently of planning and synthesis. The optional
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` startup setting replaces the
+calculated per-batch allowance with a positive fixed per-call allowance. Unset
+preserves the existing calculation; invalid explicit values fail construction.
+Direct callers use
+`WithSummarizerMaxTokens(n)` and receive an error for non-positive values.
+Requests continue through the existing AI, debug, and tracing paths.
+
+Direct summary construction rejects overflow in the calculated batch allowance
+unless a valid fixed allowance replaces it. Memory retrieval weights accept
+finite relative weights (including signed/zero values) without enforcing a sum;
+non-finite weights and temperatures fail construction. The announcement
+constructor retains zero as its default sentinel and rejects negative limits.
+
+Built-in event summaries are validated per submitted step ID. Complete valid
+entries preceding an unfinished JSON suffix survive as **partial** coverage;
+missing/invalid/duplicate IDs fall back once in the recorder. A malformed syntax
+error other than an unfinished suffix rejects the batch. Complete outer JSON
+fences and unambiguous complete prose-wrapped arrays remain compatible, including
+prose only after an array. JSON decoding determines the exact array boundary;
+strings inside it are unchanged. Partial prose envelopes, multiple arrays, other
+JSON envelopes/values and structural JSON markers outside the array are rejected.
+Raw/outer-fenced truncated-array recovery remains unchanged. Invalid
+entities are discarded independently of valid summary text; model-derived,
+explicit-input and custom-summarizer entity paths remain supported. No new
+grounding policy or additional model retry is introduced.
+
+Both event-summary prompts share the complete `step_id`/`summary`/`entities`
+output contract, including a legitimate empty entity array. Additive
+`batch.entity_fields` coverage classifies retained summaries as missing, empty,
+valid nonempty, invalid or mixed-validity entity fields, and counts accepted and
+rejected entities. Aggregation occurs after duplicate-step invalidation; rejected
+or discarded summaries do not inflate retained field coverage. Missing/null
+fields still leave usable summary text available. Legacy batch outcome and
+rejected-entity semantics remain unchanged, so a complete summary batch may
+still have missing/invalid entity fields. An explicit empty array is structurally
+valid, not proof that no real entity was missed. These are shape observations,
+not grounding or durable-write acknowledgements. Custom summarizers have no
+built-in batch observation, rather than a fabricated zero count. The new coverage
+fields in recording effects and summary/recording span events contain counts only;
+raw IDs and responses retain their existing execution-debug boundaries.
+
+Outcome metadata is call-local and private to the built-in summarizer. The
+public `core.EventSummarizer` interface is unchanged. Existing recording-hook
+effects include summary source, eligible/summarized/fallback counts and optional
+built-in batch coverage. These describe summary coverage, not successful durable
+backend writes. New events use the current trace context's trace ID or an empty
+value when unavailable, separately from their request identity; stored historical
+events are not rewritten. Empty/whitespace compactor output is unusable: full
+compaction falls back to raw details, while an incremental failure preserves the
+previous cache entry, while the prompt receives current raw details. Custom
+empty digests receive the same guard.
+
+`orchestration.event_summarization.success` retains its provider-completion
+meaning. The additive `orchestration.event_summarization.outcomes` counter has
+`outcome=complete|partial|fallback`, emitted once per non-empty built-in batch.
+Both memory dashboard copies distinguish that semantic series from legacy
+completion. Corresponding summary/compaction/recording span events contain
+bounded counts and outcomes; raw content stays in the existing debug path.
 
 `OrchestratorDependencies` does **not** include a generic `Memory` field — and it should not. Memory in this codebase is split across several distinct interfaces, each wired at a different layer:
 
@@ -2661,6 +2917,45 @@ length cap is a fixed coordination-protocol invariant.
 
 ### Framework-owned resume lifecycle
 
+#### Request observation and transient activity ownership
+
+Managed request segments attach `ExecutionLifecycleObservation` to execution
+snapshots and summaries. `running` (revision 1) becomes `completed`, `failed`,
+`cancelled`, or `suspended` (revision 2) only at the outer delivery finalizer.
+Completion describes the request pipeline, not application disposition or tool
+success. A deadline is failed; caller cancellation is cancelled; HITL is
+suspended. Legacy/direct-plan records without this field have unknown lifecycle.
+No fake initial plan is stored: before the first ordinary snapshot, live activity
+and hooks are the observation surfaces. Resume uses a new linked request ID.
+
+The request recorder assigns `RecordRevision` to each accepted snapshot. Late
+hook-effect updates merge with the latest full record; they cannot restore an
+earlier phase, response or lifecycle. Lifecycle-only settlement preserves the
+latest phase evidence and error-retention floor. These are additive fields on
+the existing provider-neutral `ExecutionStore`, not a task/workflow engine.
+
+An activity announcement inside a managed request installs one request-owned
+renewal loop. As with per-call resume-claim renewal below, this is joined
+request work, not an application/background-service `Runnable`. Reannouncement
+and status updates serialize the latest signal using its original request ID
+and start time. Renewal runs every effective signal TTL / 3 (minimum one
+nanosecond for representability); each submission is bounded by the smaller of
+that interval and the configured execution-cleanup timeout. Operational inputs
+remain `WithAnnouncementSignalTTL` / `TRUVAG3_ACTIVITY_SIGNAL_TTL` and
+`WithExecutionCleanupTimeout` / `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT`.
+
+Every request exit cancels and joins renewal before removing the signal.
+Removal and investigation cleanup share one cleanup deadline; custom providers
+must honor context cancellation. Suspended requests advertise no active work;
+process loss falls back to TTL. Direct hook callers retain their existing
+announcement/cleanup ownership. This does not renew investigation claims.
+
+Renewal/cleanup effects are registered pending during announcement and settled
+by the owner. Counters describe submissions and returned errors, never inferred
+backend health: the legacy activity provider's fail-open contract is unchanged.
+Periodic span events attach to the live request span, not an ended hook span;
+ordinary logs/events contain bounded classifications, not signal query text.
+
 `HITLResumer`, `ResumeExecutor`, and `CheckpointResumePersistence` belong to
 orchestration. `ResumeCoordinator` borrows persistence and an application
 adapter; it imports no Redis types and creates no clients.
@@ -3001,7 +3296,14 @@ ordinary lifecycle remain unchanged.
 The included activation, resource-selection, and authoring-advisor calls leave
 provider-native response format unset. Their provider-neutral structured-output
 contract is a fixed JSON prompt, strict decoding and identity validation, and
-one bounded correction retry. The corresponding AI-option overrides accept
+one bounded correction retry for activation and authoring. Resource selector v2
+accepts a complete outer JSON/unlabelled fence, retaining strict body validation,
+and permits a child-attempt timeout retry within two total attempts. Its duration
+limit is `SkillConfig.Limits.ResourceSelectionAttemptTimeout`, configured by
+`TRUVAG3_SKILL_RESOURCE_SELECTION_ATTEMPT_TIMEOUT`; zero inherits the parent.
+Optional omission is observed distinctly from selection; parent cancellation is
+terminal. Zero is omitted from budget serialization; nonzero limits and the v2
+policy version participate in the existing cache identity. The corresponding AI-option overrides accept
 only model and reasoning-effort intent; an application that requires a
 provider-native response protocol supplies a custom resolver or advisor.
 
@@ -3056,8 +3358,31 @@ modularity and flexibility.
 
 ## Version History
 
+Version 1.38 (2026-09-29): independent request lifecycle observations, monotonic
+record/effect merging, and request-owned activity renewal with joined all-exit
+cleanup. Legacy/direct-plan lifecycle remains unknown.
+
+Version 1.36 (2026-09-29): fail-fast numeric memory-hook construction with an
+explicit error return and synchronous application handling; preserve absent
+defaults, direct-option sentinels, ownership and runtime memory fail-open.
+
+Version 1.37 (2026-09-29): request-segment-owned investigation leases, bounded
+all-exit cleanup, private ownership and fresh resume acquisition. Preserve legacy
+direct-hook/custom-coordinator behavior and original request outcomes.
+
+Version 1.35 (2026-09-29): classify declared prior-phase template inclusions
+without planner-error warnings; preserve legacy totals and add reason telemetry.
+Restore symmetric complete summary prose envelopes without changing payloads or
+truncated-prefix recovery.
+
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.34 | 2026-09-29 | Compact self-contained request-local memory detail with budgeted tuple legend and view identity; stored events, compactor/cache semantics and section priority unchanged |
+| 1.33 | 2026-09-29 | Shared complete event-summary output contract and additive retained-summary entity-field coverage; preserved legacy outcomes, custom extraction, raw evidence and bounded telemetry |
+| 1.32 | 2026-09-28 | Call-local partial event-summary recovery and semantic outcomes; empty digest fallback; recorder coverage and actual trace identity; custom/extracted entity seams preserved |
+| 1.31 | 2026-09-28 | Complete-record historical view budgeting and working enrichment-limit builder wiring; view-v3 cache identity; one terminal resource omission with separate attempt diagnostics |
+| 1.30 | 2026-09-28 | Compact output-field visibility; origin-labelled historical memory and versioned digest views; resource-selector v2 with configurable attempt deadlines, one shared retry budget, strict outer-fence handling and explicit omission diagnostics |
+| 1.29 | 2026-09-27 | Documented payload-preserving plan parsing and string-aware syntax recovery; corrected the dispatch guard description to reserved framework templates |
 | 1.28 | 2026-09-11 | Added provider-neutral fenced HITL resume coordination, real terminal-result access, expected-status decisions, public checkpoint projection, and explicit transport/cancellation ownership |
 | 1.27 | 2026-09-11 | Added panic-safe per-hook completion, partial-state transfer to the existing request recorder, and phase/native-synthesis span cleanup while preserving the original panic and asynchronous effect semantics |
 | 1.26 | 2026-09-10 | Preserved failed terminal results for invalid early decisions and partial work for later planning errors, using existing retention/publisher semantics without changing HITL suspension |
@@ -3087,3 +3412,23 @@ modularity and flexibility.
 | 1.2 | 2026-08-07 | Corrected the summary to state the canonical `orchestration -> core + telemetry` module boundary |
 | 1.1 | 2026-07-27 | Established the pre-release conversation-resolution, checkpoint, and optional execution-store capability contracts |
 | 1.0 | 2025-09-28 | Initial architecture documentation |
+
+### Terminal result correlation and bounded event summarization
+
+Terminal execution results carry `MetadataKeyExecutionRequestID` (`execution_request_id`)
+for their owning request segment, whether successful, failed or interrupted. Terminal
+storage snapshots and returned results receive copy-on-write metadata; an existing
+phase snapshot and its publisher are preserved. Resume segments use their own ID,
+not `original_request_id`. No execution is fabricated for an absent result; older
+records may lack the key. Applications may bind this ID with `WithRequestID` when
+projecting failure evidence after the request returns.
+
+The builtin event summarizer bounds only its AI invocation to 2m by default.
+`WithSummarizerTimeout` configures direct construction; `BuildMemoryHooks` resolves
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` before optional-dependency checks.
+Absent values use the constructor default; explicit empty, malformed, non-positive
+or overflowing durations fail construction. Shorter enclosing deadlines win.
+A child timeout reports `summary_timeout` and the recorder falls back once per
+uncovered step using the live parent context. Parent cancellation reports
+`parent_cancelled` and prevents fallback writes. Successful late-returning responses
+are still parsed. Custom summarizers and the default 20-step batch remain unchanged.

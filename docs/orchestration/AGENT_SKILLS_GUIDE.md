@@ -1512,11 +1512,22 @@ shows the alias in `ai.requested_model` and the provider-resolved model in
 `ai.model`. Registry Viewer's LLM Calls view shows the effective model.
 
 The built-in selectors use temperature `0.01`, a fixed portable JSON prompt,
-strict decoding and identity validation, one bounded correction retry, and a
+strict decoding and identity validation, a two-attempt ceiling, and a
 512-token output ceiling by default. Provider-native response-format values
 remain unset so the contract works across providers. Request-aware AI clients
 are recommended; the non-zero low temperature also remains representable by
 the legacy client adapter.
+
+Resource selector v2 accepts a complete outer JSON/unlabelled fence and retries
+a child-attempt timeout within those two attempts. Activation and authoring keep
+their malformed-answer correction policy. Set
+`TRUVAG3_SKILL_RESOURCE_SELECTION_ATTEMPT_TIMEOUT` /
+`SkillConfig.Limits.ResourceSelectionAttemptTimeout` to a nonnegative duration;
+the default `0s` inherits the parent deadline. Invalid consulted env values fail
+in strict and compatible modes; nonzero code configuration wins over env.
+Parent cancellation is terminal. Exhausted optional selection reports omission,
+while selected required resources retain their fail-closed load contract.
+Keep indispensable rules in required always-active main instructions.
 
 ### 9.5 Add bounded selector guidance
 

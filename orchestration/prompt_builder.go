@@ -165,19 +165,25 @@ or discover something before you can act on the results), you may generate a PAR
 4. After these steps execute, you will be called again with their actual results
    to plan the remaining steps
 
-If you have all information needed for the complete plan, set "terminal": true
-(or omit the field - true is the default).
+Set "terminal": true when the planned actions are expected to satisfy the objective,
+leaving only answer composition and no result-dependent decision about further actions.
+Omitting the field still defaults to true for compatibility.
 
 When to use "terminal": false:
 - User asks about "top/famous/popular [things]" but you need to search first
 - A step's output determines how many subsequent steps are needed
 - Parameters for later steps depend on semantic content of earlier results
   (not just structured field references like {{step-1.response.data.lat}})
+- Interpreting results determines whether further investigation or action is needed,
+  even for already-known entities. Explain that unresolved decision in continuation_note.
 
-When to use "terminal": true (default):
-- All entities are explicitly named (weather in Tokyo, stock price of AAPL)
-- All parameters are known or expressible as template references to known fields
-- The plan structure does not depend on intermediate result content`
+PLAN OPTIMIZATION:
+- Keep predictable actions together when their parameters are known or expressible
+  as template references and interpreting results will not change which actions are needed.
+- Known entity names and parameter shapes alone do not establish task completeness.
+- When only answer composition remains, return a terminal plan with no steps.
+  If no available action can resolve remaining uncertainty, report that limitation
+  rather than inventing evidence or continuing without useful work.`
 
 // BuildIterativePlanningInstructions returns budget-aware iterative planning instructions.
 // Unlike the IterativePlanningInstructions constant, this function embeds the configured
@@ -190,26 +196,35 @@ func BuildIterativePlanningInstructions(config *IterativePlanConfig) string {
 	}
 	return fmt.Sprintf(`<iterative_planning>
 If your plan requires information not yet available, generate a PARTIAL plan:
-- Set "terminal": false and add "continuation_note" explaining what you need.
+- Set "terminal": false and add "continuation_note" explaining the unresolved decision
+  and what information you need to make it.
 - Include ONLY steps you can confidently plan now.
-- Budget: up to %d phases, %d total steps. Minimize phases — each costs an LLM call.
+- Budget: up to %d phases, %d total steps. Avoid unnecessary phases without omitting needed work.
+
+TERMINAL DECISION:
+- Set "terminal": true when the planned actions are expected to satisfy the objective,
+  leaving only answer composition and no result-dependent decision about further actions.
+- Set "terminal": false when interpreting results determines whether further investigation
+  or action is needed, even for already-known entities.
+- Known entity names and parameter shapes alone do not establish task completeness.
+- Omitting terminal still defaults to true for compatibility.
 
 PHASE SPLIT RULE:
-- If a step's parameters are expressible as "{{step-N.response.data.field}}" templates,
-  include it in the SAME phase rather than splitting into a new phase.
-- List same-phase references in depends_on; list prior-phase references in implicit_deps.
-- Only set terminal: false when the plan STRUCTURE (which steps, how many)
-  depends on the semantic CONTENT of a result.
+- Keep predictable actions in the SAME phase when parameters are expressible as
+  "{{step-N.response.data.field}}" templates and interpreting results will not change
+  which actions are needed.
+- List same-phase references in depends_on. The framework derives prior-phase parameter references into implicit_deps; you may omit that field. If supplied, it must contain exactly those references, not earlier planning context.
+- Use dot-numeric path segments for indexed values in step output templates (for example, items.0.id).
+- Split when the plan structure (whether to act, which steps, how many) depends
+  on the semantic content of a result, not merely on substituting output fields.
 
 PLAN OPTIMIZATION:
-- If all remaining steps can be connected via depends_on chains and template references,
-  include them in a SINGLE phase with terminal: true.
-- Only set terminal: false if you need to discover entirely new entities from results
-  that cannot be anticipated (e.g., a list of IDs you don't know yet).
-
-When to use "terminal": true (default):
-- All entities are explicitly named (weather in Tokyo, stock price of AAPL)
-- All parameters are known or expressible as template references
+- If the complete remaining work is predictable and can be connected via depends_on
+  chains and template references, include it in a SINGLE phase with terminal: true.
+- A direct information request can finish after retrieval when only composing the
+  answer remains; an investigation may need results interpreted before choosing more work.
+- If no available action can resolve remaining uncertainty, report that limitation
+  rather than inventing evidence or continuing without useful work.
 
 Final answer (composed by the framework):
 The framework writes the final user-facing answer from all completed step results.

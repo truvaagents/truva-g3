@@ -521,6 +521,16 @@ Provide clear, actionable information and warn about potentially destructive ope
 }
 ```
 
+For JSON-shaped plans, an agent can set
+`config.PlanAIOptions.ResponseFormat = orchestration.StringPtr("json")`.
+Configure synthesis separately through `SynthesisAIOptions`. This is a
+provider-portable preference inherited by model requests, not a guarantee:
+an adapter omits it when the selected model is not declared to support JSON
+mode and records that adjustment. An explicitly required JSON format instead
+fails with an unsupported-feature error. Inspect effective provider requests
+before claiming JSON enforcement, especially on a fallback route. JSON mode
+does not replace the orchestrator's plan validation.
+
 ### PromptConfig Tips
 
 `PromptConfig` is the most important configuration — it controls how the LLM plans and synthesizes:
@@ -2230,6 +2240,16 @@ TRUVAG3_AGENT_NAME=my-agent
 The orchestrator will automatically pause before executing any step that uses a sensitive capability, creating a checkpoint that stores the full execution state (plan, completed steps, resolved parameters). At construction, the framework logs a startup `WARN HITL checkpoint store using shared key prefix` if no isolating identifier was supplied — treat that log line as a configuration error, not noise.
 
 ### 15.2 Resume Context: The Critical Contract
+
+Managed requests using lease-aware shared memory release investigation handles
+when a segment suspends or otherwise exits. `BuildResumeContext` restores
+checkpoint metadata; the shared request runner passes it to pre-planning hooks
+with explicit adapter metadata taking precedence. Those hooks acquire fresh
+ownership for the resumed segment. Keep acquisition handles private rather than
+placing them in checkpoint metadata. Direct hook or `ExecutePlan*` composition
+does not supply this lifecycle. The joined cleanup bound defaults to 5s and is
+configurable with `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` /
+`WithExecutionCleanupTimeout`; explicit invalid values fail construction.
 
 Resume through `ResumeCoordinator`. It claims the approved checkpoint,
 restores context, renews ownership during work, and saves the actual terminal

@@ -19,6 +19,9 @@ func newTestRedisClient(t *testing.T) *redis.Client {
 }
 
 func TestNewSharedBackends_Default(t *testing.T) {
+	// Exercise the constructor's domain fallback independently of the caller's
+	// deployment environment (e.g. when this fixture runs inside an agent pod).
+	t.Setenv("TRUVAG3_AGENT_DOMAIN", "")
 	client := newTestRedisClient(t)
 	sb, err := NewSharedBackends(client, &core.NoOpLogger{})
 	require.NoError(t, err)

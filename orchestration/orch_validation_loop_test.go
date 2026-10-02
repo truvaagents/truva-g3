@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/truvaagents/truva-g3/core"
 )
@@ -213,6 +214,39 @@ func TestExecutePhaseLoop_ValidationExhausted(t *testing.T) {
 	// 1 initial generation + MaxValidationRounds (default 4) regenerations = 5 planning calls.
 	if ai.planCalls < 2 {
 		t.Fatalf("expected the loop to regenerate (>=2 planning calls), got %d", ai.planCalls)
+	}
+}
+
+func TestValidationExhaustionRetainsFailureMetadataInReturnedAndStoredExecution(t *testing.T) {
+	data := NewMockDiscovery()
+	ai := &scriptedAIClient{plans: []string{loopInvalidPlanJSON}, synth: "synthesized"}
+	o := NewAIOrchestrator(loopConfig(), data, ai)
+	o.executor = NewSmartExecutor(o.catalog)
+	store := &terminalRecordStore{NoOpExecutionStore: NewNoOpExecutionStore()}
+	o.executionStore = store
+
+	response, execution, err := o.ProcessRequestWithExecution(t.Context(), "do something", nil)
+	if err == nil || response != nil || execution == nil || execution.Success {
+		t.Fatalf("failure contract: response=%#v execution=%#v err=%v", response, execution, err)
+	}
+	requestID, ok := execution.Metadata[MetadataKeyExecutionRequestID].(string)
+	if !ok || requestID == "" || execution.Metadata["termination_reason"] != "plan_validation_exhausted" {
+		t.Fatalf("returned failure metadata: %#v", execution.Metadata)
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := o.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	records, _ := store.snapshot()
+	if len(records) == 0 {
+		t.Fatal("failed execution was not stored")
+	}
+	stored := records[len(records)-1]
+	if stored.Result == nil || stored.Result.Success ||
+		stored.Result.Metadata[MetadataKeyExecutionRequestID] != requestID ||
+		stored.Result.Metadata["termination_reason"] != "plan_validation_exhausted" {
+		t.Fatalf("stored failure metadata: %#v", stored.Result)
 	}
 }
 

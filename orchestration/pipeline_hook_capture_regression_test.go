@@ -53,10 +53,13 @@ func TestInvalidBeforePlanningDecisionStoresFailedTerminalResult(t *testing.T) {
 						}
 						return
 					}
-					if len(records) != 1 {
-						t.Fatalf("terminal records = %d, want 1", len(records))
+					if len(records) != 2 {
+						t.Fatalf("diagnostic plus settled lifecycle records = %d, want 2", len(records))
 					}
-					last := records[0]
+					last := records[1]
+					if last.Lifecycle == nil || last.Lifecycle.State != RequestLifecycleFailed {
+						t.Fatal("failure lifecycle not settled")
+					}
 					if last.Result == nil || last.Result.Success || last.Result.TotalDuration <= 0 || len(last.Result.Steps) != 0 || last.Plan != nil || last.Interrupted || last.FinalResponse != nil {
 						t.Fatalf("untruthful failed terminal state: %+v", last)
 					}
@@ -237,10 +240,13 @@ func TestLaterBoundaryFailurePreservesPriorWorkInExistingPublisher(t *testing.T)
 		t.Fatalf("boundary failure retried or lost prior execution: %v", err)
 	}
 	records, _ := store.snapshot()
-	if len(records) != 2 {
-		t.Fatalf("expected intermediate plus existing terminal publisher, got %d", len(records))
+	if len(records) != 3 {
+		t.Fatalf("expected intermediate, phase result, and settled lifecycle, got %d", len(records))
 	}
-	last := records[1]
+	last := records[2]
+	if last.Lifecycle == nil || last.Lifecycle.State != RequestLifecycleCancelled {
+		t.Fatal("cancellation lifecycle not settled")
+	}
 	if last.Result == nil || last.Result.Success || len(last.Result.Steps) != 1 || !last.Result.Steps[0].Success || last.Plan == nil || last.Plan.PlanID != "phase-1" || last.PhaseCount != 1 || len(last.PipelineHooks) != 1 {
 		t.Fatalf("boundary publisher erased completed work: %+v", last)
 	}
