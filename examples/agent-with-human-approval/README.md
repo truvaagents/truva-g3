@@ -1448,7 +1448,7 @@ For SSE streaming workflow:
 | `TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL` | `false` | `false` | When `true`, every plan needs human approval before any tool runs |
 | `TRUVAG3_HITL_SENSITIVE_CAPABILITIES` | (empty) | (commented out) | **Option A** — comma-separated capabilities. Triggers BOTH plan AND step approval when caps appear in the plan (per [hitl_policy.go:81](../../orchestration/hitl_policy.go#L81)) |
 | `TRUVAG3_HITL_STEP_SENSITIVE_CAPABILITIES` | (empty) | `stock_quote,company_profile,company_news,market_news` | **Option B** — same syntax, but triggers ONLY step approval (the recommended companion when `REQUIRE_PLAN_APPROVAL=true`, since Option A would double-gate) |
-| `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | `60s` | Checkpoint expiry timeout (e.g. `30s`, `5m`, `1h`) — shorter value lets timeout-driven tests (Test 3 / Test 4) finish quickly |
+| `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | `10m` | Checkpoint expiry timeout (e.g. `30s`, `5m`, `10m`) — timeout-driven tests (Test 3 / Test 4) can temporarily override it with a shorter value |
 | `TRUVAG3_HITL_ESCALATE_AFTER_RETRIES` | `3` | `3` | Failed-step retries before HITL escalation |
 | `TRUVAG3_REDIS_NAMESPACE` | `default` | `default` when unset | Deployment namespace shared by the versioned DB 0 registry, sessions, and HITL subspaces |
 | `TRUVAG3_HITL_WEBHOOK_URL` | - | `http://localhost:8352/internal/hitl-webhook` | Where the controller POSTs checkpoint notifications |
