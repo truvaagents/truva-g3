@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -149,6 +150,9 @@ func main() {
 
 		memBackends, err = memory.NewSharedBackends(redisClient, agent.Logger, opts...)
 		if err != nil {
+			if errors.Is(err, core.ErrInvalidConfiguration) {
+				log.Fatalf("Shared memory configuration failed: %v", err)
+			}
 			agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
 				"operation":  "shared_memory_setup",
 				"status":     "degraded",
@@ -167,6 +171,15 @@ func main() {
 	// - Initialization logic is centralized in main.go
 	// - Orchestrator is ready as soon as possible after framework starts
 	// - No mixing of init logic with health check logic
+	var memoryDeps *core.SharedMemoryDeps
+	if memBackends != nil {
+		memoryDeps = memBackends.ToDeps()
+	}
+	memoryHooks, activityCoord, hookErr := orchestration.BuildMemoryHooks(memoryDeps, agent.AI, agent.Logger)
+	if hookErr != nil {
+		log.Fatalf("Configure memory hooks: %v", hookErr)
+	}
+
 	go func() {
 		// Wait for Discovery, logging warnings if it takes too long
 		startTime := time.Now()
@@ -191,12 +204,7 @@ func main() {
 			}
 		}
 
-		// Discovery is available, build memory hooks and initialize orchestrator
-		var memoryHooks []core.PipelineHook
-		var activityCoord core.ActivityCoordinator
-		if memBackends != nil {
-			memoryHooks, activityCoord = orchestration.BuildMemoryHooks(memBackends.ToDeps(), agent.AI, agent.Logger)
-		}
+		// Discovery is available; initialize with the validated memory hooks.
 		if err := agent.InitializeOrchestrator(
 			agent.Discovery, hitl, hitlConfig, memoryHooks, activityCoord, skillRegistry,
 		); err != nil {

@@ -368,6 +368,10 @@ func runWorkerMode(redisKeyspace core.RedisKeyspace, redisClient redis.Universal
 
 	// memBackends lifted to function scope so reflection job can use it after workerCtx exists
 	var memBackends *memory.SharedBackends
+	// Validate hook-only configuration even if discovery later prevents wiring.
+	if _, _, err := orchestration.BuildMemoryHooks(nil, nil, agent.Logger); err != nil {
+		log.Fatalf("Configure memory hooks: %v", err)
+	}
 
 	// Initialize AI orchestrator (workers need it for task execution).
 	// Worker mode reuses the application-owned topology-aware client.
@@ -394,6 +398,9 @@ func runWorkerMode(redisKeyspace core.RedisKeyspace, redisClient redis.Universal
 		var memErr error
 		memBackends, memErr = setupMemoryBackends(redisClient, redisKeyspace, agent)
 		if memErr != nil {
+			if errors.Is(memErr, core.ErrInvalidConfiguration) {
+				log.Fatalf("Shared memory configuration failed: %v", memErr)
+			}
 			agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
 				"error": memErr.Error(),
 			})
@@ -401,10 +408,13 @@ func runWorkerMode(redisKeyspace core.RedisKeyspace, redisClient redis.Universal
 		if memBackends != nil {
 			defer memBackends.Close()
 		}
-		var memoryHooks []core.PipelineHook
-		var activityCoord core.ActivityCoordinator
+		var memoryDeps *core.SharedMemoryDeps
 		if memBackends != nil {
-			memoryHooks, activityCoord = orchestration.BuildMemoryHooks(memBackends.ToDeps(), agent.AI, agent.Logger)
+			memoryDeps = memBackends.ToDeps()
+		}
+		memoryHooks, activityCoord, hookErr := orchestration.BuildMemoryHooks(memoryDeps, agent.AI, agent.Logger)
+		if hookErr != nil {
+			log.Fatalf("Configure memory hooks: %v", hookErr)
 		}
 
 		if err := agent.InitializeOrchestrator(
@@ -631,6 +641,9 @@ func runEmbeddedMode(redisConnection core.RedisConnectionConfig, redisKeyspace c
 	// Setup shared agent memory (before orchestrator init)
 	memBackends, memErr := setupMemoryBackends(redisClient, redisKeyspace, agent)
 	if memErr != nil {
+		if errors.Is(memErr, core.ErrInvalidConfiguration) {
+			log.Fatalf("Shared memory configuration failed: %v", memErr)
+		}
 		agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
 			"error": memErr.Error(),
 		})
@@ -640,6 +653,15 @@ func runEmbeddedMode(redisConnection core.RedisConnectionConfig, redisKeyspace c
 	}
 
 	// Initialize AI orchestrator in background (Discovery is set during framework.Run())
+	var memoryDeps *core.SharedMemoryDeps
+	if memBackends != nil {
+		memoryDeps = memBackends.ToDeps()
+	}
+	memoryHooks, activityCoord, hookErr := orchestration.BuildMemoryHooks(memoryDeps, agent.AI, agent.Logger)
+	if hookErr != nil {
+		log.Fatalf("Configure memory hooks: %v", hookErr)
+	}
+
 	go func() {
 		// Wait for Discovery, logging warnings if it takes too long
 		startTime := time.Now()
@@ -664,12 +686,7 @@ func runEmbeddedMode(redisConnection core.RedisConnectionConfig, redisKeyspace c
 			}
 		}
 
-		// Discovery is available, build memory hooks and initialize orchestrator
-		var memoryHooks []core.PipelineHook
-		var activityCoord core.ActivityCoordinator
-		if memBackends != nil {
-			memoryHooks, activityCoord = orchestration.BuildMemoryHooks(memBackends.ToDeps(), agent.AI, agent.Logger)
-		}
+		// Discovery is available; initialize with the validated memory hooks.
 		if err := agent.InitializeOrchestrator(
 			agent.Discovery, hitl, hitlConfig, memoryHooks, activityCoord, skillRegistry,
 		); err != nil {

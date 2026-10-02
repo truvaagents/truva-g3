@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -78,6 +79,9 @@ func main() {
 			memory.WithRedisDeployment(redisKeyspace.Deployment()),
 		)
 		if err != nil {
+			if errors.Is(err, core.ErrInvalidConfiguration) {
+				log.Fatalf("Shared memory configuration failed: %v", err)
+			}
 			agent.Logger.Warn("Shared memory setup failed, running without cross-agent memory", map[string]interface{}{
 				"operation":  "shared_memory_setup",
 				"status":     "degraded",
@@ -109,6 +113,15 @@ func main() {
 	}
 
 	// 7. Initialize orchestrator in background (waits for Discovery)
+	var memoryDeps *core.SharedMemoryDeps
+	if memBackends != nil {
+		memoryDeps = memBackends.ToDeps()
+	}
+	memHooks, activityCoord, hookErr := orchestration.BuildMemoryHooks(memoryDeps, agent.AI, agent.Logger)
+	if hookErr != nil {
+		log.Fatalf("Configure memory hooks: %v", hookErr)
+	}
+
 	go func() {
 		startTime := time.Now()
 		lastWarning := time.Time{}
@@ -131,13 +144,7 @@ func main() {
 			}
 		}
 
-		// Build memory hooks from backends (Layer 1)
-		var memHooks []core.PipelineHook
-		var activityCoord core.ActivityCoordinator
-		if memBackends != nil {
-			memHooks, activityCoord = orchestration.BuildMemoryHooks(memBackends.ToDeps(), agent.AI, agent.Logger)
-		}
-
+		// Initialize with memory hooks validated before this goroutine started.
 		if err := agent.InitializeOrchestrator(
 			agent.Discovery, memHooks, activityCoord, skillRegistry,
 		); err != nil {
