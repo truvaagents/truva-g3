@@ -217,24 +217,28 @@ type RoutingStep struct {
 
 // StepResult represents the result of executing a step
 type StepResult struct {
-	StepID       string                 `json:"step_id"`
-	Capability   string                 `json:"capability"`
-	ServiceName  string                 `json:"service_name,omitempty"`
-	AgentName    string                 `json:"agent_name,omitempty"`
-	Namespace    string                 `json:"namespace,omitempty"`
-	Instruction  string                 `json:"instruction,omitempty"`
-	Parameters   map[string]interface{} `json:"parameters,omitempty"`
-	Success      bool                   `json:"success"`
-	Response     interface{}            `json:"response,omitempty"`
-	ResponseText string                 `json:"response_text,omitempty"`
-	Error        string                 `json:"error,omitempty"`
-	Duration     int64                  `json:"duration,omitempty"`
-	DurationMs   int64                  `json:"duration_ms,omitempty"`
-	Attempts     int                    `json:"attempts,omitempty"`
-	StartTime    *time.Time             `json:"start_time,omitempty"`
-	EndTime      *time.Time             `json:"end_time,omitempty"`
-	Skipped      bool                   `json:"skipped,omitempty"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	StepID        string                 `json:"step_id"`
+	Capability    string                 `json:"capability"`
+	ServiceName   string                 `json:"service_name,omitempty"`
+	AgentName     string                 `json:"agent_name,omitempty"`
+	Namespace     string                 `json:"namespace,omitempty"`
+	Instruction   string                 `json:"instruction,omitempty"`
+	Parameters    map[string]interface{} `json:"parameters,omitempty"`
+	Success       bool                   `json:"success"`
+	Response      interface{}            `json:"response,omitempty"`
+	ResponseText  string                 `json:"response_text,omitempty"`
+	Error         string                 `json:"error,omitempty"`
+	Duration      int64                  `json:"duration,omitempty"`
+	DurationMs    int64                  `json:"duration_ms,omitempty"`
+	Attempts      int                    `json:"attempts,omitempty"`
+	DispatchCount *int                   `json:"dispatch_count,omitempty"`
+	Dispatches    json.RawMessage        `json:"dispatches,omitempty"`
+	ToolError     json.RawMessage        `json:"tool_error,omitempty"`
+	StartTime     *time.Time             `json:"start_time,omitempty"`
+	EndTime       *time.Time             `json:"end_time,omitempty"`
+	Skipped       bool                   `json:"skipped,omitempty"`
+	SkipReason    string                 `json:"skip_reason,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // HITLCheckpointSummary is a lightweight version for listing
@@ -289,21 +293,23 @@ const (
 
 // StoredExecution contains everything needed for DAG visualization
 type StoredExecution struct {
-	RequestID           string                                `json:"request_id"`
-	OriginalRequestID   string                                `json:"original_request_id,omitempty"`
-	TraceID             string                                `json:"trace_id"`
-	AgentName           string                                `json:"agent_name,omitempty"`
-	OriginalRequest     string                                `json:"original_request"`
-	Plan                *RoutingPlan                          `json:"plan"`
-	Result              *ExecutionResult                      `json:"result"`
-	Interrupted         bool                                  `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
-	Checkpoint          *HITLCheckpoint                       `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted
-	CreatedAt           time.Time                             `json:"created_at"`
-	Metadata            map[string]string                     `json:"metadata,omitempty"`
-	Skills              *orchestration.SkillExecutionDebug    `json:"skills,omitempty"`
-	PipelineHooks       []orchestration.PipelineHookExecution `json:"pipeline_hooks,omitempty"`
-	FinalResponse       *string                               `json:"final_response,omitempty"`
-	FinalResponseSource string                                `json:"final_response_source,omitempty"`
+	Lifecycle           *orchestration.ExecutionLifecycleObservation `json:"lifecycle,omitempty"`
+	RecordRevision      uint64                                       `json:"record_revision,omitempty"`
+	RequestID           string                                       `json:"request_id"`
+	OriginalRequestID   string                                       `json:"original_request_id,omitempty"`
+	TraceID             string                                       `json:"trace_id"`
+	AgentName           string                                       `json:"agent_name,omitempty"`
+	OriginalRequest     string                                       `json:"original_request"`
+	Plan                *RoutingPlan                                 `json:"plan"`
+	Result              *ExecutionResult                             `json:"result"`
+	Interrupted         bool                                         `json:"interrupted,omitempty"` // True if execution was interrupted for HITL
+	Checkpoint          *HITLCheckpoint                              `json:"checkpoint,omitempty"`  // Checkpoint data if interrupted
+	CreatedAt           time.Time                                    `json:"created_at"`
+	Metadata            map[string]string                            `json:"metadata,omitempty"`
+	Skills              *orchestration.SkillExecutionDebug           `json:"skills,omitempty"`
+	PipelineHooks       []orchestration.PipelineHookExecution        `json:"pipeline_hooks,omitempty"`
+	FinalResponse       *string                                      `json:"final_response,omitempty"`
+	FinalResponseSource string                                       `json:"final_response_source,omitempty"`
 
 	// Multi-phase execution data
 	PhasePlans     []*RoutingPlan `json:"phase_plans,omitempty"`
@@ -322,25 +328,27 @@ type ExecutionResult struct {
 
 // ExecutionSummary is a lightweight version for listing
 type ExecutionSummary struct {
-	RequestID           string            `json:"request_id"`
-	OriginalRequestID   string            `json:"original_request_id,omitempty"`
-	ConversationID      string            `json:"conversation_id,omitempty"`
-	TraceID             string            `json:"trace_id"`
-	AgentName           string            `json:"agent_name,omitempty"`
-	OriginalRequest     string            `json:"original_request"`
-	Success             bool              `json:"success"`
-	Interrupted         bool              `json:"interrupted,omitempty"`
-	StepCount           int               `json:"step_count"`
-	FailedSteps         int               `json:"failed_steps"`
-	TotalDurationMs     int64             `json:"total_duration_ms"`                // Phase-loop duration; retained for API compatibility.
-	WallClockDurationMs int64             `json:"wall_clock_duration_ms,omitempty"` // Non-additive elapsed-time envelope when available.
-	DurationSource      string            `json:"duration_source,omitempty"`
-	LLMTotalDurationMs  int64             `json:"llm_total_duration_ms,omitempty"` // Aggregate LLM call time; may overlap wall clock.
-	HITLCheckpointID    string            `json:"hitl_checkpoint_id,omitempty"`    // Exact checkpoint identity for lineage-safe HITL joins.
-	RelationStatus      string            `json:"relation_status,omitempty"`
-	MissingOwnerID      string            `json:"missing_owner_id,omitempty"`
-	CreatedAt           time.Time         `json:"created_at"`
-	Metadata            map[string]string `json:"metadata,omitempty"`
+	Lifecycle           *orchestration.ExecutionLifecycleObservation `json:"lifecycle,omitempty"`
+	RecordRevision      uint64                                       `json:"record_revision,omitempty"`
+	RequestID           string                                       `json:"request_id"`
+	OriginalRequestID   string                                       `json:"original_request_id,omitempty"`
+	ConversationID      string                                       `json:"conversation_id,omitempty"`
+	TraceID             string                                       `json:"trace_id"`
+	AgentName           string                                       `json:"agent_name,omitempty"`
+	OriginalRequest     string                                       `json:"original_request"`
+	Success             bool                                         `json:"success"`
+	Interrupted         bool                                         `json:"interrupted,omitempty"`
+	StepCount           int                                          `json:"step_count"`
+	FailedSteps         int                                          `json:"failed_steps"`
+	TotalDurationMs     int64                                        `json:"total_duration_ms"`                // Phase-loop duration; retained for API compatibility.
+	WallClockDurationMs int64                                        `json:"wall_clock_duration_ms,omitempty"` // Non-additive elapsed-time envelope when available.
+	DurationSource      string                                       `json:"duration_source,omitempty"`
+	LLMTotalDurationMs  int64                                        `json:"llm_total_duration_ms,omitempty"` // Aggregate LLM call time; may overlap wall clock.
+	HITLCheckpointID    string                                       `json:"hitl_checkpoint_id,omitempty"`    // Exact checkpoint identity for lineage-safe HITL joins.
+	RelationStatus      string                                       `json:"relation_status,omitempty"`
+	MissingOwnerID      string                                       `json:"missing_owner_id,omitempty"`
+	CreatedAt           time.Time                                    `json:"created_at"`
+	Metadata            map[string]string                            `json:"metadata,omitempty"`
 
 	// observedStart/observedEnd are internal inputs for deriving a wall-clock
 	// envelope. They are never serialized.
@@ -430,6 +438,8 @@ type ResolutionAnalyticsResponse struct {
 // UnifiedExecutionView combines all related data for a single request view
 // This provides a "one-stop shop" for debugging and understanding request execution
 type UnifiedExecutionView struct {
+	Lifecycle      *orchestration.ExecutionLifecycleObservation `json:"lifecycle,omitempty"`
+	RecordRevision uint64                                       `json:"record_revision,omitempty"`
 	// Core execution data
 	RequestID           string                                `json:"request_id"`
 	OriginalRequestID   string                                `json:"original_request_id,omitempty"`
@@ -2405,16 +2415,18 @@ func computeDAG(execution *StoredExecution) *DAGResponse {
 		if result, ok := stepResults[step.StepID]; ok {
 			switch {
 			case result.Success:
+				// Refinement can satisfy work without dispatch; preserve its
+				// historical completed classification, including stored runs.
 				status = "completed"
 				statistics.CompletedNodes++
 			case step.StepID == blockedStepID:
 				status = "blocked"
-			case result.Error != "":
-				status = "failed"
-				statistics.FailedNodes++
 			case result.Skipped:
 				status = "skipped"
 				statistics.SkippedNodes++
+			case result.Error != "":
+				status = "failed"
+				statistics.FailedNodes++
 			}
 			durationMs = stepDurationMilliseconds(result)
 		} else if step.StepID == blockedStepID {
@@ -2977,6 +2989,8 @@ func buildUnifiedViewWithContext(ctx context.Context, execution *StoredExecution
 	}
 
 	unified := &UnifiedExecutionView{
+		Lifecycle:           execution.Lifecycle,
+		RecordRevision:      execution.RecordRevision,
 		RequestID:           execution.RequestID,
 		OriginalRequestID:   execution.OriginalRequestID,
 		ConversationID:      execution.Metadata[orchestration.MetadataConversationID],

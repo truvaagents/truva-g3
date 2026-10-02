@@ -4504,16 +4504,16 @@ data:
             {
               "expr": "sum(rate(truvag3_orchestration_event_summarization_success_total{job=\"otel-collector-metrics\"}[5m]))",
               "refId": "A",
-              "legendFormat": "Event Summarization",
+              "legendFormat": "Provider completion (legacy)",
               "datasource": {
                 "type": "prometheus",
                 "uid": "${datasource}"
               }
             },
             {
-              "expr": "sum(rate(truvag3_orchestration_event_summarization_success_total{job=\"otel-collector-metrics\"}[5m]))",
+              "expr": "sum by (outcome) (rate(truvag3_orchestration_event_summarization_outcomes_total{job=\"otel-collector-metrics\"}[5m]))",
               "refId": "B",
-              "legendFormat": "Orchestration Summarization",
+              "legendFormat": "Summary {{outcome}}",
               "datasource": {
                 "type": "prometheus",
                 "uid": "${datasource}"

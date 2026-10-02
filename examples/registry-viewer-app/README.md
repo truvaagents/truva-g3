@@ -1,5 +1,14 @@
 # Registry Viewer App
 
+Request lifecycle badges use the framework's optional `lifecycle` evidence,
+independently of individual step success. Older records without it are labelled
+unknown. A completed request can have failed steps or a negative application
+disposition. The completed-request percentage uses all listed requests as its
+denominator; unknown records are not counted as completed. Selected details
+refresh without reselection, reject older record revisions and preserve the DAG
+viewport. LLM/hook updates are refreshed even when the lifecycle revision is
+unchanged.
+
 An independently deployable, real-time web dashboard for inspecting the TruvaG3
 service registry, execution records, LLM debug data, HITL checkpoints, skills,
 memory, and traces. The backend currently imports TruvaG3 framework modules;
@@ -144,6 +153,25 @@ Kubernetes Deployment:
 ```
 
 ## Configuration
+
+Memory domains are configured independently of Kubernetes namespaces. For a
+shared local deployment showing maintenance alongside infrastructure, run:
+
+```bash
+TRUVAG3_VIEWER_MEMORY_DOMAINS=infrastructure,software-maintenance ./setup.sh deploy
+```
+
+For persistent local setup, copy `.env.example` to `.env` and set the domain list
+there. This file accepts only `TRUVAG3_VIEWER_MEMORY_DOMAINS`; it is parsed as
+data, not sourced as shell code. Explicit process environment takes precedence
+over the file, then the default `infrastructure`. Blank entries, duplicate or
+unknown keys fail before deployment. Shared infrastructure redeploys use the
+same local file. The file is excluded from Git and workspace Docker builds.
+
+The setup script generates the ConfigMap and overrides manifest values. Match
+the producer's Redis keyspace. Inspect Live Activity during a run: signals can expire before a long
+execution finishes, and an empty fail-open backend response alone does not prove
+no activity. Historical events and execution/debug records are separate views.
 
 ### Command Line Options
 
@@ -593,3 +621,14 @@ export TRUVAG3_HITL_DEFAULT_TIMEOUT=10m
 ```
 
 See [ENVIRONMENT_VARIABLES_GUIDE.md](../../docs/reference/ENVIRONMENT_VARIABLES_GUIDE.md) for complete documentation of all framework variables.
+
+### Optional LLM enrichment diagnostics
+
+Grouped execution and conversation responses include `llm_enrichment_reasons`
+when optional enrichment is incomplete. Codes distinguish `execution_count_limit`,
+`interaction_count_limit`, `interaction_byte_limit`, `parse_failure` and
+`backend_failure`, with request identity and observed/limit counts where available.
+Observed counts may be lower bounds after a bounded read. The limits remain 200
+executions, 100 interactions per execution and 4 MiB cumulative serialized
+interaction bytes per execution. These explain incomplete derived counts/durations;
+they do not establish lost execution records or failed agent work.

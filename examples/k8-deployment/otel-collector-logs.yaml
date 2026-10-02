@@ -9,9 +9,13 @@ data:
       filelog:
         include:
           - /var/log/pods/truvag3-examples_*/*/*.log
+          - /var/log/pods/software-maintenance_*/*/*.log
         exclude:
           # Exclude log collector's own logs to prevent feedback loop
           - /var/log/pods/truvag3-examples_otel-collector-logs-*/*/*.log
+          # Runner console output is retained as job artifacts, not tool service logs.
+          # Runner Pods currently share the workspace tool's app/service label.
+          - /var/log/pods/software-maintenance_mw-*/*/*.log
         # "beginning" ensures no logs are lost. The file_storage extension
         # persists read offsets on a hostPath volume, so after restarts the
         # collector resumes where it left off instead of re-reading everything.

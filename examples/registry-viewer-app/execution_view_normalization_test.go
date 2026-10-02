@@ -10,6 +10,36 @@ import (
 	"github.com/truvaagents/truva-g3/orchestration"
 )
 
+func TestDAGDistinguishesDependencySkipsFromFailures(t *testing.T) {
+	dag := computeDAG(&StoredExecution{
+		Plan: &RoutingPlan{Steps: []RoutingStep{{StepID: "failed"}, {StepID: "dependent"}, {StepID: "refined"}}},
+		Result: &ExecutionResult{Steps: []StepResult{
+			{StepID: "failed", Error: "upstream failed"},
+			{StepID: "dependent", Skipped: true, Error: "dependency failed"},
+			{StepID: "refined", Skipped: true, Success: true},
+		}},
+	})
+	if dag.Statistics.FailedNodes != 1 || dag.Statistics.SkippedNodes != 1 || dag.Statistics.CompletedNodes != 1 {
+		t.Fatalf("DAG statistics = %+v", dag.Statistics)
+	}
+	wantStatuses := map[string]string{"failed": "failed", "dependent": "skipped", "refined": "completed"}
+	for _, node := range dag.Nodes {
+		if want := wantStatuses[node.ID]; node.Status != want {
+			t.Errorf("node %s = %s, want %s", node.ID, node.Status, want)
+		}
+	}
+}
+
+func TestDependencySkipReasonSurvivesViewerDecoding(t *testing.T) {
+	var result StepResult
+	if err := json.Unmarshal([]byte(`{"step_id":"step-2","skipped":true,"success":false,"skip_reason":"dependency failed","metadata":{"planned_parameters":{"id":"{{step-1.response.data.id}}"}}}`), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.SkipReason != "dependency failed" || result.Parameters != nil || result.Metadata["planned_parameters"] == nil {
+		t.Fatalf("lost skip evidence: %+v", result)
+	}
+}
+
 // Tests for the registry viewer's normalizeSteps helper. They cover PhasePlans
 // for multi-phase records, Plan for single-phase records, checkpoint-backed
 // interrupted records, and buildUnifiedView integration.
