@@ -238,8 +238,11 @@ func TestAzurePrepareSemanticsReasoningCapabilityBoundary(t *testing.T) {
 		t.Fatalf("degradation entries = %#v", *logger.entries)
 	}
 	fields := (*logger.entries)[0].fields
-	if fields["warning_type"] != "reasoning_effort_stripped" || fields["request_id"] != "azure-reasoning-capability" {
+	if fields["status"] != "adapted" || fields["source"] != "client-default" || fields["request_id"] != "azure-reasoning-capability" {
 		t.Fatalf("degradation fields = %#v", fields)
+	}
+	if len(semantics.PreparationAdjustments) != 1 || semantics.PreparationAdjustments[0].Path != "/reasoning_effort" {
+		t.Fatalf("missing default omission adjustment: %#v", semantics.PreparationAdjustments)
 	}
 
 	explicit := core.NewAIRequest("hello", "explicit-reasoning")

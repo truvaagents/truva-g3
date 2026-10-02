@@ -24,17 +24,18 @@ type preparedRequest struct {
 }
 
 type requestSemantics struct {
-	Request         *core.AIRequest
-	Options         *core.AIOptions
-	RequestedModel  string
-	SemanticModel   string
-	ProviderAlias   string
-	Surface         string
-	Operation       string
-	Purpose         string
-	Capabilities    providers.ModelCapabilities
-	ReasoningModel  bool
-	APIKeyConflicts []string
+	Request                *core.AIRequest
+	Options                *core.AIOptions
+	RequestedModel         string
+	SemanticModel          string
+	ProviderAlias          string
+	Surface                string
+	Operation              string
+	Purpose                string
+	Capabilities           providers.ModelCapabilities
+	ReasoningModel         bool
+	APIKeyConflicts        []string
+	PreparationAdjustments []core.AIRequestAdjustment
 }
 
 func (s *requestSemantics) endpointRequest() ai.EndpointRequest {
@@ -138,12 +139,28 @@ func (c *Client) prepareSemantics(
 		}
 	}
 	reasoningEffort := options.ReasoningEffort
+	clientDefaultEffort := request.Generation.ReasoningEffort.Mode == core.AIParameterInherit && reasoningEffort == "" && c.defaultReasoningEffort != ""
 	if reasoningEffort == "" {
 		reasoningEffort = c.defaultReasoningEffort
 	}
-	if reasoningEffort != "" && caps.ReasoningStyle != "openai" {
-		providers.LogTranslationDegraded(ctx, c.Logger, c.providerAlias, options.Model, "reasoning_effort_stripped", "reasoning_effort")
+	switch request.Generation.ReasoningEffort.Mode {
+	case core.AIParameterSet:
+		reasoningEffort = request.Generation.ReasoningEffort.Value
+	case core.AIParameterOmit:
 		reasoningEffort = ""
+	}
+	var preparationAdjustments []core.AIRequestAdjustment
+	if reasoningEffort != "" && caps.ReasoningStyle != "openai" {
+		if clientDefaultEffort {
+			providers.LogInheritedEffortOmitted(ctx, c.Logger, c.providerAlias, options.Model)
+		} else {
+			providers.LogTranslationDegraded(ctx, c.Logger, c.providerAlias, options.Model, "reasoning_effort_stripped", "reasoning_effort")
+		}
+		reasoningEffort = ""
+		preparationAdjustments = append(preparationAdjustments, core.AIRequestAdjustment{
+			Source: "portable-default", Rule: "capability-guard", Path: "/reasoning_effort",
+			Action: "remove", Reason: "unsupported_model_capability",
+		})
 	}
 	options.ReasoningEffort = reasoningEffort
 	if options.ResponseFormat != "" && !caps.SupportsJSONMode {
@@ -172,7 +189,8 @@ func (c *Client) prepareSemantics(
 		SemanticModel: options.Model, ProviderAlias: c.providerAlias,
 		Surface: "chat-completions", Operation: operation, Purpose: request.Purpose,
 		Capabilities: caps, ReasoningModel: openaiwire.IsReasoningModel(options.Model),
-		APIKeyConflicts: apiKeyConflicts,
+		APIKeyConflicts:        apiKeyConflicts,
+		PreparationAdjustments: preparationAdjustments,
 	}, nil
 }
 
@@ -238,7 +256,9 @@ func (c *Client) buildPolicyRequest(
 	}
 	report, err := c.requestPolicy.Apply(ctx, policyDraft, semantics.Request.Patches)
 	if report != nil {
-		report.Adjustments = append(draft.Adjustments(), report.Adjustments...)
+		adjustments := append([]core.AIRequestAdjustment(nil), semantics.PreparationAdjustments...)
+		adjustments = append(adjustments, draft.Adjustments()...)
+		report.Adjustments = append(adjustments, report.Adjustments...)
 		prepared.Report = report
 	}
 	if err != nil {

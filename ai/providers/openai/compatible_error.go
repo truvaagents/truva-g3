@@ -9,10 +9,11 @@ import (
 )
 
 type compatibleProviderError struct {
-	statusCode int
-	provider   string
-	model      string
-	retryable  bool
+	statusCode        int
+	provider          string
+	model             string
+	retryable         bool
+	retrySameProvider bool
 }
 
 func (e *compatibleProviderError) Error() string {
@@ -38,10 +39,11 @@ func (c *Client) normalizeCompatibleError(err error, model string) error {
 		status = 500
 	}
 	return &compatibleProviderError{
-		statusCode: status,
-		provider:   c.getProviderName(),
-		model:      model,
-		retryable:  status == 402,
+		statusCode:        status,
+		provider:          c.getProviderName(),
+		model:             model,
+		retryable:         status == 402,
+		retrySameProvider: sameProviderRetryStatus(status, endpointErr.Type, validProviderErrorStatus(endpointErr.Code)),
 	}
 }
 

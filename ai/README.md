@@ -393,11 +393,24 @@ These are `NewClient` defaults:
 | Temperature | 0.7 |
 | MaxTokens | 1000 |
 
-`NewChainClient` and framework-managed `ProviderEntry` values use a
-failover-safe 180-second entry timeout and set each entry's in-provider retry
-budget to `0`; walking the chain is its retry layer.
-Override deliberately with `WithChainMaxRetries` when a provider should absorb
-transient failures before failover.
+`NewChainClient` uses a 180-second entry timeout and defaults each provider's
+retry budget to `0`. Independently constructed `ProviderEntry` values use the
+single-client default of `3`; `ClientEntry` retains the injected client's policy.
+Override deliberately with `WithChainMaxRetries` (legacy chain) or
+`WithMaxRetries` on an independently constructed entry.
+
+OpenAI-compatible adapters share this budget across transport/HTTP failures and
+classified decoded provider failures, including HTTP-200 error envelopes. A
+recovered provider call does not re-run planning or tool execution. Permanent,
+unmapped-without-status and partial-stream failures are not newly retried.
+Other adapters retain their transport-only retry contract unless they explicitly
+adopt `providers.BaseClient.ExecuteWithRetryDecoded`.
+
+OpenRouter's classifier also deliberately narrows retries of actual non-HTML
+HTTP errors: unknown nonempty error types stop retries even on 429/5xx, and
+untyped 501/505 are not retried. Previously the transport loop retried these
+by HTTP status alone. The outer chain failover policy is unchanged; see
+[Per-Provider Retry Budget](ARCHITECTURE.md#per-provider-retry-budget).
 
 When no explicit retry option is supplied, a positive
 `TRUVAG3_AI_RETRY_ATTEMPTS` value overrides the applicable default for both
@@ -1335,6 +1348,21 @@ Vertex-hosted Claude are first-class request-aware profiles, not generic
 [hosted-cloud recipes](../docs/building/CUSTOM_AI_PROVIDER_GUIDE.md#choose-a-hosted-cloud-recipe).
 
 ### Auto-Detection Priority
+
+OpenRouter also recognizes the exact model `openai/gpt-6-luna` independently of
+native OpenAI support. Its built-in sampling rule removes temperature through
+the existing Compatible/Strict policy mechanism. With `none` effort, required
+reasoning routing and the sampling rule coexist; endpoint privacy remains
+`data_collection=deny` and `zdr=true`. Upstream `provider.only`, `order` and
+`allow_fallbacks` remain application controls, distinct from outer chain failover.
+No framework fast/default alias is changed. Metadata and offline tests do not
+prove a live eligible endpoint or completion quality. See the [compatibility
+and pre-policy validation boundary](ARCHITECTURE.md#scoped-openrouter-compatibility-and-default-adaptation).
+
+Client/chain-default reasoning effort is omitted with a Debug adaptation record
+when a selected model does not support it. Explicit unsupported portable effort
+still fails and legacy request-level degradation still warns. The request report
+retains the omission, including for direct Azure classic/v1 clients.
 
 When you use `ai.NewClient()` without specifying a provider, the module checks for available services in this order:
 
@@ -2288,7 +2316,7 @@ explicitly propagated through the framework/client setter path.
 | `ai.generate` / `ai.stream` | Logical normalized call | `ai.provider`, `ai.model`, `ai.surface`, `ai.purpose`, token usage, policy adjustments |
 | `ai.generate_response` / `ai.stream_response` | Provider-local preparation and execution | Provider/model and provider execution attributes |
 | `ai.request.prepared` (event) | Sanitized request report | Purpose, requested/resolved model, adjustment count, fingerprint stability |
-| `ai.http_attempt` | Each HTTP attempt | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
+| `ai.http_attempt` | Each wire attempt, including decode in adopting adapters | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, real `http.status_code`; decoded errors carry separate semantic status, available usage uses `ai.attempt_*_tokens`, and OpenRouter may record its validated response ID |
 
 ### Viewing in Jaeger
 

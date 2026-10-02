@@ -568,8 +568,8 @@ func TestOpenRouterResponseIdentityIsProviderLocalAndMetricIneligible(t *testing
 		t.Fatalf("provider span attributes = %#v", providerSpan.attributes)
 	}
 	for _, span := range tracing.spans[1:] {
-		if span.attributes["ai.response.model"] != nil || span.attributes["ai.provider_request_id"] != nil {
-			t.Fatalf("response identity escaped provider span: %#v", span.attributes)
+		if span.attributes["ai.response.model"] != nil || span.attributes["ai.provider_request_id"] != providerRequestID {
+			t.Fatalf("attempt response identity missing or response model escaped: %#v", span.attributes)
 		}
 	}
 
@@ -626,7 +626,7 @@ func TestOpenRouterResponseIdentityGateRejectsOtherOpenAICompatibleAliases(t *te
 	}
 }
 
-func TestOpenRouterHTTP200InBandErrorHasSuccessfulAttemptAndFailedProviderSpan(t *testing.T) {
+func TestOpenRouterHTTP200InBandErrorHasDecodedFailureAndRealHTTPStatus(t *testing.T) {
 	logger := newObservationLogger()
 	tracing := &observationTelemetry{}
 	client := openai.NewClient("credential", "https://endpoint.example/v1", "openai.openrouter", logger)
@@ -656,13 +656,53 @@ func TestOpenRouterHTTP200InBandErrorHasSuccessfulAttemptAndFailedProviderSpan(t
 		providerSpan.attributes["ai.error_type"] != "provider_rate_limit" || len(providerSpan.errors) != 1 {
 		t.Fatalf("provider span = %#v errors=%#v", providerSpan.attributes, providerSpan.errors)
 	}
-	if attemptSpan.attributes["ai.attempt_status"] != "success" || len(attemptSpan.errors) != 0 {
+	if attemptSpan.attributes["ai.attempt_status"] != "decoded_error" || len(attemptSpan.errors) != 1 ||
+		attemptSpan.attributes["http.status_code"] != 200 || attemptSpan.attributes["ai.semantic_status_code"] != 429 {
 		t.Fatalf("attempt span = %#v errors=%#v", attemptSpan.attributes, attemptSpan.errors)
 	}
 	for _, entry := range logger.store.entries {
 		if entry.fields["operation"] == "ai_response" {
 			t.Fatalf("partial buffered error emitted success response log: %#v", entry.fields)
 		}
+	}
+}
+
+func TestDecodedRecoveryRetainsAttemptUsageWithoutMergingLogicalResult(t *testing.T) {
+	logger := newObservationLogger()
+	tracing := &observationTelemetry{}
+	client := openai.NewClient("credential", "https://endpoint.example/v1", "openai.openrouter", logger)
+	client.SetTelemetry(tracing)
+	client.MaxRetries, client.RetryDelay = 1, 0
+	calls := 0
+	client.HTTPClient = &http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		body := `{"model":"openai/gpt-5.6-sol","choices":[{"message":{"content":"good"}}],"usage":{"total_tokens":5}}`
+		id := "gen-success"
+		if calls == 1 {
+			body = `{"choices":[{"message":{"content":"failed"},"error":{"code":429,"metadata":{"error_type":"rate_limit_exceeded"}}}],"usage":{"total_tokens":7}}`
+			id = "gen-failed"
+		}
+		response := observationResponse(request, body)
+		response.Header.Set("X-Generation-Id", id)
+		return response, nil
+	})}
+	result, err := client.Generate(t.Context(), core.NewAIRequestFromLegacy("synthetic", "", &core.AIOptions{Model: "openai/gpt-5.6-sol"}))
+	if err != nil || result.Response.Content != "good" || result.Response.Usage.TotalTokens != 5 || result.RequestReport == nil || len(tracing.spans) != 3 {
+		t.Fatalf("result=%#v error=%v spans=%d", result, err, len(tracing.spans))
+	}
+	if tracing.spans[1].attributes["ai.attempt_total_tokens"] != 7 || tracing.spans[2].attributes["ai.attempt_total_tokens"] != 5 ||
+		tracing.spans[0].attributes["ai.total_tokens"] != 5 || tracing.spans[1].attributes["ai.provider_request_id"] != "gen-failed" ||
+		tracing.spans[0].attributes["ai.provider_request_id"] != "gen-success" {
+		t.Fatal("attempt observations or logical usage/identity are incorrect")
+	}
+	responses := 0
+	for _, entry := range logger.store.entries {
+		if entry.fields["operation"] == "ai_response" {
+			responses++
+		}
+	}
+	if responses != 1 {
+		t.Fatalf("logical response logs=%d", responses)
 	}
 }
 
