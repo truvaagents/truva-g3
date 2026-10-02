@@ -1,5 +1,10 @@
 # Logging Implementation Guide
 
+Request-owned activity renewal and cleanup log returned provider errors with
+request context and bounded operation/error-type fields. A successful submission
+is not logged as confirmed persistence. Exact signal queries and provider error
+payloads belong in opted-in execution-debug effects, not ordinary log fields.
+
 Welcome to the TruvaG3 logging guide! This document explains how to implement consistent, production-ready logging across your tools and agents. Think of this as your complete reference for doing logging the right way.
 
 ## Table of Contents
@@ -88,6 +93,14 @@ logs. Pass the configured logger to the worker, coordinator, and AI client.
 ---
 
 ## 3. Log Levels Explained
+
+Template-source inclusion distinguishes declared prior-phase data from missing
+declarations: `operation=template_dependency_auto_include` with
+`reason=declared_prior_phase` is Debug; `reason=undeclared_reference` retains
+Warn. Both remain in execution metadata and traces. The legacy
+`orchestration.template.auto_dependency` counter counts inclusions, not errors;
+the additive `orchestration.template.dependency_inclusion` counter uses bounded
+`reason` and `module` labels, with no step identifiers.
 
 TruvaG3 uses four standard log levels, from most to least verbose:
 
@@ -1368,6 +1381,17 @@ if o.logger != nil {
 
 **Standard operation values:**
 
+For OpenAI-compatible and direct Azure clients, an unsupported reasoning effort
+inherited solely from the client default is normal adaptation. It logs at Debug
+with `operation=ai_request`, `status=adapted`, `source=client-default` and bounded
+`reason=unsupported_model_capability`, retaining the request adjustment. It does
+not emit `ai.translation.degraded` or increment the degraded warning counter.
+Legacy per-request effort/native extras still use the warning path; explicit
+portable unsupported intent still fails. Do not interpret this intentional drop
+in default-only warnings as lost provider attempts. Semantic memory-summary
+outcomes likewise complement, rather than redefine, provider-completion metrics;
+the existing hook effect contains coverage, not a promise of durable persistence.
+
 The development-stage Redis cleanup retired `redis_configuration_notice` and
 `redis_client_compatibility` together with their deprecated configuration paths.
 Removed settings now return bounded construction errors instead of advisory
@@ -1431,8 +1455,9 @@ change request correlation or caller-owned span-error handling.
 | orchestration | `schedule_create` / `schedule_update` / `schedule_delete` / `schedule_load` / `schedule_index_cleanup` | Request-correlated schedule lifecycle plus malformed-record and stale-index diagnostics. Failure observations are bounded and exclude stored JSON and backend error text |
 | orchestration | `task_create` / `task_get` / `task_update` / `task_delete` / `task_cancel` | Request-correlated task lifecycle. Backend and serialization failures use fixed messages and bounded error types; task payloads and Redis error text are excluded |
 | orchestration | `task_index_reconcile` | Failure-only background log for bounded task projection repair. Uses the non-context logger, fixed error text, `error_type=index_reconcile`, and `duration_ms`; successful periodic passes are silent |
-| memory | `memory_enrichment` | `MemoryEnrichmentHook.BeforePlanning` lifecycle — covers recent-events query failures (`error_type=episodic_recent_read`), entity-keyed history query failures (`error_type=episodic_read`), digest cache decisions (DEBUG-level path tracking), and successful enrichment with `entities_found` and `context_chars` summary at INFO level |
+| memory | `memory_enrichment` | `MemoryEnrichmentHook.BeforePlanning` lifecycle — covers recent-events query failures (`error_type=episodic_recent_read`), entity-keyed history query failures (`error_type=episodic_read`), digest cache decisions (DEBUG-level path tracking), and enrichment with `entities_found`, `context_bytes`, `budget_bytes`, `view_outcome` at INFO level. Legacy `context_chars` also counts bytes. A too-small view budget emits a DEBUG diagnostic; raw event payloads are not logged. |
 | memory | `memory_record` | `MemoryRecordHook.AfterExecution` lifecycle — covers per-step event recording. INFO on successful batch (`events_recorded` count), WARN on summarizer failure (`error_type=summarizer_error`), WARN on episodic write failure (`error_type=episodic_write`) for both entity-indexed and entity-less events, WARN on investigation release failure (`error_type=release`) |
+| memory | `investigation_acquire` / `investigation_cleanup` | Managed token-safe ownership failures use WARN with request correlation and bounded `ownership_unknown`; raw provider errors and private acquisition IDs are excluded. Exact optional effect errors remain in governed execution debug. Legacy name-owned recording release remains separate |
 | memory | `record_event` / `query_events` / `delete_events` / `digest_cache` / `distributed_lock` / `activity_*` / `*_investigation_*` | Redis memory-adapter diagnostics. Carry request/entity correlation, fixed error text, and bounded classifications; raw Redis errors and payloads are excluded. All component-aware loggers are scoped to `framework/memory` |
 | memory | `shared_backends_setup` / `shared_backends_shutdown` | Non-request startup/shutdown summaries for the shared memory bundle. Optional-backend degradation uses fixed diagnostics without Redis, vector-store, or credential-bearing error text |
 | telemetry | `llm_debug_recorder_initialize` / `llm_debug_recorder_retry` / `llm_debug_recent_index` | Redis LLM-recorder startup, authoritative-write retry, and fail-open recent-index maintenance. The recorder scopes component-aware loggers to `framework/telemetry`; request work is correlated and bounded, while startup remains non-contextual and credential-free |
@@ -1595,6 +1620,12 @@ application-owned error text, and bounded `error_type=hook_error`. Built-in
 hooks retain their documented operation-specific logs. Exact structured effect
 payloads are written only through the opt-in `ExecutionStore` and are not
 expanded into log fields.
+
+Event-summary completion logs additionally carry bounded `entity_fields` counts
+for retained summaries: observed, missing, empty, valid, invalid, mixed and
+accepted/rejected entities. These are parser-shape observations, not raw entities,
+summary text or backend-write confirmations. Existing completion/batch-success
+meanings remain unchanged; custom summarizers have no built-in parse observation.
 
 A panic at a synchronous hook boundary is not logged as an optional-hook WARN.
 The existing request completion operation records one ERROR with
@@ -1760,6 +1791,17 @@ func initTelemetry(serviceName string) {
 ```
 
 ### Metric Emission from Logs
+
+Decode-aware AI provider retries reuse the existing `ai_request_retry`,
+`ai_request_retry_wait`, `ai_request_recovery` and `ai_request_final_failure`
+operations. HTTP-200 decoded errors are classified independently of the real
+HTTP status. Retry logs contain bounded error classification, attempt counts and
+delay, not prompts, response bodies or credentials. Successful recovery emits
+one final response log; earlier failed content remains failure evidence.
+Available attempt usage and validated response IDs live on owned attempt spans,
+not additional logical request/token counters or metric labels. This applies to
+adapters adopting the shared decoded-attempt loop; it does not change other
+providers' transport-only contracts or the common logical instrumentation layer.
 
 When telemetry is enabled, framework logs emit
 `truvag3.framework.operations`. Labels have two sources:
@@ -2570,3 +2612,11 @@ Following these guidelines ensures your logs are useful in production, easy to s
 - **[telemetry/trace_context.go](https://github.com/truvaagents/truva-g3/blob/main/telemetry/trace_context.go)** - Source for `GetTraceContext()`, `AddSpanEvent()`, `RecordSpanError()`
 - **[core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go)** - ProductionLogger implementation and `WithComponent()` method
 - **[core/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go)** - Logger interface and `ComponentAwareLogger` interface definitions
+
+### Bounded event-summary failures
+
+The existing `event_summarization` operation distinguishes `summary_timeout`
+(child deadline), `parent_cancelled`, and `llm_unavailable`. Logs keep request ID,
+duration and step count; existing debug records retain the attributable request
+report and failure evidence. No request ID is added as a metric label. Timeout
+fallback is recorder-owned; a cancelled parent prevents fallback writes.

@@ -1355,6 +1355,39 @@ if metrics.ComponentCallsFailed > 10 {
 
 ## 13. Configuration
 
+### Dependency-only continuation safety
+
+For generated plans, orchestration derives `implicit_deps` from prior-phase
+step IDs referenced in parameter templates. The planner may omit that field;
+if it supplies declarations, they must match exactly. Prior observations used
+only to inform planning are not dependencies. Numeric bracket indices inside
+framework step templates are normalized to the canonical dot form before the
+full validation gauntlet. Surplus declarations and unsupported template syntax
+still cause bounded correction. Existing caller-supplied plans, hook results,
+and approved HITL checkpoints retain their original validation contract.
+
+Structural correction reuses the phase's selected capability prompt, with
+bounded feedback about rejected output and prior errors. New phases and genuine
+discovery misses can reselect capabilities. If validation rounds are exhausted,
+the request remains failed; returned and stored execution records retain only
+admitted steps with `termination_reason=plan_validation_exhausted` and
+`execution_request_id` metadata. A tool invocation in the rejected plan never
+appears as an executed step.
+
+If two consecutive phases do no work because every step is dependency-skipped
+on the same failed ancestors, orchestration stops a non-terminal continuation
+and synthesizes the accumulated evidence. Actual tool attempts, including
+polling, reset this check. The execution records `ForcedTerminal` and result
+metadata `termination_reason=repeated_failed_dependencies`; failed history
+is never rewritten as success. Registry Viewer distinguishes skipped steps
+from attempted failures. Planned inputs on skipped results are available in
+`Metadata.planned_parameters`, not the dispatched `Parameters` field.
+
+Dependency skips are not submitted to episodic-memory summarization or recording;
+actual failed attempts still are. Skip evidence remains in execution records,
+and existing memories are unchanged. Successful refinement-satisfied steps
+retain their completed classification in Registry Viewer.
+
 ### Environment Variables
 
 | Variable | Default | Description |
@@ -1375,6 +1408,7 @@ if metrics.ComponentCallsFailed > 10 {
 | `TRUVAG3_ITERATIVE_MAX_PHASES` | `5` | Maximum planning phases per request. Most queries need at most 2. |
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | Maximum total steps across all phases. Prevents runaway plan generation. |
 | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | Maximum duration for a single phase (plan generation + execution). Prevents a single continuation phase from hanging. |
+| `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | Maximum encoded correction context added to one phase's selected prompt. Earlier rejected output is summarized or omitted with a marker if needed. |
 | `TRUVAG3_STEP_RETRY_INITIAL_DELAY` | `500ms` | Initial backoff delay for step retries. Go duration format. Exponential backoff doubles this per attempt. |
 | `TRUVAG3_STEP_RETRY_MAX_DELAY` | `10s` | Maximum backoff delay for step retries. Delay is capped at this value regardless of attempt count. |
 | `TRUVAG3_FAILURE_PATTERN_MIN_FAILURES` | `2` | Minimum distinct failed upstream steps required before the remediation continuation prompt embeds a shared-error pattern summary. Raise to make the analyzer more conservative. |
@@ -2178,6 +2212,13 @@ export TRUVAG3_SEMANTIC_RETRY_INDEPENDENT_STEPS=true
 
 **When Semantic Retry Activates:**
 
+All rows below are subject to tool correction permission and the configured
+budget. Explicit `retryable:false` disables semantic retries (including when
+emitted by a Go zero value). Missing policy retains status-based handling; it
+does not permit unchanged non-transient 4xx retries. Corrections cannot replace
+exact-bound or HITL-approved values. Inspect `dispatch_count`/`dispatches` for
+physical requests, not just the regular-retry `attempts` counter.
+
 | Condition | Layer 4 Activates? |
 |-----------|-------------------|
 | Tool returns 400 + Layer 3 says "cannot fix" | ✅ Yes |
@@ -2523,8 +2564,13 @@ instructions and boundary-relevant resources. Publishing a new version needs
 no Pub/Sub: a `published` binding sees it on the next request, while a numeric
 binding and an in-flight request keep their pinned versions.
 
-The default activation and resource selectors use a fixed portable JSON prompt,
-strict validation, and one bounded correction retry. They intentionally do not
+The default activation selector uses strict JSON and one bounded correction retry.
+Resource selector v2 also accepts a complete outer JSON/unlabelled fence and
+retries a child-attempt timeout within the same two-attempt ceiling. Its optional
+`SkillConfig.Limits.ResourceSelectionAttemptTimeout` is configured through
+`TRUVAG3_SKILL_RESOURCE_SELECTION_ATTEMPT_TIMEOUT` (default `0s`: inherit parent).
+Parent cancellation stays terminal; omission is diagnosed and required selected
+content still fails closed. Both selectors intentionally do not
 set a provider-native response-format value. Their AI-option overrides accept
 only model and reasoning effort; use a custom resolver when a deployment needs
 a provider-specific structured-output protocol.
@@ -2605,3 +2651,17 @@ The real magic happens when you use both:
 ---
 
 **🎉 Congratulations!** You now understand how to conduct your component orchestra. Whether you choose AI's flexibility or workflows' reliability (or both!), you have the tools to build powerful multi-agent systems with both passive tools and active agents.
+
+### Terminal correlation and summary deadlines
+
+`ProcessRequest*WithExecution` terminal results expose their owning request/segment
+through `ExecutionResult.Metadata[MetadataKeyExecutionRequestID]`, including failure
+when the response is nil. Stored terminal results use the same ID; older records
+may omit it. Do not substitute a parent request or case ID when it is unavailable.
+
+`BuildMemoryHooks` accepts `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` (default
+`2m`, positive Go duration). Direct composition uses `WithSummarizerTimeout`.
+The builtin AI invocation alone is bounded; child timeout falls back to heuristic
+events, while parent cancellation stops writes. For direct batch tuning, use the
+existing `WithSummarizerMaxStepsPerBatch` (default 20); uncovered steps retain
+heuristic summaries. This option is not a builder environment setting.

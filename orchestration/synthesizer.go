@@ -27,8 +27,9 @@ type AISynthesizer struct {
 	model                string
 
 	// Result processing for large data management (Layer 2+)
-	resultProcessor  ResultProcessor
-	resultTrimConfig *ResultTrimConfig
+	resultProcessor     ResultProcessor
+	resultTrimConfig    *ResultTrimConfig
+	failedOperationView FailedOperationViewConfig
 
 	// LLM Debug Store for full payload visibility
 	debugStore LLMDebugStore
@@ -101,6 +102,17 @@ func NewAISynthesizer(aiClient core.AIClient) *AISynthesizer {
 		synthesisTemperature: 0.5,
 		synthesisMaxTokens:   5000,
 	}
+}
+
+// SetFailedOperationView configures the built-in synthesis evidence projection.
+// Custom synthesizers retain ownership of their own prompt construction.
+func (s *AISynthesizer) SetFailedOperationView(config FailedOperationViewConfig) error {
+	resolved, err := resolveFailedOperationView(config)
+	if err != nil {
+		return err
+	}
+	s.failedOperationView = resolved
+	return nil
 }
 
 // Synthesize combines agent responses into a final response using AI
@@ -407,6 +419,10 @@ func (s *AISynthesizer) buildPreparedSynthesisPrompt(
 		budgetMeta = bm
 	}
 
+	failureViews, err := synthesisFailureViews(ctx, results.Steps, s.failedOperationView)
+	if err != nil {
+		return "", fmt.Errorf("prepare synthesis failure evidence: %w", err)
+	}
 	for i, step := range results.Steps {
 		if step.Success {
 			response := step.Response
@@ -529,9 +545,7 @@ func (s *AISynthesizer) buildPreparedSynthesisPrompt(
 			}
 			fmt.Fprintf(&builder, "<agent name=%q task=%q status=\"success\">\n%s\n</agent>\n\n", preparedAgent, preparedInstruction, preparedResponse)
 		} else {
-			preparedAgent, preparedInstruction, preparedError, prepareErr := prepareSynthesisStepValues(
-				ctx, step.AgentName, step.Instruction, step.Error, promptFieldPriorResultError,
-			)
+			preparedAgent, preparedInstruction, preparedError, prepareErr := prepareFailedSynthesisStep(ctx, step, failureViews)
 			if prepareErr != nil {
 				return "", prepareErr
 			}

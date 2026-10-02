@@ -288,6 +288,9 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 			if actualExecution == nil || actualExecution.Success != terminalRecord.Result.Success || actualExecution.TotalDuration != terminalRecord.Result.TotalDuration || len(actualExecution.Steps) != len(terminalRecord.Result.Steps) {
 				t.Fatalf("returned execution diverged from the terminal record: returned=%+v stored=%+v", actualExecution, terminalRecord.Result)
 			}
+			if actualExecution.Metadata[MetadataKeyExecutionRequestID] != terminalRecord.RequestID || terminalRecord.Result.Metadata[MetadataKeyExecutionRequestID] != terminalRecord.RequestID {
+				t.Fatal("returned and stored terminal request identities differ")
+			}
 			if test.wantHookCalls {
 				if len(terminalRecord.PipelineHooks) != 2 ||
 					terminalRecord.PipelineHooks[1].Phase != PipelineHookPhaseAfterSynthesis ||

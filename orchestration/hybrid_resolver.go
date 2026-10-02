@@ -32,6 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -133,6 +134,7 @@ func (h *HybridResolver) ResolveParameters(
 	for id := range dependencyResults {
 		depStepIDs = append(depStepIDs, id)
 	}
+	sort.Strings(depStepIDs)
 
 	if len(sourceData) == 0 {
 		h.logDebug("No source data available for parameter resolution", map[string]interface{}{
@@ -148,7 +150,7 @@ func (h *HybridResolver) ResolveParameters(
 	}
 
 	// Phase 1: Try auto-wiring (fast, no LLM cost)
-	autoResult := h.autoWirer.AutoWireParameters(sourceData, targetCapability.Parameters)
+	autoResult := h.autoWirer.autoWireSources(sourceData, targetCapability.Parameters)
 
 	h.logDebug("Auto-wiring result", map[string]interface{}{
 		"capability":  targetCapability.Name,
@@ -264,6 +266,9 @@ Pay close attention to which specific item the instruction is referring to.`, st
 	// Merge results (auto-wired takes priority to avoid overwriting with LLM guesses)
 	params := autoResult.Parameters
 	for k, v := range resolved {
+		if v == nil {
+			continue
+		}
 		if _, exists := params[k]; !exists {
 			params[k] = v
 			metadata.Parameters = append(metadata.Parameters, ParameterResolution{
@@ -291,7 +296,7 @@ Pay close attention to which specific item the instruction is referring to.`, st
 	}, nil
 }
 
-// collectSourceData merges all dependency results into a single map
+// collectSourceData retains each successful dependency under its step identity.
 func (h *HybridResolver) collectSourceData(dependencyResults map[string]*StepResult) map[string]interface{} {
 	sourceData := make(map[string]interface{})
 
@@ -319,10 +324,7 @@ func (h *HybridResolver) collectSourceData(dependencyResults map[string]*StepRes
 		if deserialized, ok := deserializeStringValues(parsed).(map[string]interface{}); ok {
 			parsed = deserialized
 		}
-		// Merge into sourceData (later steps may override earlier for same keys)
-		for k, v := range parsed {
-			sourceData[k] = v
-		}
+		sourceData[stepID] = parsed
 	}
 
 	return sourceData

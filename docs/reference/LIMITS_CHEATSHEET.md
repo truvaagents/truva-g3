@@ -1,5 +1,28 @@
 # TruvaG3 Limits & Configuration Cheatsheet
 
+### Failed-operation prompt views
+
+| Environment setting | Default | Meaning |
+|---|---|---|
+| `TRUVAG3_FAILED_OPERATION_VIEW_DISABLED` | `false` | Disable the derived view; retain legacy failure rendering |
+| `TRUVAG3_FAILED_OPERATION_MAX_VALUE_BYTES` | `4096` | Final encoded bytes per complete attempted input value |
+| `TRUVAG3_FAILED_OPERATION_MAX_STEP_BYTES` | `16384` | Combined error/attempt/input view per failed step |
+| `TRUVAG3_FAILED_OPERATION_MAX_PROMPT_BYTES` | `32768` | Combined failure views per continuation or built-in synthesis prompt |
+
+All numeric env settings are positive. Code zero means unset, negatives fail
+validation. Canonical orchestration strict/compatible env modes apply; explicit
+options win. Continuation child ceilings cannot exceed the existing failure
+share; raising a child alone cannot bypass its parent. Final encoded child bytes
+and legacy pre-encoding parent bytes are reported separately. No new LLM calls
+are introduced. The per-error quarter-share is an internal allocation heuristic,
+not another operator limit: it reserves room for dispatch metadata and inputs.
+
+Episodic Redis retrieval uses internal batches of 256 references/GETs. This is
+transport chunking, not an event-count cap: all retained candidates are examined
+before selecting the newest visible `EventFilter.Limit` events. Retention remains
+controlled by `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN`; changing the batch size
+does not change query eligibility or ordering.
+
 Quick reference for configurable defaults and enforced framework/provider
 boundaries. A value is overrideable only where its row names an environment
 variable or programmatic option; fixed validation limits cannot be raised.
@@ -142,6 +165,10 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 | Phase timeout | 180s | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | — |
 | Max validation rounds | 4 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | Regen attempts after first validation failure; phase fails if exceeded |
 
+Dependency-only fixed point: consecutive all-skipped phases with identical
+failed ancestors stop non-terminal continuation after one opportunity to adapt;
+this is a structural invariant, not a tunable retry budget. Actual work resets it.
+
 ## Execution Limits
 
 | What | Default | Env Var | `With*` Option |
@@ -150,8 +177,17 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 | Step timeout | 120s | `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `WithStepTimeout(d)` |
 | Total execution timeout | 600s | `TRUVAG3_ORCHESTRATION_TIMEOUT` | `WithTotalTimeout(d)` |
 | Execution-debug store write timeout | 5s | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `WithExecutionStoreWriteTimeout(d)` |
+| Request resource cleanup | 5s | `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` | `WithExecutionCleanupTimeout(d)`; explicit non-positive/invalid values fail startup in both config modes. Cancellation-independent, joined optional cleanup; providers honor context |
 
 ## Scheduled Executor
+
+For `SmartExecutor`, `StepTimeout` is not a direct deadline on ordinary tool
+calls. The shared HTTP client uses `TotalTimeout`, enlarged when
+`HITL.DefaultTimeout + StepTimeout` is greater. Delegated orchestrator calls also
+receive that extended context deadline, and iterative phase timeout can be
+enlarged to accommodate it. Parent cancellation, the effective phase deadline,
+and the target server's write timeout remain independent limits. The scheduled
+executor setting below configures a different dispatch path.
 
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
@@ -215,6 +251,10 @@ loaded explicitly through `redisprovider.LoadOptionsFromEnvironment`, and later
 | Digest array head-sample size | 3 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | — |
 | Digest inline-string cap (elision threshold) | 200 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | — |
 | Digest per-object key cap | 50 | `TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS` | — |
+
+Despite legacy `CHARS` names, continuation size accounting uses UTF-8 bytes
+before final prompt encoding. Failed steps and the newest success are retained
+under a soft aggregate target; escaping and later framing can increase sent size.
 
 > `…_RESULT_MAX_CHARS` now sizes only the **non-JSON** floor preview (logs/markdown/CSV) — JSON results are digested, and orchestrator JSON delegation responses are additionally child-summary-extracted, so child sub-steps stay visible regardless. `…_MAX_TOTAL_CHARS` is a **soft target** for the whole section (not a hard cap — failed steps and the newest successful step are always kept, and notes are appended after the budget decision): digests fill newest-first; older steps evict with a "showing N of M" note (~268 B/digest measured → ~122 steps fit 32 KB). `…_MAX_ESCALATIONS` calls are newest-first, sequential fast-model calls and fire ~never on all-JSON workloads. Raise `…_DIGEST_SCALAR_MAX` so the planner sees longer salient values inline at plan time.
 
@@ -295,7 +335,7 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | AI provider retry (legacy `NewChainClient`) | 0 per provider (avoids multiplying provider retries and ordered failover attempts) | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithChainMaxRetries(n)`; explicit 0 disables |
 | AI provider retry (heterogeneous `NewChain` `ProviderEntry`) | 3 per independently constructed entry | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithMaxRetries(n)` on each entry; explicit 0 disables |
 | AI provider retry (heterogeneous `NewChain` `ClientEntry`) | Caller-owned client behavior | Caller-owned | Configure the injected client |
-| AI provider initial retry delay | 1s, then exponential backoff | `TRUVAG3_AI_RETRY_DELAY` (positive Go duration) | `AIConfig.RetryDelay`; HTTP 429/503 may increase it with `Retry-After`. Each wait ends at the earlier caller deadline or absolute wait cap (positive HTTP-client timeout, otherwise the 180s framework fallback); this cap does not cancel a successful streaming response's transport context |
+| AI provider initial retry delay | 1s, then exponential backoff | `TRUVAG3_AI_RETRY_DELAY` (positive Go duration) | `AIConfig.RetryDelay`; HTTP 429/503, or eligible decoded semantic 429/503 in OpenAI-compatible clients, may increase it with `Retry-After`. One shared budget covers HTTP and decoded retries in adopting adapters. Each wait ends at the earlier caller deadline or absolute wait cap (positive HTTP-client timeout, otherwise the 180s framework fallback); this cap does not cancel a successful streaming response's transport context |
 
 ## Circuit Breaker
 
@@ -357,14 +397,46 @@ Sweep interval for the in-process eviction sweeper used by `Framework.AutoRegist
 |------|---------|---------|----------------|
 | Domain stream max length | 100000 | `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN` | — |
 | Investigation claim TTL | 30m | `TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL` | — |
-| Enrichment max tokens | 2000 | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` | `WithEnrichmentMaxTokens(n)` |
+| Enrichment view budget (4 encoded bytes/token) | 2000 (8000 bytes) | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` | `WithEnrichmentMaxTokens(n)` (direct hook) |
 | Recent events limit | 20 | `TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT` | `WithEnrichmentRecentEventsLimit(n)` |
 | Summarizer model override | — | `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `WithSummarizerModel(m)` |
+| Event summary output tokens per call | Calculated: max(300, 150 × batch size) | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` | `WithSummarizerMaxTokens(n)` |
 | Compaction digest max tokens | 500 | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `WithCompactionMaxTokens(n)` |
 | Compaction raw event limit | 200 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` | `WithCompactionRawLimit(n)` |
 | Compaction recent detail | 15 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` | `WithCompactionRecentDetail(n)` |
 | Digest cache TTL | 5m | `TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL` | `WithDigestCacheTTL(d)` |
 | Digest incremental threshold | 20 | `TRUVAG3_SHARED_MEMORY_DIGEST_INCREMENTAL_THRESHOLD` | `WithIncrementalThreshold(n)` |
+
+Digest reuse covers the bounded returned window, not unlimited history. The raw
+event limit also bounds stored event fingerprints. Lookback, raw limit and digest
+output-token target invalidate incompatible cached windows. An unchanged limited
+window needs zero compaction calls; edits, expiry or displacement rebaseline it.
+The digest TTL alone does not extend the event lookback. Observed-read failures
+leave the cache untouched; legacy readers without read-health observation bypass
+reuse. No new cursor-size or query scan cap is introduced.
+
+At the `core.Config` boundary, numeric shared-memory/activity settings now fail
+startup on invalid explicit values, even with the optional feature disabled.
+Absent settings retain documented defaults; compaction recent detail permits
+zero. File/typed configuration is validated too. The hook builder also validates
+all hook-owned numeric environment settings before checking optional dependencies.
+Backend wiring and deployment preflight remain separate N4-R work.
+
+The enrichment-view setting is read at startup by `BuildMemoryHooks`, with or
+without an AI client. Unset uses 2000; invalid, empty, non-positive or overflowing
+values fail construction. Direct hook construction rejects invalid
+values. The byte budget includes scope, headings, JSON escaping and count markers;
+it excludes other hooks' existing RAG context. Complete records are admitted in
+existing section order, with explicit shortening/omission rather than cutting
+JSON mid-record. This is an approximate prompt-view limit, not a model output
+budget; compactor inputs and generation allowance remain separate.
+
+The event-summary override is a positive, fixed per-call allowance, not a
+per-step multiplier or an input/context limit. `BuildMemoryHooks` reads it at
+startup; unset preserves the calculated default. Invalid explicit values fail
+construction, including without an AI client. Direct
+construction uses `WithSummarizerMaxTokens(n)` and rejects non-positive values.
+This setting is separate from synthesis and enrichment/compaction budgets.
 
 ## User Memory
 
@@ -412,6 +484,11 @@ Sweep interval for the in-process eviction sweeper used by `Framework.AutoRegist
 | Signal TTL | 5m | `TRUVAG3_ACTIVITY_SIGNAL_TTL` | `WithAnnouncementSignalTTL(d)` |
 | Max signals in prompt | 10 | `TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT` | — |
 | Query max length | 200 | `TRUVAG3_ACTIVITY_SIGNAL_QUERY_MAX_LEN` | `WithAnnouncementQueryMaxLen(n)` |
+
+Managed requests renew activity at one-third of the effective signal TTL.
+Each submission is bounded by `min(TTL/3, execution cleanup timeout)`;
+activity removal and investigation cleanup share the execution-cleanup budget.
+This does not extend request/step/model timeouts or renew investigation claims.
 
 ## Correlation and W3C Baggage
 
@@ -474,6 +551,7 @@ eligibility. Other skill environment values fill only code fields left unset.
 | Synthesis skill projection | 2048 tokens | `TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET` | `SkillConfig.Limits.SynthesisTokenBudget` |
 | Effective-input allowance | disabled (`0`); skills use at most 10% when set | `TRUVAG3_SKILL_EFFECTIVE_INPUT_TOKEN_BUDGET` | `SkillConfig.Limits.EffectiveInputTokenBudget` |
 | Registry operation timeout | 5s | `TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT` | `SkillConfig.Limits.RegistryReadTimeout` |
+| Resource AI attempt timeout | 0s (inherit parent) | `TRUVAG3_SKILL_RESOURCE_SELECTION_ATTEMPT_TIMEOUT` | `SkillConfig.Limits.ResourceSelectionAttemptTimeout`; resource v2 only, two attempts total |
 | Immutable content cache | local, 16 MiB | `TRUVAG3_SKILL_CACHE_MODE`, `TRUVAG3_SKILL_CACHE_MAX_BYTES` | `SkillConfig.Cache` / `WithSkillContentCache` |
 | Selector guidance | 4096 bytes and 512 estimated tokens | `TRUVAG3_SKILL_ACTIVATION_GUIDANCE_FILE`, `TRUVAG3_SKILL_RESOURCE_GUIDANCE_FILE` | `WithSkillPromptGuidance` |
 | Runtime policy ID | 128 bytes | none (code-only) | `SkillConfig.RuntimePolicyID` |
@@ -481,8 +559,11 @@ eligibility. Other skill environment values fill only code fields left unset.
 | Expected capability hints | 32 values, 128 bytes each | none | `WithSkillExpectedCapabilities` |
 
 The selector temperature (`0.01`), deliberately unset provider-native response
-format, strict JSON parsing, two-attempt parse limit, framework prompts, and
-reserved prompt tags are fixed contracts. V1 leaves response format unset
+format, strict JSON body validation, two-attempt ceiling, framework prompts, and
+reserved prompt tags are fixed contracts. Resource v2 accepts a complete outer
+JSON/unlabelled fence and retries child-attempt timeout within that ceiling;
+activation retains malformed-answer-only retry. Parent cancellation is terminal.
+The resource attempt timeout is tunable; zero inherits the caller. Selectors leave response format unset
 because provider wire values differ; the prompt/parser/retry path supplies the
 portable structured-output contract. The legacy AI-client adapter cannot
 represent an explicitly set zero generation value, which is why V1 uses the
@@ -556,6 +637,18 @@ export TRUVAG3_PLAN_MAX_TOKENS=20000
 export TRUVAG3_TIERED_SELECTION_MAX_TOKENS=3000
 export TRUVAG3_SYNTHESIS_MAX_TOKENS=10000
 ```
+
+### Event-summary invocation budget
+
+| Setting | Default | Owner and effect |
+|---|---|---|
+| `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` | `2m` | `BuildMemoryHooks` → builtin summarizer; bounds AI invocation, not subsequent memory writes |
+| `WithSummarizerTimeout` | `2m` | Direct constructor alternative; explicit duration must be positive |
+| `WithSummarizerMaxStepsPerBatch` | `20` | Existing direct constructor option; excess steps use heuristic summaries |
+
+The earlier of the invocation and parent deadlines applies. Child timeout permits
+heuristic recording on the live parent; parent cancellation does not. The deadline
+does not increase output-token caps, phase limits or provider retry budgets.
 
 **Micro-resolution / semantic-retry truncation (unresolved templates in long text fields, or a semantic-retry correction whose parameters include a large text payload):**
 ```bash

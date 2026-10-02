@@ -677,17 +677,7 @@ func (c *AgentCatalog) FormatForLLM() string {
 				}
 			}
 
-			if cap.Returns.Type != "" {
-				output += fmt.Sprintf("    Returns: %s - %s\n",
-					cap.Returns.Type, cap.Returns.Description)
-				if len(cap.Returns.Fields) > 0 {
-					output += "    Return Fields:\n"
-					for _, field := range cap.Returns.Fields {
-						output += fmt.Sprintf("      - %s: %s - %s\n",
-							field.Name, field.Type, field.Description)
-					}
-				}
-			}
+			output += formatReturnSchemaForLLM(cap.Returns)
 		}
 		output += "\n"
 	}
@@ -811,15 +801,48 @@ func (c *AgentCatalog) FormatToolsForLLM(toolIDs []string) string {
 				}
 			}
 
-			if cap.Returns.Type != "" {
-				fmt.Fprintf(&output, "    Returns: %s - %s\n",
-					cap.Returns.Type, cap.Returns.Description)
-			}
+			output.WriteString(formatReturnSchemaForLLM(cap.Returns))
 		}
 		output.WriteString("\n")
 	}
 
 	return output.String()
+}
+
+// formatReturnSchemaForLLM exposes declared fields independently of a top-level
+// type. Field descriptions remain in the catalog; the prompt uses a compact view.
+func formatReturnSchemaForLLM(ret ReturnType) string {
+	var out strings.Builder
+	if ret.Type != "" {
+		fmt.Fprintf(&out, "    Returns: %s - %s\n", ret.Type, ret.Description)
+	}
+	if len(ret.Fields) > 0 {
+		out.WriteString("    Return Fields: ")
+		for i, field := range ret.Fields {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			fmt.Fprintf(&out, "%s:%s", compactSchemaAtom(field.Name), compactSchemaAtom(field.Type))
+		}
+		out.WriteByte('\n')
+	}
+	return out.String()
+}
+
+// Quote only display delimiters/control characters. Ordinary schema names keep
+// their compact spelling; stored names and validation metadata remain untouched.
+func compactSchemaAtom(value string) string {
+	if value == "" || strings.ContainsAny(value, ",:\"\\ \t\r\n") {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f || r == '\u2028' || r == '\u2029' {
+			encoded, _ := json.Marshal(value)
+			return string(encoded)
+		}
+	}
+	return value
 }
 
 // extractFirstSentences extracts the first N sentences from text.

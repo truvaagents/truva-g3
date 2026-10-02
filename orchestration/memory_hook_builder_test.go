@@ -10,13 +10,46 @@ import (
 )
 
 func TestBuildMemoryHooks_NilDeps(t *testing.T) {
-	hooks, coord := BuildMemoryHooks(nil, nil, nil)
+	hooks, coord, err := BuildMemoryHooks(nil, nil, nil)
+	require.NoError(t, err)
 	assert.Nil(t, hooks)
 	assert.Nil(t, coord)
 }
 
+func TestBuildMemoryHooks_EventSummarizerTokenBudget(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{
+		{"10000", 10000}, {"0", 0}, {"-1", 0}, {"invalid", 0}, {"", 0},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS", tc.value)
+			hooks, _, err := BuildMemoryHooks(&core.SharedMemoryDeps{
+				AgentName: "test", Episodic: &core.MockEpisodicMemory{},
+			}, &summarizerMockAI{}, &core.NoOpLogger{})
+			if tc.want == 0 {
+				require.ErrorIs(t, err, core.ErrInvalidConfiguration)
+				require.Nil(t, hooks)
+				return
+			}
+			require.NoError(t, err)
+			for _, hook := range hooks {
+				if record, ok := hook.(*MemoryRecordHook); ok {
+					summarizer, ok := record.summarizer.(*LLMEventSummarizer)
+					require.True(t, ok)
+					require.Equal(t, tc.want, summarizer.maxTokens)
+					return
+				}
+			}
+			t.Fatal("missing memory record hook")
+		})
+	}
+}
+
 func TestBuildMemoryHooks_NilEpisodic(t *testing.T) {
-	hooks, coord := BuildMemoryHooks(&core.SharedMemoryDeps{}, nil, nil)
+	hooks, coord, err := BuildMemoryHooks(&core.SharedMemoryDeps{}, nil, nil)
+	require.NoError(t, err)
 	assert.Nil(t, hooks)
 	assert.Nil(t, coord)
 }
@@ -28,7 +61,8 @@ func TestBuildMemoryHooks_EpisodicOnly(t *testing.T) {
 		Episodic:    &core.MockEpisodicMemory{},
 	}
 
-	hooks, coord := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	hooks, coord, err := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	require.NoError(t, err)
 
 	// Enrichment + Record = 2 hooks (no activity coordinator, no knowledge)
 	require.Len(t, hooks, 2)
@@ -43,7 +77,8 @@ func TestBuildMemoryHooks_WithCoordinator(t *testing.T) {
 		Coordinator: &core.MockInvestigationCoordinator{},
 	}
 
-	hooks, coord := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	hooks, coord, err := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	require.NoError(t, err)
 
 	// Still 2 hooks — coordinator is passed to hooks but doesn't create its own hook
 	require.Len(t, hooks, 2)
@@ -58,7 +93,8 @@ func TestBuildMemoryHooks_WithActivityCoordinator(t *testing.T) {
 		ActivityCoordinator: &core.MockActivityCoordinator{},
 	}
 
-	hooks, coord := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	hooks, coord, err := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	require.NoError(t, err)
 
 	// Announcement + Enrichment + Record + Cleanup = 4 hooks
 	require.Len(t, hooks, 4)
@@ -79,7 +115,8 @@ func TestBuildMemoryHooks_FullDeps(t *testing.T) {
 		DigestCache:         &core.MockDigestCache{},
 	}
 
-	hooks, coord := BuildMemoryHooks(deps, mockAI, &core.NoOpLogger{})
+	hooks, coord, err := BuildMemoryHooks(deps, mockAI, &core.NoOpLogger{})
+	require.NoError(t, err)
 
 	// Announcement + Enrichment + Record + Extraction + Cleanup = 5 hooks
 	require.Len(t, hooks, 5)
@@ -93,7 +130,8 @@ func TestBuildMemoryHooks_DomainFallback(t *testing.T) {
 		Episodic: &core.MockEpisodicMemory{},
 	}
 
-	hooks, _ := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	hooks, _, err := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	require.NoError(t, err)
 	require.Len(t, hooks, 2) // still creates hooks with default domain
 }
 
@@ -110,9 +148,10 @@ func TestBuildMemoryHooks_WithEntityExtractor(t *testing.T) {
 		Episodic:    &core.MockEpisodicMemory{},
 	}
 
-	hooks, _ := BuildMemoryHooks(deps, nil, &core.NoOpLogger{},
+	hooks, _, err := BuildMemoryHooks(deps, nil, &core.NoOpLogger{},
 		WithMemoryEntityExtractor(customExtractor),
 	)
+	require.NoError(t, err)
 
 	require.Len(t, hooks, 2) // builds successfully with custom extractor
 }
@@ -125,7 +164,8 @@ func TestBuildMemoryHooks_DefaultsToLLMExtractorWhenAIClientWired(t *testing.T) 
 	}
 	aiClient := &summarizerMockAI{}
 
-	hooks, _ := BuildMemoryHooks(deps, aiClient, &core.NoOpLogger{})
+	hooks, _, err := BuildMemoryHooks(deps, aiClient, &core.NoOpLogger{})
+	require.NoError(t, err)
 	require.Len(t, hooks, 2)
 
 	// Verify record hook got LLMEntityExtractor
@@ -160,7 +200,8 @@ func TestBuildMemoryHooks_DefaultsToNoOpExtractorWhenNoAIClient(t *testing.T) {
 		Episodic:    &core.MockEpisodicMemory{},
 	}
 
-	hooks, _ := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	hooks, _, err := BuildMemoryHooks(deps, nil, &core.NoOpLogger{})
+	require.NoError(t, err)
 	require.Len(t, hooks, 2)
 
 	var recordHook *MemoryRecordHook
@@ -197,9 +238,10 @@ func TestBuildMemoryHooks_WithImportanceFunc(t *testing.T) {
 		Episodic:    &core.MockEpisodicMemory{},
 	}
 
-	hooks, _ := BuildMemoryHooks(deps, nil, &core.NoOpLogger{},
+	hooks, _, err := BuildMemoryHooks(deps, nil, &core.NoOpLogger{},
 		WithMemoryImportanceFunc(customScorer),
 	)
+	require.NoError(t, err)
 
 	require.Len(t, hooks, 2)
 	_ = called // scorer is passed to hook, invoked during event recording
@@ -212,9 +254,10 @@ func TestBuildMemoryHooks_WithLookback(t *testing.T) {
 		Episodic:    &core.MockEpisodicMemory{},
 	}
 
-	hooks, _ := BuildMemoryHooks(deps, nil, &core.NoOpLogger{},
+	hooks, _, err := BuildMemoryHooks(deps, nil, &core.NoOpLogger{},
 		WithMemoryLookback(48*time.Hour),
 	)
+	require.NoError(t, err)
 
 	require.Len(t, hooks, 2)
 }
@@ -248,6 +291,7 @@ func TestBuildMemoryHooks_NilLogger(t *testing.T) {
 	}
 
 	// nil logger should not panic
-	hooks, _ := BuildMemoryHooks(deps, nil, nil)
+	hooks, _, err := BuildMemoryHooks(deps, nil, nil)
+	require.NoError(t, err)
 	require.Len(t, hooks, 2)
 }

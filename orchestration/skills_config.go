@@ -195,6 +195,9 @@ func validateSkillRuntimeConfig(config *OrchestratorConfig) error {
 }
 
 func validateSkillRuntimeLimits(limits SkillRuntimeLimits) error {
+	if limits.ResourceSelectionAttemptTimeout < 0 {
+		return fmt.Errorf("%w: skills resource selection attempt timeout must be non-negative", ErrInvalidOrchestratorConfig)
+	}
 	positive := []struct {
 		name  string
 		value int

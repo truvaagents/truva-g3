@@ -65,6 +65,8 @@ func TestNewLLMEventSummarizer_InvalidOptions(t *testing.T) {
 		{"zero maxResponseChars", WithSummarizerMaxResponseChars(0), "maxResponseChars must be positive"},
 		{"negative maxStepsPerBatch", WithSummarizerMaxStepsPerBatch(-1), "maxStepsPerBatch must be positive"},
 		{"zero tokensPerStep", WithSummarizerTokensPerStep(0), "tokensPerStepBudget must be positive"},
+		{"zero maxTokens", WithSummarizerMaxTokens(0), "maxTokens must be positive"},
+		{"negative maxTokens", WithSummarizerMaxTokens(-1), "maxTokens must be positive"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -255,6 +257,22 @@ func TestSummarizeSteps_MaxTokensScalesWithBatch(t *testing.T) {
 	_, _ = s.SummarizeSteps(context.Background(), steps)
 	require.NotNil(t, capturedOpts)
 	assert.Equal(t, 300, capturedOpts.MaxTokens, "should be 75 * 4 steps")
+}
+
+func TestSummarizeSteps_ExplicitTokenBudget(t *testing.T) {
+	for _, count := range []int{1, 12, 20} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			ai := &summarizerMockAI{generateFunc: func(_ context.Context, _ string, opts *core.AIOptions) (*core.AIResponse, error) {
+				require.Equal(t, 10000, opts.MaxTokens)
+				return &core.AIResponse{Content: "[]"}, nil
+			}}
+			s, err := NewLLMEventSummarizer(ai, WithSummarizerMaxTokens(10000), WithSummarizerTokensPerStep(2000))
+			require.NoError(t, err)
+			_, err = s.SummarizeSteps(t.Context(), make([]core.StepSummaryInput, count))
+			require.NoError(t, err)
+			require.Equal(t, 1, ai.calls)
+		})
+	}
 }
 
 func TestSummarizeSteps_MaxTokensFloor(t *testing.T) {

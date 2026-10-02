@@ -1,5 +1,13 @@
 # Distributed Tracing and Log Correlation Guide
 
+Request lifecycle changes emit `orchestrator.execution.lifecycle` on the live
+request span. Request-owned activity renewal/removal emits
+`activity.renewal.submitted` / `activity.cleanup.submitted` with bounded
+`provider_error_observed`; nil from a fail-open coordinator does not prove backend
+health. Renewal retains the request parent, not an already-ended announcement
+hook. Exact effect payloads and lifecycle revisions remain in execution debug
+records; they are not copied into span attributes.
+
 Welcome to the complete guide on distributed tracing in TruvaG3! Think of this as your friendly mentor sitting next to you, explaining how to follow a request as it travels through your entire system. Grab a coffee, and let's dive in!
 
 ## Table of Contents
@@ -1444,6 +1452,17 @@ telemetry.AddSpanEvent(ctx, "llm.plan_generation.request",
 
 ### Redis/Valkey Adapter Boundary
 
+Token-safe investigation cleanup emits the bounded
+`memory.investigation.cleanup` outcome (`released`, `absent`, `not_owned`,
+`unknown`) on the request trace. The enrichment hook's pending
+`investigation_lease_cleanup:<ordinal>` effect is completed before terminal
+execution recording, including failure/cancellation/suspension. Its diagnostic
+data contains entity identity and observed outcome, not the private acquisition
+ID. Legacy paths emit `memory.investigation.legacy_ownership`; they do not claim
+token safety. Cleanup errors preserve the original request result. The optional
+backend contract returns unknown errors to that owner rather than inventing
+successful deletion.
+
 The Redis/Valkey adapters added for the DB-0 cluster keyspace do not create a
 span for every Redis command. They preserve the caller's `context.Context`, so
 an existing request span remains correlated through command cancellation and
@@ -1849,6 +1868,10 @@ The orchestration module emits span events for every LLM interaction:
 | `result_distill.llm_failed` | A distill call failed and fell open to the structural floor | `request_id`, `step_id`, `error`, `duration_ms` |
 | `llm.event_summarization.request` | Batched LLM call for step summaries | `request_id`, `step_count`, `prompt_length`, `model`¹ |
 | `llm.event_summarization.response` | Summarization result | `request_id`, `response_length`, `model`¹ |
+| `memory.event_summarization.outcome` | Built-in batch semantic coverage, distinct from provider completion | `request_id`, `outcome` (`complete`/`partial`/`fallback`), `expected`, `accepted`, `rejected_entries`, `rejected_entities`, `complete_array`, `truncated`, additive `entity_fields.*` counts |
+| `orchestration.template.dependency_inclusion` | Successful template-source load outside `depends_on` | `reason` (`declared_prior_phase` or `undeclared_reference`), `step_id`, `referenced_step`; not a scheduler mutation or AI call |
+| `memory.activity_compaction.outcome` | Non-empty digest usability after provider completion | `request_id`, `outcome` (`usable`/`fallback`), `digest_bytes` |
+| `memory.record.summary_coverage` | Recorder summary coverage, not durable-write confirmation | `request_id`, `source` (`builtin`/`custom`/`heuristic`), `eligible`, `summarized`, `fallback`; `entity_fields.*` only for observed built-in batches |
 | `llm.activity_compaction.request` | Full activity compaction LLM call | `request_id`, `event_count`, `prompt_length` |
 | `llm.activity_compaction.response` | Compaction result | `request_id`, `response_length` |
 | `llm.activity_compaction.incremental_request` | Incremental digest update LLM call | `request_id`, `new_event_count`, `prompt_length` |
@@ -1883,6 +1906,16 @@ The orchestration module emits span events for every LLM interaction:
 ¹ `model` attribute is only present when a model override is configured (via `With*Model()` or `TRUVAG3_*_MODEL` env var).
 ² `path` values: `full` (cache miss), `cached` (hit, 0 new events), `incremental` (hit, few new events), `full_recompact` (hit, burst of new events).
 ³ `step_id` is only present when emitted from the record hook (one event per step). The enrichment hook emits one event per request without `step_id` because enrichment runs once per request.
+
+### Dependency-Only Termination
+
+Dependency-only fixed-point termination uses the existing
+`orchestrator.forced_terminal` event with `request_id` first,
+`reason=repeated_failed_dependencies`, `phase_number`, and the causal
+`failed_dependencies` IDs. It marks the owning request span failed with a
+bounded description. IDs are trace attributes, not metric labels. The exact
+skipped-step reasons and planned inputs remain in the execution record;
+Registry Viewer reads those records rather than reconstructing them from traces.
 
 ### Background-Job Spans
 
@@ -2022,6 +2055,18 @@ For **result trimming scenarios**, where large step results are reduced before s
 ```
 
 For **shared memory scenarios**, you'll see pipeline hooks and LLM compaction as dedicated child spans:
+
+Historical-view budgeting emits `memory.enrichment.view_bounded` with
+`request_id`, `view_version` (`event-detail/v1`), `event_format` (`named|tuple`),
+`budget_bytes`, `context_bytes` and a bounded
+`outcome=empty|complete|partial|budget_too_small`. Each nonempty section emits
+`memory.enrichment.section_bounded` with `request_id`, closed `section` kind
+(domain/entity/investigation/knowledge), and admitted/omitted/shortened/duplicate
+counts. These events contain no event text or IDs. The existing structured hook
+effect includes the same view report. `memory.enrichment.injected` retains
+byte-valued `context_chars` for compatibility and adds explicit `context_bytes`,
+`budget_bytes` and `view_outcome`. A complete view is not proof of complete
+backend history or backend health.
 
 ```
 ▼ pipeline.hook.before_planning.memory-enrichment (2836ms)
@@ -2509,7 +2554,7 @@ When properly configured, the AI module emits these spans:
 | `ai.invoke_model` | Direct Bedrock model invocation; a child of `ai.get_embeddings` for Titan embeddings | `ai.provider`, `ai.surface`, request/response lengths, bounded error classification; the embedding child carries only the bounded Titan V1/V2 semantic family, and raw SDK model/profile IDs are omitted |
 | `ai.request.prepared` (event) | Single metadata-only evidence event for the effective orchestration request, including the no-report/provider-failure path | `request_id` first, purpose, requested/resolved model, report presence, adjustment count, policy stability, optional provider/surface/operation, and stable policy fingerprint. Prompt/system bodies, provider patches, credentials, and adjustment details are excluded |
 | `ai.request.rejected` (event) | AI dispatch rejected before a provider call | `request_id` first, purpose, and bounded rejection reason such as `prompt_assembly`; prompt bodies and raw error text are excluded |
-| `ai.http_attempt` | Each HTTP attempt (including retries) | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, `http.status_code` |
+| `ai.http_attempt` | Each wire attempt; decode-aware adapters include response consumption | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, real `http.status_code`; decode-aware failures add `ai.semantic_status_code`, `ai.retryable`, `ai.error_type`. Available usage is `ai.attempt_usage_available` and `ai.attempt_{prompt,completion,total}_tokens`, not additional logical token counters |
 
 Every operation span that returns an error is marked failed, including both an
 outer embedding span and its invocation child when the invocation fails. This
@@ -2534,7 +2579,11 @@ bytes may be recorded as `ai.response.model`, and an `X-Generation-Id` matching
 `ai.provider_request_id`. Invalid values are omitted.
 
 Within traces, those attributes exist only on the OpenRouter provider-local
-span. The same validated values may appear as `response_model` and
+span, with the same validated generation ID additionally on each owned
+`ai.http_attempt` so retry responses remain attributable. Response model remains
+on the provider span. HTTP 200 with a decoded provider failure is
+`ai.attempt_status=decoded_error`, not HTTP failure or successful generation.
+The same validated values may appear as `response_model` and
 `provider_request_id` in structured successful-response logs. Framework code
 does not add them to baggage or metric labels, the reference Loki configuration
 does not promote them to stream labels, and deployments must preserve that
@@ -2714,3 +2763,17 @@ Distributed tracing transforms debugging from guesswork into science. Here's wha
 - [Examples](https://github.com/truvaagents/truva-g3/tree/main/examples) - Working code samples
 
 Happy tracing!
+
+### Terminal evidence correlation and summary deadline outcomes
+
+Existing terminal execution results now expose the owning segment's
+`execution_request_id` metadata on both returned and stored results. Application
+failure projections bind it with `orchestration.WithRequestID` after orchestration
+returns; missing historical identities stay unknown. Resume identity is the current
+segment, not its parent. This adds no metric label or competing terminal publisher.
+
+Builtin event summarization reports `summary_timeout`, `parent_cancelled`, or
+`llm_unavailable` using the existing error counter, failed interaction and
+`memory.event_summarization.outcome` event. Debug recording and any attributable
+usage stay on the correlated parent span. Successful responses are parsed even at
+the deadline; invocation-error content is not accepted as summary evidence.

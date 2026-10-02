@@ -1,5 +1,13 @@
 # Pipeline Hooks Guide
 
+Managed-request activity announcements register pending renewal and cleanup
+effects before returning. The request owner renews the latest signal and joins
+renewal before all-exit cleanup, rather than relying on successful synthesis.
+Effect counters describe submissions/errors, not backend health. Execution
+records carry a separate optional `lifecycle` and monotonic `record_revision`;
+late effect updates merge into the newest full snapshot. Legacy records without
+lifecycle evidence have unknown request completion, regardless of step success.
+
 The extension points that let you inject context, short-circuit work, and post-process responses at every stage of the orchestration pipeline — without forking the framework.
 
 > **Working Example**
@@ -342,6 +350,20 @@ The first three are defined at `core/interfaces.go:258-262`; `EnrichmentUserProf
 > Enrichments are set once, before the first planning call, and stored in `ctx`. When the orchestrator runs continuation phases (Phase 2+), the continuation-prompt builder re-reads `GetPipelineEnrichments(ctx)` and re-emits the same sections (`orchestrator.go:5500-5535`). You inject once; every phase sees it.
 
 ### 5.4 Auto-promotion: the zero-hook path
+
+Skills activation/resource selectors also consume the four known string
+enrichments through `buildSkillSelectorContext`. Each value is cut to its first
+1,000 UTF-8-safe bytes (plus `...` when truncated). Put scope and historical-origin
+warnings first; verify this view separately from the full planner prompt.
+Built-in memory detail puts its `event-detail/v1` tuple legend, when selected,
+immediately after the scope notice, before any event record. Sparse histories
+retain named fields when they would not repay the legend's cost. Both the notice
+and any legend are included in the view's byte
+budget and fit within this selector prefix when memory is the sole RAG source.
+Other hooks' preceding RAG text retains its existing order and can consume that
+prefix; this change does not reprioritize another hook's contribution.
+Memory enrichment is a request-start snapshot reused across phases, so current
+execution progress belongs in phase-updated step results rather than this text.
 
 Before any hook runs, the orchestrator calls `prepareKnownEnrichments` (`orchestration/pipeline_hooks.go:40-70`). It copies `conversation_history` and `rag_context` straight out of `Metadata` into `Enrichments`, and runs conversation turns through the configured `ConversationHistoryPreparer`. The practical consequence:
 
@@ -836,13 +858,16 @@ The factory assigns the slice to the orchestrator and runs the optional-setter i
 
 ### 8.2 The builder path (memory)
 
-You rarely assemble memory hooks by hand. The `BuildMemoryHooks` builder returns a ready-ordered `[]core.PipelineHook` (announcement → enrichment → record → knowledge-extraction → cleanup) plus an `ActivityCoordinator`, gated on which backends you configured:
+You rarely assemble memory hooks by hand. The `BuildMemoryHooks` builder returns a ready-ordered `[]core.PipelineHook` (announcement → enrichment → record → knowledge-extraction → cleanup) plus an `ActivityCoordinator` and construction error, gated on which backends you configured:
 
 ```go
 // examples/qa-agent/main.go
-memHooks, activityCoord := orchestration.BuildMemoryHooks(
+memHooks, activityCoord, err := orchestration.BuildMemoryHooks(
     memBackends.ToDeps(), agent.AI, agent.Logger,
 )
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 // …then later…
 deps.PipelineHooks = memHooks
 deps.ActivityCoordinator = activityCoord
@@ -952,6 +977,14 @@ write was durably committed. Correlate an unexpected result with memory logs
 when the provider contract cannot expose a stronger acknowledgement. Exact
 injected context appears only in the automatically captured enrichment effect;
 the hook-specific effect retains retrieval metadata without duplicating it.
+
+The recording effect also carries `summary_coverage`. Its optional built-in
+`batch.entity_fields` counts describe retained summaries after duplicate handling:
+`observed`, `missing`, `empty`, `valid`, `invalid`, `mixed`, `accepted_entities`
+and `rejected_entities`. These do not redefine invocation status, legacy batch
+outcome, entity grounding or backend success. Custom/heuristic paths omit the
+built-in batch observation. Exact entity identities remain in existing effect
+payloads; the corresponding trace events contain counts rather than identities.
 
 Effects use `json.RawMessage` so their producer owns a versioned structured
 schema without widening the hook interfaces. The execution-debug boundary is
@@ -1137,3 +1170,12 @@ confirm its span shows up in a trace, and build out from there. Happy hooking!
 - [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md) — each hook gets its own span (e.g. `pipeline.hook.before_planning.rag-retriever`)
 - [Dev Tools Guide](../operations/DEV_TOOLS_GUIDE.md) — Pre-Execution / Post-Execution tabs in the execution DAG viewer
 - [API Reference](../reference/API_REFERENCE.md) — `OrchestratorDependencies`, `CreateOrchestrator`, and the `PromptBuilder` contract
+
+### Event-summary timeout ownership
+
+The builtin memory recorder still completes `AfterExecution` before synthesis.
+Only its builtin summarizer AI invocation is bounded (2m default,
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` through `BuildMemoryHooks`).
+The child timeout uses the existing heuristic fallback; parent cancellation emits
+a failed hook effect and stops writes. Cleanup remains request-lifecycle-owned;
+no detached background recording or additional model retry is introduced.

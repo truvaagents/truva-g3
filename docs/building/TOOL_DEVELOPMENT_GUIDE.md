@@ -2416,12 +2416,19 @@ type ToolError struct {
     Code      string        `json:"code"`      // Error code (e.g., "INVALID_REQUEST", "API_ERROR")
     Message   string        `json:"message"`   // Human-readable message
     Category  ErrorCategory `json:"category"`  // Classification for orchestrator routing
-    Retryable bool          `json:"retryable"` // Whether client should retry
+    Retryable bool          `json:"retryable"` // Permission to retry with corrected input
     Details   map[string]string `json:"details,omitempty"` // Additional context (e.g., "retry_after", "hint")
 }
 ```
 
 **Note:** Some tools (like stock-market-tool) return raw JSON responses without the `core.ToolResponse` wrapper. Both patterns work, but using `core.ToolResponse` provides more consistency for error handling.
+
+`Retryable:false` forbids executor-local semantic correction. The field has no
+`omitempty`: leaving it unset in Go still emits an explicit refusal. Set true
+only for errors where a corrected request is safe, with useful bounded hints.
+The executor retains separate transient HTTP retry handling and never resends a
+non-transient 4xx unchanged. Later planner recovery is possible but not guaranteed
+when iterative planning is disabled or its budget is exhausted.
 
 **Error response helpers:** Every tool should define two error helpers — `sendError` for local validation errors and `sendUpstreamError` for upstream API failures. See [Step 4: Implement Handlers](#6-step-4-implement-handlers) for the implementation pattern and [Best Practices: Error Handling](#error-handling) for when to use which.
 

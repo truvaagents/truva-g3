@@ -1173,7 +1173,11 @@ Activation, resource-selection, and authoring-advisor calls deliberately leave
 the provider-native response-format option unset because values such as
 `json`, `json_object`, and schema forms are not portable across providers. Their
 portable structured-output contract is instead the fixed JSON prompt, strict
-decoding and reference validation, and one bounded correction retry. Developer
+decoding and reference validation, and a two-attempt ceiling. Activation and
+authoring retry malformed answers only. Resource selector v2 additionally accepts
+a complete outer JSON/unlabelled fence and retries a configured child-attempt
+timeout; parent cancellation remains terminal. Optional omission is diagnosed.
+Literal JSON string contents are preserved. Developer
 AI-option overrides for these calls therefore permit only model and reasoning
 effort; applications that require a provider-native response protocol supply a
 custom resolver or advisor.

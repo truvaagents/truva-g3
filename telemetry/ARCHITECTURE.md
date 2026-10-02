@@ -1,6 +1,6 @@
 # TruvaG3 Telemetry Module Architecture
 
-**Version**: 1.11
+**Version**: 1.12
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
 **Purpose**: Production-grade observability with OpenTelemetry integration
 **Audience**: Framework developers, application developers, operations teams
@@ -53,7 +53,7 @@
 │  │  (Singleton)│    │              │    │ (OTLP/HTTP)  │ │
 │  └─────────────┘    └──────────────┘    └──────────────┘ │
 │         │                                                   │
-│         │ Global access via atomic.Value                   │
+│         │ Global access via atomic.Pointer                 │
 └─────────────────────────────────────────────────────────────┘
                          │
                          │ Used by application code
@@ -341,12 +341,15 @@ The telemetry module provides an `LLMCallRecorder` interface and a Redis-backed 
 
 ### Why This Lives in Telemetry (Not Orchestration)
 
-Agents need to record LLM calls, but they **must not import the orchestration module** (agents are independent microservices, not orchestrators). The dependency graph requires:
+Agents need to record LLM calls without requiring the orchestration module merely
+for recording. Application agents may compose orchestration when they use its
+harness; framework modules still follow the module dependency graph:
 
 ```
 ai → core + telemetry     ✅  (ai.InstrumentedAIClient uses telemetry.LLMCallRecorder)
 agent → ai + telemetry    ✅  (agent creates RedisLLMCallRecorder)
-agent → orchestration     ❌  (would create coupling between agents and orchestrator)
+agent → orchestration     ✅  (optional application-level harness composition)
+telemetry → orchestration ❌  (recorder must remain independent of the harness)
 ```
 
 By placing the recorder interface and Redis implementation in telemetry, agents can record LLM calls without knowing about orchestration internals.
@@ -547,7 +550,7 @@ logs without creating a metric series per conversation.
 ```go
 var (
     // Global registry singleton
-    globalRegistry atomic.Value  // Stores *Registry
+    globalRegistry atomic.Pointer[Registry]
 
     // Ensures single initialization
     initOnce sync.Once
@@ -575,8 +578,7 @@ func Initialize(config Config) error {
 func Counter(name string, labels ...string) {
     registry := globalRegistry.Load()  // Atomic read
     if registry != nil {
-        r := registry.(*Registry)
-        r.emitCounter(name, labels...)
+        registry.emit(name, 1, parseLabels(labels...))
     }
     // NoOp if not initialized - safe fallback
 }
@@ -585,9 +587,15 @@ func Counter(name string, labels ...string) {
 ### Thread Safety Guarantees
 
 1. **Initialization**: `sync.Once` ensures single initialization
-2. **Global Access**: `atomic.Value` provides lock-free reads
+2. **Global Access**: `atomic.Pointer[Registry]` provides lock-free reads and permits a real nil after successful shutdown
 3. **Concurrent Emission**: All emission operations are thread-safe
-4. **Shutdown**: Coordinated via context and internal synchronization
+4. **Shutdown**: Public teardown is serialized, including core unregistration;
+   exporter flushing uses the supplied context. Repeated successful shutdown is
+   a no-op. Callers waiting behind an active shutdown wait for that teardown.
+   Startup must finish before shutdown; initialization remains once per process,
+   and shutdown does not enable reinitialization. Existing exporter-error return
+   behavior remains unchanged: a failed shutdown does not clear the registry.
+   This contract does not add synchronization to Core's separate metrics bridge.
 
 ### Performance Characteristics
 
@@ -1696,6 +1704,7 @@ skills does not add a telemetry initialization requirement.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.12 | 2026-09-29 | Fix nil registry clearing with a typed atomic pointer; serialize public shutdown and verify post-shutdown no-ops without changing initialization or exporter-error behavior |
 | 1.11 | 2026-09-08 | Removed recorder numbered-DB options and deprecation-only resolution notices; owning construction uses Core's canonical DB-0 factory while injected-client lifetime and request diagnostics remain unchanged |
 | 1.10 | 2026-09-08 | Enforced injected-recorder startup deadlines independently of client context-timeout settings without changing borrowed-client options or ownership |
 | 1.9 | 2026-09-04 | Scoped Redis-recorder logs to `framework/telemetry` and made retry diagnostics request-aware, fixed-text, and explicitly classified |

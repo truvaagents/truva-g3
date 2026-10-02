@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -20,7 +21,8 @@ import (
 //	    memory.WithDomain("infrastructure"),
 //	)
 //	defer backends.Close()
-//	hooks, coord := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger)
+//	hooks, coord, err := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger)
+//	if err != nil { return err }
 type SharedBackends struct {
 	deps    core.SharedMemoryDeps
 	closers []func() // shutdown functions for graceful cleanup
@@ -161,6 +163,10 @@ func NewSharedBackends(redisClient redis.UniversalClient, logger core.Logger, op
 	if environmentKeyspaceErr != nil && !cfg.keyspaceExplicit {
 		return nil, fmt.Errorf("invalid Redis deployment namespace: %w", environmentKeyspaceErr)
 	}
+	episodicOptions, coordinatorOptions, err := sharedBackendNumericOptions()
+	if err != nil {
+		return nil, err
+	}
 
 	// All deterministic configuration has been resolved. Only now perform the
 	// single bounded connectivity check against the application-owned client.
@@ -173,24 +179,26 @@ func NewSharedBackends(redisClient redis.UniversalClient, logger core.Logger, op
 	// --- Phase 1: Episodic Memory + Coordination (Redis) ---
 
 	// Episodic memory is the minimum requirement — fail-fast if it fails
-	episodic, err := NewStreamEpisodicMemory(
+	episodicOptions = append(episodicOptions,
 		WithEpisodicRedisClient(redisClient),
 		WithEpisodicDomain(cfg.domain),
 		WithEpisodicKeyspace(cfg.keyspace),
 		WithEpisodicLogger(logger),
 	)
+	episodic, err := NewStreamEpisodicMemory(episodicOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create episodic memory: %w", err)
 	}
 	sb.deps.Episodic = episodic
 
 	// Coordinator — optional, degrade gracefully
-	coordinator, err := NewAtomicLockCoordinator(
+	coordinatorOptions = append(coordinatorOptions,
 		WithCoordinatorRedisClient(redisClient),
 		WithCoordinatorDomain(cfg.domain),
 		WithCoordinatorKeyspace(cfg.keyspace),
 		WithCoordinatorLogger(logger),
 	)
+	coordinator, err := NewAtomicLockCoordinator(coordinatorOptions...)
 	if err != nil {
 		if logger != nil {
 			logger.Warn("Investigation coordinator unavailable, dedup disabled", map[string]interface{}{
@@ -301,6 +309,30 @@ func NewSharedBackends(redisClient redis.UniversalClient, logger core.Logger, op
 	}
 
 	return sb, nil
+}
+
+// Layer 1 owns environment resolution. Layer 2 constructors remain environment
+// free; absent values retain their defaults. Validate before any startup I/O.
+func sharedBackendNumericOptions() ([]EpisodicMemoryOption, []InvestigationCoordinatorOption, error) {
+	var episodic []EpisodicMemoryOption
+	var coordinator []InvestigationCoordinatorOption
+	const streamKey = "TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN"
+	if value, present := os.LookupEnv(streamKey); present {
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n <= 0 {
+			return nil, nil, fmt.Errorf("%w: %s must be a positive int64", core.ErrInvalidConfiguration, streamKey)
+		}
+		episodic = append(episodic, WithEpisodicStreamMaxLen(n))
+	}
+	const ttlKey = "TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL"
+	if value, present := os.LookupEnv(ttlKey); present {
+		d, err := time.ParseDuration(value)
+		if err != nil || d <= 0 {
+			return nil, nil, fmt.Errorf("%w: %s must be a positive Go duration", core.ErrInvalidConfiguration, ttlKey)
+		}
+		coordinator = append(coordinator, WithInvestigationTTL(d))
+	}
+	return episodic, coordinator, nil
 }
 
 // ToDeps returns a copy of the SharedMemoryDeps struct for passing to orchestration.BuildMemoryHooks.

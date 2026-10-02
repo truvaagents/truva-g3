@@ -66,6 +66,22 @@ acceptable. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This is a Go workspace (`go.work`); the framework requires **Go 1.27+**.
 
+## Post-implementation architecture and guide review
+
+After implementation, vet the **actual changed code**, not just the design or
+implementation plan, against `FRAMEWORK_DESIGN_PRINCIPLES.md`, the affected
+modules' `ARCHITECTURE.md` files, and the applicable framework guides. Include
+the distributed tracing and logging guides, plus prompting, agent/tool/skills,
+configuration and limits guides wherever the change touches those contracts.
+
+Perform this review before live deployment/testing and before declaring the
+work complete. Record the documents/sections checked, code locations reviewed,
+findings and resolutions in the active implementation record. Resolve violations
+or explicitly report outstanding gates; do not equate plan vetting, passing CI,
+or a successful live run with code-to-architecture conformance. This applies to
+framework changes and examples using framework APIs, without changing their
+respective testing requirements.
+
 ## Conventions
 
 - **Container runtime: Docker or Podman.** `setup.sh` auto-detects the engine

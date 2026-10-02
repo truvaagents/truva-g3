@@ -3,7 +3,6 @@ package orchestration
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -85,6 +84,9 @@ func WithMemoryImportanceFunc(fn func(actionType, outcome string) float64) Build
 // WithMemoryRetrievalWeights overrides the default knowledge search scoring weights.
 func WithMemoryRetrievalWeights(w core.RetrievalWeights) BuildMemoryHooksOption {
 	return func(c *memoryHookConfig) error {
+		if err := validateMemoryRetrievalWeights(w); err != nil {
+			return err
+		}
 		c.retrievalWeights = w
 		return nil
 	}
@@ -112,16 +114,15 @@ func WithMemoryActivityFilter(f ActivityFilter) BuildMemoryHooksOption {
 // BuildMemoryHooks creates the standard memory pipeline hooks from backends.
 // Reads TRUVAG3_SHARED_MEMORY_* env vars for numeric tuning.
 // Accepts options for behavioural overrides (entity extractor, importance scorer, etc.).
-// Returns hooks in the correct order + the activity coordinator for status updates.
+// Returns hooks in order, the activity coordinator, and any construction error.
+// Explicit invalid settings/options fail even when dependencies are absent.
+// With valid configuration, absent episodic memory returns a successful no-op.
 //
 // This is a convenience function — equivalent to manually constructing each hook.
 // For full control over every option, construct hooks individually (Layer 3).
 //
 // Hook ordering: announcement → enrichment → record → extraction → cleanup
-func BuildMemoryHooks(sm *core.SharedMemoryDeps, aiClient core.AIClient, logger core.Logger, opts ...BuildMemoryHooksOption) ([]core.PipelineHook, core.ActivityCoordinator) {
-	if sm == nil || sm.Episodic == nil {
-		return nil, nil
-	}
+func BuildMemoryHooks(sm *core.SharedMemoryDeps, aiClient core.AIClient, logger core.Logger, opts ...BuildMemoryHooksOption) ([]core.PipelineHook, core.ActivityCoordinator, error) {
 	if logger == nil {
 		logger = &core.NoOpLogger{}
 	}
@@ -161,13 +162,17 @@ func BuildMemoryHooks(sm *core.SharedMemoryDeps, aiClient core.AIClient, logger 
 	for _, opt := range opts {
 		if opt != nil {
 			if err := opt(cfg); err != nil {
-				logger.Warn("Invalid BuildMemoryHooks option, using default", map[string]interface{}{
-					"operation":  "build_memory_hooks",
-					"error":      err.Error(),
-					"error_type": "invalid_option",
-				})
+				return nil, nil, fmt.Errorf("configure memory hooks: %w", err)
 			}
 		}
+	}
+
+	tuning, err := resolveMemoryHookTuning()
+	if err != nil {
+		return nil, nil, err
+	}
+	if sm == nil || sm.Episodic == nil {
+		return nil, nil, nil
 	}
 
 	domain := sm.AgentDomain
@@ -178,24 +183,23 @@ func BuildMemoryHooks(sm *core.SharedMemoryDeps, aiClient core.AIClient, logger 
 		}
 	}
 
-	// Build hooks — these should not fail given valid Episodic (checked above),
-	// but guard against nil to prevent panics if an option fails internally.
-	enrichOpts := buildEnrichmentOptions(logger, aiClient, sm, cfg)
+	// Publish the bundle only when every selected hook is constructed.
+	enrichOpts, err := buildEnrichmentOptions(logger, aiClient, sm, cfg, tuning)
+	if err != nil {
+		return nil, nil, err
+	}
 	enrichHook, err := NewMemoryEnrichmentHook(sm.Episodic, sm.Coordinator, sm.AgentName, domain, enrichOpts...)
 	if err != nil {
-		logger.Warn("Failed to create memory enrichment hook", map[string]interface{}{
-			"operation": "build_memory_hooks", "error": err.Error(), "error_type": "enrichment_hook_init",
-		})
-		return nil, nil
+		return nil, nil, fmt.Errorf("create memory enrichment hook: %w", err)
 	}
 
-	recordOpts := buildRecordOptions(logger, aiClient, cfg)
+	recordOpts, err := buildRecordOptions(logger, aiClient, cfg, tuning)
+	if err != nil {
+		return nil, nil, err
+	}
 	recordHook, err := NewMemoryRecordHook(sm.Episodic, sm.Coordinator, sm.AgentName, domain, recordOpts...)
 	if err != nil {
-		logger.Warn("Failed to create memory record hook", map[string]interface{}{
-			"operation": "build_memory_hooks", "error": err.Error(), "error_type": "record_hook_init",
-		})
-		return nil, nil
+		return nil, nil, fmt.Errorf("create memory record hook: %w", err)
 	}
 
 	// Assemble in correct order
@@ -203,14 +207,14 @@ func BuildMemoryHooks(sm *core.SharedMemoryDeps, aiClient core.AIClient, logger 
 
 	// 1. Activity announcement (BeforePlanning — runs first)
 	if sm.ActivityCoordinator != nil {
-		maxInPrompt := 10
-		announceOpts := buildAnnouncementOptions(logger, cfg, &maxInPrompt)
+		announceOpts := buildAnnouncementOptions(logger, cfg, tuning)
 		announceHook, err := NewActivityAnnouncementHook(
-			sm.ActivityCoordinator, sm.AgentName, domain, maxInPrompt, announceOpts...,
+			sm.ActivityCoordinator, sm.AgentName, domain, tuning.maxInPrompt, announceOpts...,
 		)
-		if err == nil && announceHook != nil {
-			hooks = append(hooks, announceHook)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create activity announcement hook: %w", err)
 		}
+		hooks = append(hooks, announceHook)
 	}
 
 	// 2. Memory enrichment (BeforePlanning)
@@ -223,146 +227,80 @@ func BuildMemoryHooks(sm *core.SharedMemoryDeps, aiClient core.AIClient, logger 
 			sm.Knowledge, sm.Embedder, aiClient, sm.AgentName, domain,
 			WithExtractionLogger(logger),
 		)
-		if err == nil && extractionHook != nil {
-			hooks = append(hooks, extractionHook)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create knowledge extraction hook: %w", err)
 		}
+		hooks = append(hooks, extractionHook)
 	}
 
 	// 5. Activity cleanup (AfterSynthesis — runs last)
 	if sm.ActivityCoordinator != nil {
 		cleanupHook, err := NewActivityCleanupHook(sm.ActivityCoordinator, logger)
-		if err == nil && cleanupHook != nil {
-			hooks = append(hooks, cleanupHook)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create activity cleanup hook: %w", err)
 		}
+		hooks = append(hooks, cleanupHook)
 	}
 
-	return hooks, sm.ActivityCoordinator
+	return hooks, sm.ActivityCoordinator, nil
 }
 
-// --- Internal helpers: env-var-driven numeric tuning + behavioural config passthrough ---
-
-// buildEnrichmentOptions creates MemoryEnrichmentOption slice from env vars + behavioural config.
-func buildEnrichmentOptions(logger core.Logger, aiClient core.AIClient, sm *core.SharedMemoryDeps, cfg *memoryHookConfig) []MemoryEnrichmentOption {
+// buildEnrichmentOptions preserves direct-hook defaults for absent settings.
+func buildEnrichmentOptions(logger core.Logger, aiClient core.AIClient, sm *core.SharedMemoryDeps, cfg *memoryHookConfig, tuning memoryHookTuning) ([]MemoryEnrichmentOption, error) {
 	opts := []MemoryEnrichmentOption{
 		WithEnrichmentLogger(logger),
 		WithEnrichmentEntityExtractor(cfg.enrichmentExtractor),
 		WithEnrichmentWeights(cfg.retrievalWeights),
 		WithEnrichmentLookback(cfg.lookbackWindow),
 	}
-
-	// Numeric tuning from env vars
-	if v := os.Getenv("TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			opts = append(opts, WithEnrichmentRecentEventsLimit(val))
-		}
-	}
-
-	// Activity compactor (LLM-powered digest)
+	opts = append(opts, tuning.enrichment...)
 	if aiClient != nil {
-		compactorOpts := []LLMActivityCompactorOption{
-			WithActivityCompactorLogger(logger),
-		}
+		compactorOpts := []LLMActivityCompactorOption{WithActivityCompactorLogger(logger)}
 		if model := os.Getenv("TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL"); model != "" {
 			compactorOpts = append(compactorOpts, WithActivityCompactorModel(model))
 		}
 		compactor, err := NewLLMActivityCompactor(aiClient, compactorOpts...)
-		if err == nil && compactor != nil {
-			opts = append(opts, WithActivityCompactor(compactor))
-
-			// Compaction tuning
-			if v := os.Getenv("TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS"); v != "" {
-				if val, err := strconv.Atoi(v); err == nil && val > 0 {
-					opts = append(opts, WithCompactionMaxTokens(val))
-				}
-			}
-			if v := os.Getenv("TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT"); v != "" {
-				if val, err := strconv.Atoi(v); err == nil && val > 0 {
-					opts = append(opts, WithCompactionRawLimit(val))
-				}
-			}
-			if v := os.Getenv("TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL"); v != "" {
-				if val, err := strconv.Atoi(v); err == nil && val >= 0 {
-					opts = append(opts, WithCompactionRecentDetail(val))
-				}
-			}
-
-			// Digest cache
-			if sm.DigestCache != nil {
-				opts = append(opts, WithDigestCache(sm.DigestCache))
-				if v := os.Getenv("TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL"); v != "" {
-					if val, err := time.ParseDuration(v); err == nil && val > 0 {
-						opts = append(opts, WithDigestCacheTTL(val))
-					}
-				}
-				if v := os.Getenv("TRUVAG3_SHARED_MEMORY_DIGEST_INCREMENTAL_THRESHOLD"); v != "" {
-					if val, err := strconv.Atoi(v); err == nil && val > 0 {
-						opts = append(opts, WithIncrementalThreshold(val))
-					}
-				}
-			}
+		if err != nil {
+			return nil, fmt.Errorf("create memory activity compactor: %w", err)
+		}
+		opts = append(opts, WithActivityCompactor(compactor))
+		if sm.DigestCache != nil {
+			opts = append(opts, WithDigestCache(sm.DigestCache))
 		}
 	}
-
-	// Phase 2: knowledge search
 	if sm.Knowledge != nil && sm.Embedder != nil {
 		opts = append(opts, WithEnrichmentKnowledge(sm.Knowledge, sm.Embedder))
 	}
-
-	return opts
+	return opts, nil
 }
 
-// buildRecordOptions creates MemoryRecordOption slice from env vars + behavioural config.
-func buildRecordOptions(logger core.Logger, aiClient core.AIClient, cfg *memoryHookConfig) []MemoryRecordOption {
+func buildRecordOptions(logger core.Logger, aiClient core.AIClient, cfg *memoryHookConfig, tuning memoryHookTuning) ([]MemoryRecordOption, error) {
 	opts := []MemoryRecordOption{
 		WithRecordLogger(logger),
 		WithRecordEntityExtractor(cfg.recordExtractor),
 		WithRecordImportanceFunc(cfg.importanceFunc),
 	}
-
-	// Event summarizer (LLM-powered)
 	if aiClient != nil {
-		summarizerOpts := []LLMEventSummarizerOption{
-			WithSummarizerLogger(logger),
-		}
+		summarizerOpts := []LLMEventSummarizerOption{WithSummarizerLogger(logger)}
+		summarizerOpts = append(summarizerOpts, tuning.summarizer...)
 		if model := os.Getenv("TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL"); model != "" {
 			summarizerOpts = append(summarizerOpts, WithSummarizerModel(model))
 		}
 		summarizer, err := NewLLMEventSummarizer(aiClient, summarizerOpts...)
-		if err == nil {
-			opts = append(opts, WithEventSummarizer(summarizer))
+		if err != nil {
+			return nil, fmt.Errorf("create memory event summarizer: %w", err)
 		}
+		opts = append(opts, WithEventSummarizer(summarizer))
 	}
-
-	return opts
+	return opts, nil
 }
 
-// buildAnnouncementOptions creates ActivityAnnouncementOption slice from env vars + behavioural config.
-// Also sets *maxInPrompt from env var if present.
-func buildAnnouncementOptions(logger core.Logger, cfg *memoryHookConfig, maxInPrompt *int) []ActivityAnnouncementOption {
-	opts := []ActivityAnnouncementOption{
-		WithAnnouncementLogger(logger),
-	}
-
-	if v := os.Getenv("TRUVAG3_ACTIVITY_SIGNAL_TTL"); v != "" {
-		if val, err := time.ParseDuration(v); err == nil && val > 0 {
-			opts = append(opts, WithAnnouncementSignalTTL(val))
-		}
-	}
-	if v := os.Getenv("TRUVAG3_ACTIVITY_SIGNAL_QUERY_MAX_LEN"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			opts = append(opts, WithAnnouncementQueryMaxLen(val))
-		}
-	}
-	if v := os.Getenv("TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil && val > 0 {
-			*maxInPrompt = val
-		}
-	}
-
+func buildAnnouncementOptions(logger core.Logger, cfg *memoryHookConfig, tuning memoryHookTuning) []ActivityAnnouncementOption {
+	opts := []ActivityAnnouncementOption{WithAnnouncementLogger(logger)}
+	opts = append(opts, tuning.announcement...)
 	if cfg.activityFilter != nil {
 		opts = append(opts, WithAnnouncementFilter(cfg.activityFilter))
 	}
-
 	return opts
 }
 

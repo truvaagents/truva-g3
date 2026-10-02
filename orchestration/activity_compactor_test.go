@@ -160,8 +160,8 @@ func TestCompactEvents_LLMEmptyResponse(t *testing.T) {
 	}
 
 	result, err := c.CompactEvents(context.Background(), events, 500)
-	require.NoError(t, err)
-	assert.Empty(t, result, "whitespace-only response should be trimmed to empty")
+	require.ErrorContains(t, err, "empty digest")
+	assert.Empty(t, result, "whitespace-only response is unusable and falls back")
 }
 
 func TestCompactEvents_PromptContainsEvents(t *testing.T) {
@@ -465,7 +465,7 @@ func TestMemoryEnrichmentHook_WithActivityCompactor(t *testing.T) {
 	assert.True(t, ok)
 	// Should contain both the digest AND recent raw events
 	assert.Contains(t, ragCtx, "Compacted: 3 events summarized", "should have compacted digest")
-	assert.Contains(t, ragCtx, "Most recent events (detail):", "should have recent raw events")
+	assert.Contains(t, ragCtx, "Historical domain events (detail):", "should have recent raw events")
 	assert.Contains(t, ragCtx, "DEVOPS-99", "recent raw events should preserve identifiers")
 }
 
@@ -499,7 +499,7 @@ func TestMemoryEnrichmentHook_CompactorFailsFallsBackToRaw(t *testing.T) {
 	// Should fall back to raw events
 	ragCtx, ok := pctx.Enrichments[core.EnrichmentRAGContext].(string)
 	assert.True(t, ok)
-	assert.Contains(t, ragCtx, "Recent activity in this domain:")
+	assert.Contains(t, ragCtx, "Historical domain events:")
 }
 
 func TestMemoryEnrichmentHook_NilCompactorUsesRaw(t *testing.T) {
@@ -523,7 +523,7 @@ func TestMemoryEnrichmentHook_NilCompactorUsesRaw(t *testing.T) {
 
 	ragCtx, ok := pctx.Enrichments[core.EnrichmentRAGContext].(string)
 	assert.True(t, ok)
-	assert.Contains(t, ragCtx, "Recent activity in this domain:")
+	assert.Contains(t, ragCtx, "Historical domain events:")
 }
 
 func TestMemoryEnrichmentHook_CompactorQueryLimit(t *testing.T) {

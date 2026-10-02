@@ -2,6 +2,7 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
@@ -26,10 +27,11 @@ type RoutingStep struct {
 	// ImplicitDeps names step IDs from PRIOR phases that this step references
 	// via {{step-X.response.data.field}} templates. depends_on is reserved for
 	// same-phase dependencies (the executor's scheduler), so cross-phase refs
-	// need a separate declaration channel. The field is advisory: the scheduler
-	// does not use it (prior-phase steps are already complete), and existence
-	// validation is performed against actual completed-step results, not this
-	// list.
+	// need a separate declaration channel. Entries must match prior-phase
+	// parameter references, not merely earlier steps that informed planning.
+	// The scheduler does not use this list to order steps; the executor does
+	// propagate failed dependencies through it. Existence validation uses
+	// actual completed-step results, not this list.
 	ImplicitDeps []string               `json:"implicit_deps,omitempty"`
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 }
@@ -183,10 +185,11 @@ type ExecutionResult struct {
 // Used to transport phase context through ExecutionResult.Metadata
 // into StoredExecution without changing storeExecutionAsync's signature.
 const (
-	MetadataKeyPhasePlans        = "phase_plans"              // []*RoutingPlan
-	MetadataKeyPhaseCount        = "phase_count"              // int
-	MetadataKeyForcedTerminal    = "forced_terminal"          // bool
-	MetadataKeyPlanRegenerations = "plan_regeneration_events" // []map[string]interface{}
+	MetadataKeyPhasePlans         = "phase_plans"              // []*RoutingPlan
+	MetadataKeyPhaseCount         = "phase_count"              // int
+	MetadataKeyForcedTerminal     = "forced_terminal"          // bool
+	MetadataKeyPlanRegenerations  = "plan_regeneration_events" // []map[string]interface{}
+	MetadataKeyExecutionRequestID = "execution_request_id"     // owning request/segment ID on terminal execution results
 )
 
 // Phase context keys for context-aware tiered re-selection (Issue 7).
@@ -217,12 +220,19 @@ type StepResult struct {
 	Error       string                 `json:"error,omitempty"`
 	Duration    time.Duration          `json:"duration"`
 	Attempts    int                    `json:"attempts"`
-	StartTime   time.Time              `json:"start_time"`
-	EndTime     time.Time              `json:"end_time"`
+	// DispatchCount includes corrected-input attempts; Attempts retains its
+	// historical retry-budget meaning for existing consumers.
+	DispatchCount int            `json:"dispatch_count"`
+	Dispatches    []StepDispatch `json:"dispatches,omitempty"`
+	// ToolError preserves the structured component error, including whether
+	// retryable was omitted, without interpreting domain-owned details.
+	ToolError json.RawMessage `json:"tool_error,omitempty"`
+	StartTime time.Time       `json:"start_time"`
+	EndTime   time.Time       `json:"end_time"`
 	// Metadata holds optional step-level data (e.g., HITL checkpoint info, resolution metadata)
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
-	// Skipped indicates the step was skipped by post-orchestrator plan refinement.
-	// When true, the orchestrator step already performed the equivalent action internally.
+	// Skipped indicates that this step was not dispatched. Success distinguishes
+	// satisfied work omitted by refinement from an unsuccessful dependency skip.
 	Skipped    bool   `json:"skipped,omitempty"`
 	SkipReason string `json:"skip_reason,omitempty"`
 	// RetryExhausted is true when the retry loop exited because the step's
@@ -235,6 +245,17 @@ type StepResult struct {
 	// summarizeUpstreamFailurePattern to decide whether an upstream failure
 	// looks persistent vs transient.
 	RetryExhausted bool `json:"retry_exhausted,omitempty"`
+}
+
+// StepDispatch is an immutable record of one actual component invocation.
+// Like step responses, these application payloads follow the configured store's
+// access and retention policy; no inferred sanitization is applied here.
+type StepDispatch struct {
+	Number     int                    `json:"number"`
+	Parameters map[string]interface{} `json:"parameters"`
+	Response   string                 `json:"response"`
+	Error      string                 `json:"error,omitempty"`
+	Success    bool                   `json:"success"`
 }
 
 // ResolutionMetadata captures which layer resolved each parameter.
@@ -422,6 +443,7 @@ type ServiceCapabilityConfig struct {
 
 // OrchestratorConfig configures the orchestrator
 type OrchestratorConfig struct {
+	FailedOperationView FailedOperationViewConfig `json:"failed_operation_view,omitempty"`
 	// Name identifies this orchestrator agent for debugging and DAG visualization.
 	// Examples: "travel-agent", "support-bot", "order-processor"
 	// Default: Falls back to RequestIDPrefix if set, otherwise "orchestrator"
@@ -713,6 +735,9 @@ type OrchestratorConfig struct {
 	// Code overrides use WithExecutionStoreWriteTimeout; deployment overrides use
 	// TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT.
 	executionStoreWriteTimeout time.Duration
+	// executionCleanupTimeout bounds request-owned optional resource cleanup.
+	executionCleanupTimeout    time.Duration
+	executionCleanupTimeoutSet bool
 }
 
 // SemanticRetryConfig configures Layer 4 contextual re-resolution
@@ -772,12 +797,17 @@ type IterativePlanConfig struct {
 	// MaxValidationRounds bounds how many times the phase loop will regenerate a
 	// plan that fails validation before failing the phase. Prevents an infinite
 	// regenerate↔reject loop. SEMANTICS: this is the number of REGENERATION attempts
-	// AFTER the first validation failure — total validations = 1 (initial) + N. With
-	// the default 4, the initial plan plus up to 4 regenerated plans are validated
-	// (5 validations, 4 regenerations) before the phase fails.
+	// AFTER the first validation failure. Malformed regenerated JSON consumes one
+	// attempt from this same budget; only parsed candidates run the validators.
+	// With the default 4, at most 5 validations and 4 regenerations run before the
+	// phase fails. Provider, boundary, and cancellation errors still stop immediately.
 	// Default: 4
 	// Env: TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS
 	MaxValidationRounds int `json:"max_validation_rounds"`
+
+	// RegenerationFeedbackMaxBytes bounds the encoded correction context added
+	// to one selected phase prompt. Env: TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES.
+	RegenerationFeedbackMaxBytes int `json:"regeneration_feedback_max_bytes"`
 }
 
 // TieredCapabilityConfig configures tiered capability resolution for token optimization.

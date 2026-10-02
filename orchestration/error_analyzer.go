@@ -3,8 +3,9 @@
 // # LLM-First Error Analysis Design
 //
 // This file implements the ErrorAnalyzer which uses LLM to determine if an error
-// can be fixed with different parameters. This removes the burden from tool developers
-// to set Retryable flags - the LLM decides based on error context.
+// can be fixed with different parameters. The executor first enforces explicit
+// retry permission, approved inputs, and status-based dispatch boundaries.
+// Missing retry declarations retain bounded status-based compatibility handling.
 //
 // HTTP Status Code Routing:
 //   - 400, 404, 409, 422 → LLM Error Analyzer (might be fixable with different input)
@@ -29,7 +30,7 @@ import (
 )
 
 // ErrorAnalyzer uses LLM to determine if an error is fixable with different parameters.
-// This removes the burden from tool developers to set Retryable flags.
+// Suggestions do not override tool retry policy or authorize another dispatch.
 type ErrorAnalyzer struct {
 	aiClient          core.AIClient
 	logger            core.Logger

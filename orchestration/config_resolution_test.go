@@ -37,6 +37,33 @@ func TestNewDefaultOrchestratorConfig_IsPureAndIndependent(t *testing.T) {
 	}
 }
 
+func TestRegenerationFeedbackBudgetConfigAndIdentity(t *testing.T) {
+	const key = "TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES"
+	resolved, err := ResolveOrchestratorConfig(ConfigResolution{
+		Environment: EnvironmentStrict,
+		LookupEnv:   lookupFromMap(map[string]string{key: "32768"}),
+	})
+	if err != nil || resolved.Config.IterativePlanning.RegenerationFeedbackMaxBytes != 32768 {
+		t.Fatalf("resolved feedback budget = %v, %v", resolved, err)
+	}
+	baseline, err := ResolveOrchestratorConfigIdentity(NewDefaultOrchestratorConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := ResolveOrchestratorConfigIdentity(resolved.Config)
+	if err != nil || changed.Fingerprint == baseline.Fingerprint {
+		t.Fatalf("feedback budget absent from identity: %v", err)
+	}
+	_, err = ResolveOrchestratorConfig(ConfigResolution{
+		Environment: EnvironmentStrict,
+		LookupEnv:   lookupFromMap(map[string]string{key: "0"}),
+	})
+	var envErr *ConfigEnvironmentError
+	if !errors.As(err, &envErr) || envErr.Variable != key {
+		t.Fatalf("zero feedback budget error = %v", err)
+	}
+}
+
 func TestResolveOrchestratorConfig_LayerPrecedenceAndIndependence(t *testing.T) {
 	base := NewDefaultOrchestratorConfig()
 	base.PropagatedHeaders = map[string]string{"X-Test": "base"}

@@ -348,6 +348,7 @@ type executionRunState struct {
 	Debug                 executionDebugState
 	SkillState            *SkillExecutionState
 	Recorder              *executionRecorder
+	Resources             *executionResources
 	Span                  core.Span
 	completionLogged      bool
 	completionReason      string
@@ -478,21 +479,30 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 	}
 	defer state.Span.End()
 	defer o.releaseExecutionRecorder(state.Correlation.RequestID)
+	state.Resources = &executionResources{timeout: o.config.executionCleanupTimeout, context: state.Context, logger: o.logger}
+	state.Context = context.WithValue(state.Context, executionResourcesKey{}, state.Resources)
+	state.Context = context.WithValue(state.Context, executionLifecycleKey{}, &executionLifecycle{observation: ExecutionLifecycleObservation{State: RequestLifecycleRunning, Revision: 1, ObservedAt: state.StartedAt.UTC()}})
 	defer func() {
 		if value := recover(); value != nil {
+			state.Resources.close(state.Context, o.config.executionCleanupTimeout, o.logger)
 			// Named return values are not assigned while a panic unwinds. Use
 			// the phase coordinator's last diagnostic state before propagating.
 			state.completionReason = "panic"
+			o.settleRequestLifecycle(state, nil, errors.New("orchestration request panic"))
 			o.finishRequestExecution(state, nil, errors.New("orchestration request panic"))
 			o.ensureTerminalPipelineHookSnapshot(state, fmt.Errorf("orchestration request panic: %v", value))
+			o.publishSettledLifecycle(state)
 			recordRunSpanFailure(state)
 			o.completeFailedRun(state, nil)
 			panic(value)
 		}
+		state.Resources.close(state.Context, o.config.executionCleanupTimeout, o.logger)
+		o.settleRequestLifecycle(state, runResult, runErr)
 		runResult = o.finishRequestExecution(state, runResult, runErr)
 		if runErr != nil {
 			o.ensureTerminalPipelineHookSnapshot(state, runErr)
 		}
+		o.publishSettledLifecycle(state)
 		if runErr != nil && !IsInterrupted(runErr) {
 			recordRunSpanFailure(state)
 		}
@@ -669,6 +679,22 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 	return result, err
 }
 
+// executionWithRequestID attributes a terminal result to its owning request
+// segment without modifying a phase snapshot's metadata. Nested application
+// values retain their existing reference semantics.
+func executionWithRequestID(base *ExecutionResult, requestID string) *ExecutionResult {
+	if base == nil {
+		return nil
+	}
+	terminal := *base
+	terminal.Metadata = make(map[string]interface{}, len(base.Metadata)+1)
+	for key, value := range base.Metadata {
+		terminal.Metadata[key] = value
+	}
+	terminal.Metadata[MetadataKeyExecutionRequestID] = requestID
+	return &terminal
+}
+
 // finishRequestExecution is the single terminal-result boundary for response
 // adapters and debug persistence. It never mutates the admitted phase result.
 func (o *AIOrchestrator) finishRequestExecution(state *executionRunState, result *requestRunResult, runErr error) *requestRunResult {
@@ -690,12 +716,12 @@ func (o *AIOrchestrator) finishRequestExecution(state *executionRunState, result
 	if result == nil {
 		result = &requestRunResult{}
 	}
-	terminal := *base
+	terminal := executionWithRequestID(base, state.Correlation.RequestID)
 	terminal.TotalDuration = time.Since(state.StartedAt)
 	if runErr != nil || result.Delivery.PartialContent || len(result.Response.Errors) != 0 {
 		terminal.Success = false
 	}
-	result.Execution = &terminal
+	result.Execution = terminal
 	if !state.postExecutionStarted && (state.completionReason == "execution_failed" || state.completionReason == "interrupted") {
 		if holder, ok := pipelineHookExecutionHolderFromContext(state.Context); ok && holder.HasTerminalPublisher() {
 			// The phase boundary already published its failed/interrupted result.
@@ -706,9 +732,9 @@ func (o *AIOrchestrator) finishRequestExecution(state *executionRunState, result
 	if result.ResponseAvailable && result.FinalResponseSource != "" {
 		// An application response can be known even if its delivery fails.
 		// Preserve the response while keeping execution success false.
-		o.storeExecutionWithFinalResponseSourceAsync(state.Context, state.Input.Request, state.Correlation.RequestID, plan, &terminal, result.Response.Response, result.FinalResponseSource)
+		o.storeExecutionWithFinalResponseSourceAsync(state.Context, state.Input.Request, state.Correlation.RequestID, plan, terminal, result.Response.Response, result.FinalResponseSource)
 	} else {
-		o.storeTerminalExecutionAsync(state.Context, state.Input.Request, state.Correlation.RequestID, plan, &terminal, GetCheckpoint(runErr))
+		o.storeTerminalExecutionAsync(state.Context, state.Input.Request, state.Correlation.RequestID, plan, terminal, GetCheckpoint(runErr))
 	}
 	return result
 }
@@ -794,6 +820,12 @@ func (o *AIOrchestrator) beginRequestRun(ctx context.Context, input requestRunIn
 	reportResumeRequestID(ctx, requestID)
 	ctx = telemetry.WithBaggage(ctx, "request_id", requestID)
 
+	if _, resumed := IsResumeMode(ctx); resumed {
+		// BuildResumeContext restores checkpoint metadata into context. Hooks
+		// run again for this segment and need that identity before acquisition;
+		// explicit adapter metadata keeps its existing precedence.
+		input.Metadata = mergeMetadata(cloneMetadata(GetMetadata(ctx)), input.Metadata)
+	}
 	ctx, conversationID, metadata := o.resolveConversationContext(ctx, input.Metadata)
 	input.Metadata = metadata
 	if o.config.Name != "" {
@@ -899,7 +931,7 @@ func (o *AIOrchestrator) markRunSynthesizing(state *executionRunState) {
 	if o.activityCoordinator == nil {
 		return
 	}
-	if err := o.activityCoordinator.UpdateStatus(state.Context, state.Correlation.RequestID, "synthesizing"); err != nil && o.logger != nil {
+	if err := updateExecutionActivity(state.Context, o.activityCoordinator, state.Correlation.RequestID, "synthesizing"); err != nil && o.logger != nil {
 		o.logger.WarnWithContext(state.Context, "Failed to update activity status", map[string]interface{}{
 			"operation": "activity_status_update", "request_id": state.Correlation.RequestID,
 			"status": "synthesizing", "error": err.Error(),

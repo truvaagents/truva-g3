@@ -242,84 +242,18 @@ func (v *StreamEpisodicMemory) RecordEvent(ctx context.Context, event core.Agent
 // QueryEvents retrieves events matching the filter criteria.
 // Enforces scope-based visibility using callerDomain.
 func (v *StreamEpisodicMemory) QueryEvents(ctx context.Context, callerDomain string, filter core.EventFilter) ([]core.AgentEvent, error) {
-	limit := filter.Limit
-	if limit <= 0 {
-		limit = 50 // Default limit
-	}
-
-	// Determine which index to query
-	var eventIDs []string
-	var err error
-
-	switch {
-	case filter.EntityType != "" && filter.EntityID != "":
-		eventIDs, err = v.queryByEntity(ctx, filter.EntityType, filter.EntityID, filter.Since, filter.Until, limit*2) // Over-fetch for post-filter
-	case filter.AgentName != "":
-		eventIDs, err = v.queryByAgent(ctx, filter.AgentName, filter.Since, filter.Until, limit*2)
-	default:
-		// Scan the domain stream for recent events
-		eventIDs, err = v.queryByStream(ctx, filter.Since, limit*2)
-	}
-
+	results, err := v.queryEventsNewestFirst(ctx, callerDomain, filter)
 	if err != nil {
 		if v.logger != nil {
-			v.logger.WarnWithContext(ctx, "Failed to query event index", map[string]interface{}{
+			v.logger.WarnWithContext(ctx, "Episodic query incomplete, omitting results", map[string]interface{}{
 				"request_id":    core.GetRequestID(ctx),
 				"operation":     "query_events",
 				"caller_domain": callerDomain,
-				"error":         "memory event index read failed",
-				"error_type":    "index_read",
+				"error_type":    "episodic_read",
 			})
 		}
-		return nil, nil // Fail-open
+		return nil, nil // Legacy fail-open contract; nil is not proof of read health.
 	}
-
-	// Also include global events (cross-domain visibility for ScopeGlobal)
-	// Only needed when the query isn't already filtered to a specific entity/agent
-	// (entity/agent queries naturally include global events via the domain indexes)
-	if filter.EntityType == "" && filter.EntityID == "" && filter.AgentName == "" {
-		globalIDs, globalErr := v.queryGlobalStream(ctx, filter.Since, limit)
-		if globalErr == nil {
-			// Prepend global IDs (they may overlap with domain IDs — deduped below)
-			eventIDs = append(globalIDs, eventIDs...)
-		}
-	}
-
-	// Fetch event details and apply scope filtering
-	seen := make(map[string]bool)
-	var results []core.AgentEvent
-	for _, id := range eventIDs {
-		// Normalize cross-domain refs for dedup
-		dedupKey := id
-		if strings.HasPrefix(id, "xdomain:") {
-			parts := strings.SplitN(id[8:], ":", 2)
-			if len(parts) == 2 {
-				dedupKey = parts[1]
-			}
-		}
-		if seen[dedupKey] {
-			continue // Dedup between domain and global streams
-		}
-		seen[dedupKey] = true
-		event, fetchErr := v.fetchEvent(ctx, id)
-		if fetchErr != nil || event == nil {
-			continue
-		}
-		if !v.isVisible(event, callerDomain, filter.AgentName) {
-			continue
-		}
-		if len(filter.ActionTypes) > 0 && !containsString(filter.ActionTypes, event.ActionType) {
-			continue
-		}
-		if filter.AgentDomain != "" && event.AgentDomain != filter.AgentDomain {
-			continue
-		}
-		results = append(results, *event)
-		if len(results) >= limit {
-			break
-		}
-	}
-
 	return results, nil
 }
 
@@ -429,91 +363,6 @@ func (v *StreamEpisodicMemory) eventKey(eventID string) string {
 }
 
 // --- Query helpers ---
-
-func (v *StreamEpisodicMemory) queryByEntity(ctx context.Context, entityType, entityID string, since, until time.Time, limit int) ([]string, error) {
-	key := v.entityIndexKey(entityType, entityID)
-	return v.queryZSet(ctx, key, since, until, limit)
-}
-
-func (v *StreamEpisodicMemory) queryByAgent(ctx context.Context, agentName string, since, until time.Time, limit int) ([]string, error) {
-	key := v.agentIndexKey(agentName)
-	return v.queryZSet(ctx, key, since, until, limit)
-}
-
-func (v *StreamEpisodicMemory) queryZSet(ctx context.Context, key string, since, until time.Time, limit int) ([]string, error) {
-	min := "-inf"
-	max := "+inf"
-	if !since.IsZero() {
-		min = strconv.FormatFloat(float64(since.UnixMilli()), 'f', 0, 64)
-	}
-	if !until.IsZero() {
-		max = strconv.FormatFloat(float64(until.UnixMilli()), 'f', 0, 64)
-	}
-
-	// Reverse range to get most recent first
-	// Keep the legacy command for Redis-compatible providers without ZRANGE REV.
-	//nolint:staticcheck // ZRevRangeByScore remains supported by go-redis/v9.
-	results, err := v.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
-		Min:   min,
-		Max:   max,
-		Count: int64(limit),
-	}).Result()
-	if err != nil {
-		return nil, err
-	}
-	return results, nil
-}
-
-func (v *StreamEpisodicMemory) queryByStream(ctx context.Context, since time.Time, limit int) ([]string, error) {
-	start := "-"
-	if !since.IsZero() {
-		start = fmt.Sprintf("%d-0", since.UnixMilli())
-	}
-
-	msgs, err := v.client.XRevRangeN(ctx, v.domainStreamKey(), "+", start, int64(limit)).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	var ids []string
-	for _, msg := range msgs {
-		if id, ok := msg.Values["event_id"].(string); ok {
-			ids = append(ids, id)
-		}
-	}
-	return ids, nil
-}
-
-func (v *StreamEpisodicMemory) queryGlobalStream(ctx context.Context, since time.Time, limit int) ([]string, error) {
-	start := "-"
-	if !since.IsZero() {
-		start = fmt.Sprintf("%d-0", since.UnixMilli())
-	}
-
-	msgs, err := v.client.XRevRangeN(ctx, v.globalStreamKey(), "+", start, int64(limit)).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	var ids []string
-	for _, msg := range msgs {
-		id, _ := msg.Values["event_id"].(string)
-		domain, _ := msg.Values["domain"].(string)
-		if id == "" {
-			continue
-		}
-		// For events from other domains, we need to look up their event hash
-		// under the originating domain's key prefix. Store a prefixed lookup key
-		// that fetchEventCrossDomain can resolve.
-		if domain != "" && domain != v.domain {
-			// Use a synthetic key that fetchEvent can detect and resolve
-			ids = append(ids, "xdomain:"+domain+":"+id)
-		} else {
-			ids = append(ids, id)
-		}
-	}
-	return ids, nil
-}
 
 func (v *StreamEpisodicMemory) fetchEvent(ctx context.Context, eventID string) (*core.AgentEvent, error) {
 	// Handle cross-domain event references from the global stream
@@ -663,7 +512,7 @@ return 0
 `)
 
 var releaseInvestigationScript = redis.NewScript(`
-if redis.call("GET", KEYS[1]) == ARGV[1] then
+if redis.call("TYPE", KEYS[1]).ok == 'string' and redis.call("GET", KEYS[1]) == ARGV[1] then
 	redis.call("DEL", KEYS[1])
 	redis.call("SREM", KEYS[2], ARGV[2])
 	return 1
@@ -720,6 +569,9 @@ func (v *AtomicLockCoordinator) ClaimInvestigation(ctx context.Context, agentNam
 
 	// Already claimed — find out by whom
 	holder, err := v.client.Get(ctx, key).Result()
+	if err != nil && strings.HasPrefix(err.Error(), "WRONGTYPE") {
+		holder, err = investigationHolderScript.Run(ctx, v.client, []string{key}).Text()
+	}
 	if err != nil {
 		v.observeRuntimeFailure(ctx, "claim_holder_read", entityID, err)
 		return false, "", nil // Can't determine holder
@@ -758,7 +610,7 @@ func (v *AtomicLockCoordinator) GetActiveInvestigations(ctx context.Context) (ma
 		commands[i] = pipe.Get(ctx, v.investigationKey(id))
 	}
 	_, execErr := pipe.Exec(ctx)
-	if execErr != nil && execErr != redis.Nil {
+	if execErr != nil && execErr != redis.Nil && !strings.HasPrefix(execErr.Error(), "WRONGTYPE") {
 		v.observeRuntimeFailure(ctx, "active_investigation_load", "", execErr)
 		return nil, nil
 	}
@@ -766,6 +618,9 @@ func (v *AtomicLockCoordinator) GetActiveInvestigations(ctx context.Context) (ma
 	stale := make([]interface{}, 0)
 	for i, command := range commands {
 		holder, err := command.Result()
+		if err != nil && strings.HasPrefix(err.Error(), "WRONGTYPE") {
+			holder, err = investigationHolderScript.Run(ctx, v.client, []string{v.investigationKey(ids[i])}).Text()
+		}
 		if err == redis.Nil {
 			stale = append(stale, ids[i])
 			continue

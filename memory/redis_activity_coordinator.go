@@ -16,7 +16,7 @@ var _ core.ActivityCoordinator = (*RedisActivityCoordinator)(nil)
 // Signals and the domain index share one cluster hash slot.
 //
 // AnnounceActivity: transactional SET with TTL + index membership
-// UpdateStatus: GET + modify + SET (refreshes TTL)
+// UpdateStatus: GET + modify + SET with remaining TTL (does not renew it)
 // GetDomainActivities: SSCAN the domain index and hydrate candidates
 // CompleteActivity: transactional DEL + index removal
 // TTL handles crash cleanup — no orphaned signals.

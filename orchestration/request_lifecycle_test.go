@@ -227,8 +227,8 @@ func TestRunRequestPersistsRevocationDiagnosticWhenSkillsAreDisabledOnResume(t *
 	}
 	orchestrator.executionWg.Wait()
 	records, _ := store.snapshot()
-	if len(records) != 1 || records[0].Skills == nil ||
-		!hasRuntimeSkillDiagnostic(records[0].Skills.Diagnostics, "skill_binding_revoked") {
+	if len(records) != 2 || records[1].Skills == nil || records[1].Lifecycle == nil || records[1].Lifecycle.State != RequestLifecycleFailed ||
+		!hasRuntimeSkillDiagnostic(records[1].Skills.Diagnostics, "skill_binding_revoked") {
 		t.Fatalf("stored disabled-resume evidence = %#v", records)
 	}
 }
@@ -262,8 +262,8 @@ func TestRunRequestRejectsAnyPinnedCheckpointWhenSkillsAreDisabled(t *testing.T)
 	}
 	orchestrator.executionWg.Wait()
 	records, _ := store.snapshot()
-	if len(records) != 1 || records[0].Skills == nil ||
-		!hasRuntimeSkillDiagnostic(records[0].Skills.Diagnostics, "skill_binding_revoked") {
+	if len(records) != 2 || records[1].Skills == nil || records[1].Lifecycle == nil || records[1].Lifecycle.State != RequestLifecycleFailed ||
+		!hasRuntimeSkillDiagnostic(records[1].Skills.Diagnostics, "skill_binding_revoked") {
 		t.Fatalf("stored malformed disabled-resume evidence = %#v", records)
 	}
 }

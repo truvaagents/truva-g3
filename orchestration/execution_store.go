@@ -98,6 +98,10 @@ type ConversationExecutionLister interface {
 // (examples/registry-viewer-app/main.go) follows this contract. API consumers
 // reading the Redis record directly should do the same.
 type StoredExecution struct {
+	Lifecycle *ExecutionLifecycleObservation `json:"lifecycle,omitempty"`
+	// RecordRevision advances for phase, terminal and effect snapshots from the
+	// managed recorder. Zero is legacy/unknown, not evidence of staleness.
+	RecordRevision uint64 `json:"record_revision,omitempty"`
 	// Correlation identifiers
 	RequestID         string `json:"request_id"`
 	OriginalRequestID string `json:"original_request_id,omitempty"` // For HITL resume correlation
@@ -243,19 +247,21 @@ const (
 // Note: Named ExecutionSummary (not ExecutionResultSummary) to avoid
 // collision with existing ExecutionRecord type in interfaces.go:150
 type ExecutionSummary struct {
-	RequestID         string        `json:"request_id"`
-	OriginalRequestID string        `json:"original_request_id,omitempty"`
-	TraceID           string        `json:"trace_id"`
-	AgentName         string        `json:"agent_name,omitempty"`
-	OriginalRequest   string        `json:"original_request"`
-	Success           bool          `json:"success"`
-	Interrupted       bool          `json:"interrupted,omitempty"`
-	StepCount         int           `json:"step_count"`
-	FailedSteps       int           `json:"failed_steps"`
-	TotalDuration     time.Duration `json:"total_duration"`
-	CreatedAt         time.Time     `json:"created_at"`
-	PhaseCount        int           `json:"phase_count,omitempty"`
-	ForcedTerminal    bool          `json:"forced_terminal,omitempty"`
+	Lifecycle         *ExecutionLifecycleObservation `json:"lifecycle,omitempty"`
+	RecordRevision    uint64                         `json:"record_revision,omitempty"`
+	RequestID         string                         `json:"request_id"`
+	OriginalRequestID string                         `json:"original_request_id,omitempty"`
+	TraceID           string                         `json:"trace_id"`
+	AgentName         string                         `json:"agent_name,omitempty"`
+	OriginalRequest   string                         `json:"original_request"`
+	Success           bool                           `json:"success"`
+	Interrupted       bool                           `json:"interrupted,omitempty"`
+	StepCount         int                            `json:"step_count"`
+	FailedSteps       int                            `json:"failed_steps"`
+	TotalDuration     time.Duration                  `json:"total_duration"`
+	CreatedAt         time.Time                      `json:"created_at"`
+	PhaseCount        int                            `json:"phase_count,omitempty"`
+	ForcedTerminal    bool                           `json:"forced_terminal,omitempty"`
 	// Metadata contains framework-owned correlation metadata plus optional
 	// application investigation metadata. MetadataConversationID is reserved.
 	Metadata map[string]string `json:"metadata,omitempty"`
@@ -581,6 +587,9 @@ func executionRetentionTTLAt(
 	if execution.Result != nil && !execution.Result.Success {
 		return errorTTL
 	}
+	if execution.Lifecycle != nil && (execution.Lifecycle.State == RequestLifecycleFailed || execution.Lifecycle.State == RequestLifecycleCancelled) {
+		return errorTTL
+	}
 	return normalTTL
 }
 
@@ -659,6 +668,8 @@ func sanitizeExecutionConversationMetadata(
 
 func executionSummaryFromStored(execution *StoredExecution) ExecutionSummary {
 	summary := ExecutionSummary{
+		Lifecycle:         execution.Lifecycle,
+		RecordRevision:    execution.RecordRevision,
 		RequestID:         execution.RequestID,
 		OriginalRequestID: execution.OriginalRequestID,
 		TraceID:           execution.TraceID,

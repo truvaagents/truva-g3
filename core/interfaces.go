@@ -561,8 +561,11 @@ type EpisodicMemory interface {
 // Uses optimistic locking (SETNX-style) to claim exclusive investigation of an entity.
 //
 // Default implementations:
-//   - core.AtomicLockCoordinator (SET NX PX + Lua ownership check)
-//   - core.InMemoryInvestigationCoordinator (sync.Mutex + map, for single-process)
+//   - memory.AtomicLockCoordinator (SET NX PX + Lua ownership check)
+//   - memory.InMemoryInvestigationCoordinator (sync.Mutex + map, for single-process)
+//
+// Optional InvestigationLeaseCoordinator adds acquisition-safe ownership without
+// changing this legacy agent-name contract.
 type InvestigationCoordinator interface {
 	// ClaimInvestigation attempts to claim exclusive investigation of an entity.
 	// Returns (true, "", nil) if claimed successfully.

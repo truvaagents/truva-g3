@@ -1,6 +1,6 @@
 # TruvaG3 Memory Module Architecture
 
-**Version**: 1.5
+**Version**: 1.8
 **Module**: `github.com/truvaagents/truva-g3/memory`
 **Purpose**: Pluggable storage backend implementations for cross-agent shared memory
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
@@ -153,7 +153,7 @@ User Request
 - `AfterExecutionHook` fires **once** after all phases complete. It receives the combined result of all phases.
 - Memory operations add ~5-15% to the planning prompt size (~200-600 tokens), capped by a configurable `MaxEnrichmentTokens` (default 2000).
 - When a step targets another **orchestrator agent** (nested delegation), the child agent's hooks run independently. The `X-TruvaG3-Investigation-Owner` header prevents claim collisions, and `AgentEvent.ParentEvent` links parent/child event trees.
-- **Pre-planning entity-keyed lookup is opt-in** (steps 2-3 in the diagram above). The framework default for the enrichment hook's entity extractor is `NoOpEntityExtractor`, which extracts no entities pre-planning. Without entities, the entity-keyed history lookup returns nothing and the investigation claim check is a no-op. This is intentional: pre-planning, the `EventSummarizer` LLM hasn't run yet, so the post-execution `LLMEntityExtractor` would always fall through; making the no-op explicit removes ambiguity. The embedding-based recent-events retrieval (step 1) and shared knowledge search (step 4) still run unconditionally — they don't need entity extraction. Collision avoidance pre-planning is provided by `ActivityCoordinator` (an LLM-mediated soft-coordination mechanism that has zero dependency on entity extraction). Agents that need entity-keyed precision pre-planning can wire a domain-specific extractor via `WithBuilderEnrichmentEntityExtractor`.
+- **Pre-planning entity-keyed lookup accepts explicit request metadata** (steps 2-3 in the diagram above). The default `NoOpEntityExtractor` preserves supplied `entity_type`/`entity_id`; it does not infer entities from prose. Without explicit entities, entity history and entity investigation claims are absent. Domain-wide recent-event recall is time-indexed, not embedding-based; shared-knowledge search is a separate path when its backend is configured. Applications needing additional extraction can use `WithBuilderEnrichmentEntityExtractor`. Entity investigation claims and domain-wide activity coordination are distinct mechanisms: broadening an extractor also broadens claim acquisition. Recording-side entity identity and claim release must agree with the identities actually acquired; changing an extractor alone does not establish that lifecycle contract.
 
 ### 1.4 Memory Across an Agent's Lifetime
 
@@ -1008,6 +1008,15 @@ never closes or mutates it. An outstanding timed-out command remains subject to
 the borrowed client's socket deadline or owner-driven close. Topology resolution and owned-client creation remain
 application/Core responsibilities, preserving the module dependency boundary.
 
+Layer 1 also validates and passes `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN`
+(positive int64) and `TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL` (positive Go
+duration) to their owning constructors before that startup check. Explicit
+empty/malformed/non-positive/overflowing values return `core.ErrInvalidConfiguration`
+with the setting name, without raw values. Absence retains 100000 and 30m.
+Layer-2 direct constructors remain environment-free; their explicit options
+remain available. Optional runtime outage policy and borrowed-client ownership
+are unchanged.
+
 All canonical keys use database 0 and `core.RedisKeyspace`:
 
 ```text
@@ -1049,6 +1058,29 @@ exception events when the owning background workflow records the failure.
 ---
 
 ## Error Handling
+
+### Acquisition-safe investigation leases
+
+Both investigation providers implement optional `core.InvestigationLeaseCoordinator`.
+Zero TTL selects the provider default (30m in memory; configurable Redis default);
+negative TTL and empty identities fail before I/O. Repeated live acquisition
+identities return the same ownership without renewing expiry. Releases report
+`released`, `absent` (including expiry), `not_owned`, or `unknown` with an error.
+No provider owns renewal or cleanup goroutines. These are advisory deduplication
+claims, not fencing locks for external writes or continuous exclusion.
+
+Redis uses a hash at the existing investigation key for token-owned claims and
+retains string values for legacy claims. Record/index operations share one slot.
+Legacy and token callers contend on the same key; name-only release cannot
+delete a hash. Updated holder/list readers expose only the agent name. Older
+binaries fail open on hash reads/releases, potentially omitting investigation
+visibility until upgraded; they cannot delete token claims. No key migration,
+parallel lock namespace or deletion of active legacy records occurs.
+
+The new observed interface returns backend errors rather than converting unknown
+ownership to nil success. The orchestration owner decides optional fail-open
+policy and emits bounded diagnostics. Existing legacy methods retain their
+fail-open behavior. Clients are borrowed and context is preserved.
 
 ### Fail-Open Principle
 
@@ -1158,6 +1190,43 @@ func TestSharedKnowledge_Integration(t *testing.T) {
 
 ## Performance Considerations
 
+### Episodic newest-first retrieval
+
+`QueryEvents` and `QueryRecentEvents` select by authoritative event timestamp,
+descending, after visibility and filters. Equal timestamps are ordered by
+origin domain then event ID, ascending. Global scope grants visibility, not
+priority: older global events may fall outside a busy domain's limited page.
+Time bounds remain inclusive and retain nanosecond precision after hydration;
+the Redis entity/agent index uses millisecond scores only to select candidates.
+`QueryEntityHistory` retains chronological presentation of its selected page.
+
+Redis streams contain ingestion-ordered references, including existing writers'
+records. The reader walks retained references in batches, hydrates with pipelined
+individual GETs (cross-slot safe), deduplicates by storage key, and keeps only
+the newest `Limit` payloads in a heap. It does not stop at `Limit*2`, use ingestion
+time as event time, or sort an already-truncated page. Existing entity/agent
+index coverage is unchanged; this does not add cross-domain entity indexes.
+Missing hashes are expired/deleted records, not retained events. A command or
+decode failure discards the partial page and emits a bounded contextual WARN;
+the legacy API still returns its fail-open empty result, not a read-health
+guarantee. Both built-in providers additionally implement
+`core.ObservedEpisodicReader`: `QueryEventsObserved` preserves read errors for
+consumers needing to distinguish unavailable memory from a healthy empty page.
+In-memory observed reads honor an already-cancelled context; Redis observed
+reads discard partial pages on error. Callers retain optional-memory fallback.
+Neither interface promises a multi-key atomic snapshot under writes/expiry.
+
+Tradeoff: correctness over retained out-of-order data requires examining the
+retained source, so work scales with source size rather than the requested
+result count. Payload retention is bounded by result limit plus a transport
+batch; deduplication retains candidate keys. Stream retention remains governed
+by `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN`; indexes retain their existing lifetime.
+The internal 256-entry transport batch is not a query limit. No index migration,
+new keyspace, worker, additional dependency, or background backfill is introduced.
+Large-retention performance and a read-completeness contract remain prerequisites
+for claiming safe incremental digest-cache advancement; timestamp ordering alone
+does not establish it.
+
 ### Latency Budget
 
 Memory operations are on the hot path of `ProcessRequest`:
@@ -1233,6 +1302,9 @@ Backend implementations must:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.8 | 2026-09-30 | Newest-first episodic retrieval across visible retained sources; exact event-time bounds, stable ties, post-filter limits, batching and explicit performance/completeness limitations |
+| 1.7 | 2026-09-29 | Token-safe optional investigation providers, same-key legacy contention, observed release/error outcomes and no provider-owned lifecycle |
+| 1.6 | 2026-09-29 | Validate and wire Layer-1 stream length and investigation TTL before Redis I/O; preserve environment-free direct constructors and runtime fail-open |
 | 1.5 | 2026-09-08 | Enforced the shared-backend constructor deadline independently of borrowed-client context-timeout settings while retaining owner-controlled socket and pool lifetime |
 | 1.4 | 2026-09-04 | Aligned Redis memory observability with the logging/tracing guides: component-scoped and bounded diagnostics, request correlation, and enclosing-workflow ownership of span failures |
 | 1.3 | 2026-09-02 | Made `NewSharedBackends(redis.UniversalClient, ...)` the sole bundle constructor and required local configuration resolution before the bounded Redis startup check |

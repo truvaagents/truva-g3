@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/truvaagents/truva-g3/core"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -521,7 +522,7 @@ func TestSmartExecutor_ApplicationDataDoesNotDisableLLMErrorAnalysis(t *testing.
 	aiClient := NewMockAIClient()
 	executor.SetErrorAnalyzer(NewErrorAnalyzer(aiClient, nil))
 	mockRT := NewMockRoundTripper()
-	mockRT.SetResponse("http://localhost:8080/execute", http.StatusConflict, `{"success":false,"error":{"code":"RESOURCE_VERSION_CHANGED","message":"resource changed","retryable":false}}`)
+	mockRT.SetResponse("http://localhost:8080/execute", http.StatusConflict, `{"success":false,"error":{"code":"RESOURCE_VERSION_CHANGED","message":"resource changed","retryable":true}}`)
 	executor.httpClient = &http.Client{Transport: mockRT}
 	step := RoutingStep{StepID: "execute", AgentName: "guarded-tool", Metadata: map[string]interface{}{
 		"capability": "execute_guarded_action",
@@ -532,7 +533,10 @@ func TestSmartExecutor_ApplicationDataDoesNotDisableLLMErrorAnalysis(t *testing.
 		"application_value":   "password=local-debug-value",
 	}
 
-	result := executor.executeStep(WithPreResolvedParams(context.Background(), applicationParameters, step.StepID), step)
+	// Ordinary application data must not disable correction. HITL-approved
+	// parameters have a separate, deliberately immutable execution contract.
+	step.Metadata["parameters"] = applicationParameters
+	result := executor.executeStep(context.Background(), step)
 	if result.Success || !strings.Contains(result.Error, "RESOURCE_VERSION_CHANGED") {
 		t.Fatalf("expected authoritative guarded failure, got %+v", result)
 	}
@@ -1959,7 +1963,7 @@ func TestSmartExecutor_ValidationFeedbackWithLayer2(t *testing.T) {
 		Metadata: map[string]interface{}{
 			"capability": "get_weather",
 			"parameters": map[string]interface{}{
-				"lat": "35.6897",
+				"lat": "135.6897",
 				"lon": "139.6917",
 			},
 		},
@@ -1971,8 +1975,8 @@ func TestSmartExecutor_ValidationFeedbackWithLayer2(t *testing.T) {
 	if len(sentParams) > 0 {
 		if lat, ok := sentParams[0]["lat"].(float64); !ok {
 			t.Errorf("After Layer 2, first call should have float64 lat, got %T", sentParams[0]["lat"])
-		} else if lat != 35.6897 {
-			t.Errorf("Layer 2 coercion should produce 35.6897, got %v", lat)
+		} else if lat != 135.6897 {
+			t.Errorf("Layer 2 coercion should preserve the invalid range as 135.6897, got %v", lat)
 		}
 	}
 
@@ -2093,6 +2097,7 @@ func TestBuildStepContext_WrapsResponseCorrectly(t *testing.T) {
 	// Simulate completed step with JSON response
 	results := map[string]*StepResult{
 		"step-1": {
+			Success:  true,
 			Response: `{"data": {"country": "France", "city": "Paris"}, "status": "ok"}`,
 		},
 	}
@@ -2155,9 +2160,11 @@ func TestBuildStepContext_MultipleDependencies(t *testing.T) {
 	// Simulate multiple completed steps
 	results := map[string]*StepResult{
 		"geocode-step": {
+			Success:  true,
 			Response: `{"latitude": 35.6897, "longitude": 139.6917}`,
 		},
 		"stock-step": {
+			Success:  true,
 			Response: `{"price": 150.25, "currency": "USD"}`,
 		},
 	}
@@ -2237,9 +2244,9 @@ func TestTemplateSubstitution_WithResponseWrapper(t *testing.T) {
 			want:     123, // Go int from map literal
 		},
 		{
-			name:     "array field access - JSON serialized",
+			name:     "array field access - native typed value",
 			template: "{{step-1.response.data.cities}}",
-			want:     `["Paris","Lyon"]`, // Arrays are JSON serialized when whole value
+			want:     []interface{}{"Paris", "Lyon"}, // Exact bindings preserve shape.
 		},
 		{
 			name:     "template in string context",
@@ -2266,9 +2273,7 @@ func TestTemplateSubstitution_WithResponseWrapper(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := executor.substituteTemplates(tt.template, depResults)
-			if got != tt.want {
-				t.Errorf("substituteTemplates() = %v (%T), want %v (%T)", got, got, tt.want, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -2331,9 +2336,11 @@ func TestBuildStepContext_InvalidJSON(t *testing.T) {
 	// Simulate step with invalid JSON response
 	results := map[string]*StepResult{
 		"step-1": {
+			Success:  true,
 			Response: `not valid json`,
 		},
 		"step-2": {
+			Success:  true,
 			Response: `{"valid": "json"}`,
 		},
 	}
@@ -2370,9 +2377,11 @@ func TestBuildStepContext_EmptyResponse(t *testing.T) {
 	// Simulate step with empty response
 	results := map[string]*StepResult{
 		"step-1": {
+			Success:  true,
 			Response: "", // Empty
 		},
 		"step-2": {
+			Success:  true,
 			Response: `{"data": "value"}`,
 		},
 	}
@@ -2411,6 +2420,7 @@ func TestBuildStepContext_AutoIncludesTemplateReferencedStep(t *testing.T) {
 
 	results := map[string]*StepResult{
 		"step-1": {
+			Success:  true,
 			Response: `{"data": {"currency": {"code": "CAD"}}}`,
 		},
 	}
@@ -2471,6 +2481,7 @@ func TestBuildStepContext_NoDuplicateWhenAlreadyInDependsOn(t *testing.T) {
 
 	results := map[string]*StepResult{
 		"step-1": {
+			Success:  true,
 			Response: `{"data": {"city": "Paris"}}`,
 		},
 	}
@@ -2538,7 +2549,7 @@ func TestBuildStepContext_NoParametersMetadata(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"data": "value"}`},
+		"step-1": {Success: true, Response: `{"data": "value"}`},
 	}
 
 	step := RoutingStep{
@@ -2561,7 +2572,7 @@ func TestBuildStepContext_NilMetadata(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"data": "value"}`},
+		"step-1": {Success: true, Response: `{"data": "value"}`},
 	}
 
 	step := RoutingStep{
@@ -2585,7 +2596,7 @@ func TestBuildStepContext_NonStringParameterValuesSkipped(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"data": "value"}`},
+		"step-1": {Success: true, Response: `{"data": "value"}`},
 	}
 
 	step := RoutingStep{
@@ -2615,8 +2626,8 @@ func TestBuildStepContext_MultipleTemplatesInOneParameter(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"geocode": {Response: `{"lat": 35.68, "lon": 139.69}`},
-		"config":  {Response: `{"unit": "celsius"}`},
+		"geocode": {Success: true, Response: `{"lat": 35.68, "lon": 139.69}`},
+		"config":  {Success: true, Response: `{"unit": "celsius"}`},
 	}
 
 	step := RoutingStep{
@@ -2650,8 +2661,8 @@ func TestBuildStepContext_MultipleParametersWithTemplates(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"city": "Tokyo"}`},
-		"step-2": {Response: `{"code": "JPY"}`},
+		"step-1": {Success: true, Response: `{"city": "Tokyo"}`},
+		"step-2": {Success: true, Response: `{"code": "JPY"}`},
 	}
 
 	step := RoutingStep{
@@ -2684,7 +2695,7 @@ func TestBuildStepContext_AutoIncludeSkipsInvalidJSON(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `not valid json`},
+		"step-1": {Success: true, Response: `not valid json`},
 	}
 
 	step := RoutingStep{
@@ -2712,7 +2723,7 @@ func TestBuildStepContext_AutoIncludeSkipsEmptyResponse(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: ""}, // Empty
+		"step-1": {Success: true, Response: ""}, // Empty
 	}
 
 	step := RoutingStep{
@@ -2743,7 +2754,7 @@ func TestBuildStepContext_AutoIncludeLogsWarning(t *testing.T) {
 	executor.SetLogger(mockLogger)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"data": {"value": 42}}`},
+		"step-1": {Success: true, Response: `{"data": {"value": 42}}`},
 	}
 
 	step := RoutingStep{
@@ -2781,7 +2792,7 @@ func TestBuildStepContext_NoWarningWhenInDependsOn(t *testing.T) {
 	executor.SetLogger(mockLogger)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"data": "value"}`},
+		"step-1": {Success: true, Response: `{"data": "value"}`},
 	}
 
 	step := RoutingStep{
@@ -2811,7 +2822,7 @@ func TestBuildStepContext_ParametersNotMapInterface(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"data": "value"}`},
+		"step-1": {Success: true, Response: `{"data": "value"}`},
 	}
 
 	step := RoutingStep{
@@ -2837,7 +2848,7 @@ func TestBuildStepContext_StringParamWithNoTemplates(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"data": "value"}`},
+		"step-1": {Success: true, Response: `{"data": "value"}`},
 	}
 
 	step := RoutingStep{
@@ -2867,8 +2878,8 @@ func TestBuildStepContext_TemplatesInsideArray(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"data": {"currency": {"code": "CHF"}}}`},
-		"step-2": {Response: `{"data": {"currency": {"code": "EUR"}}}`},
+		"step-1": {Success: true, Response: `{"data": {"currency": {"code": "CHF"}}}`},
+		"step-2": {Success: true, Response: `{"data": {"currency": {"code": "EUR"}}}`},
 	}
 
 	step := RoutingStep{
@@ -2906,7 +2917,7 @@ func TestBuildStepContext_TemplatesInsideNestedMap(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"geocode": {Response: `{"lat": 35.68, "lon": 139.69}`},
+		"geocode": {Success: true, Response: `{"lat": 35.68, "lon": 139.69}`},
 	}
 
 	step := RoutingStep{
@@ -2937,7 +2948,7 @@ func TestBuildStepContext_TemplatesInMixedNesting(t *testing.T) {
 	executor := NewSmartExecutor(catalog)
 
 	results := map[string]*StepResult{
-		"step-1": {Response: `{"code": "JPY"}`},
+		"step-1": {Success: true, Response: `{"code": "JPY"}`},
 	}
 
 	step := RoutingStep{

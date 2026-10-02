@@ -1,5 +1,14 @@
 # Domain-Specific Agent Configuration Guide
 
+Failed-step continuation and built-in synthesis views include bounded actual
+attempted inputs with each attempt's structured error code. `view_status` and
+omission counts describe evidence coverage, not a task verdict. Application
+restrictions and the `FailedOperationView` limits are documented in the API
+Reference and Result Compaction Guide. The view replaces the failure body; it
+does not append a second transcript. Exact whole-value references retain native
+types: use a scalar dotted path when the destination requires a string rather
+than referring to its enclosing object. Embedded interpolation stays text.
+
 Welcome! If you're building agents that handle tasks across different domains—travel booking, healthcare records, financial transactions, e-commerce, or scientific research—this guide is for you. Think of it as a senior developer walking you through how to teach your orchestrator agent about your specific domain.
 
 ## Table of Contents
@@ -1023,6 +1032,20 @@ func (l *LitReviewAgent) InitializeOrchestrator(discovery core.Discovery) error 
 ---
 
 ## Type Rules: Teaching the LLM About Your Data
+
+Plan string values are application data: source code, Markdown and embedded
+code fences are legitimate contents when correctly JSON-escaped. The parser
+preserves decoded strings rather than stripping formatting. Response-format
+instructions constrain the outer JSON envelope, not the contents of those strings.
+Supported envelope and syntax recovery leaves literal string tokens intact;
+valid JSON with incompatible plan field types fails typed decoding instead of
+triggering syntax salvage.
+
+The `{{step-…}}` form is reserved for framework runtime references. Parsing
+preserves that text; later validation and binding give it its framework meaning,
+and unresolved framework references fail before dispatch. Unrelated tool-owned
+syntax such as `{{now}}` is not covered by that dispatch guard. This distinction
+does not introduce a new escape mechanism for literal framework references.
 
 Type rules are the core mechanism for teaching the LLM about your domain's data types. Let's break down the structure:
 

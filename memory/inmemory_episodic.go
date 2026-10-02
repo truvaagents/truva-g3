@@ -87,7 +87,7 @@ func (m *InMemoryEpisodicMemory) QueryEvents(ctx context.Context, callerDomain s
 
 	var results []core.AgentEvent
 
-	// Iterate in reverse (most recent first)
+	// Insertion order is not event time: late/backdated writes are allowed.
 	for i := len(m.events) - 1; i >= 0; i-- {
 		event := m.events[i]
 
@@ -140,11 +140,11 @@ func (m *InMemoryEpisodicMemory) QueryEvents(ctx context.Context, callerDomain s
 		}
 
 		results = append(results, event)
-		if len(results) >= limit {
-			break
-		}
 	}
-
+	sortEventsNewestFirst(results)
+	if len(results) > limit {
+		results = results[:limit]
+	}
 	return results, nil
 }
 
@@ -171,26 +171,10 @@ func (m *InMemoryEpisodicMemory) QueryEntityHistory(ctx context.Context, callerD
 // Results ordered by timestamp descending (most recent first).
 // Enforces scope-based visibility using callerDomain.
 func (m *InMemoryEpisodicMemory) QueryRecentEvents(ctx context.Context, callerDomain string, since time.Time, limit int) ([]core.AgentEvent, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	if limit <= 0 {
 		limit = 10
 	}
-
-	// Walk backwards (newest first) since events are stored oldest-first
-	var results []core.AgentEvent
-	for i := len(m.events) - 1; i >= 0 && len(results) < limit; i-- {
-		e := m.events[i]
-		if !since.IsZero() && e.Timestamp.Before(since) {
-			continue // Defensive: use continue (not break) in case of out-of-order timestamps
-		}
-		if !isVisibleInMemory(&e, callerDomain, "") {
-			continue // Scope filtering — don't leak private/cross-domain events
-		}
-		results = append(results, e)
-	}
-	return results, nil
+	return m.QueryEvents(ctx, callerDomain, core.EventFilter{Since: since, Limit: limit})
 }
 
 // DeleteEvents removes events by ID from the in-memory store.
@@ -235,8 +219,9 @@ func isVisibleInMemory(event *core.AgentEvent, callerDomain, callerAgent string)
 // --- In-Memory Investigation Coordinator ---
 
 type investigationClaim struct {
-	agentName string
-	expiresAt time.Time
+	agentName     string
+	expiresAt     time.Time
+	acquisitionID string
 }
 
 // InMemoryInvestigationCoordinator implements InvestigationCoordinator using
@@ -283,7 +268,7 @@ func (m *InMemoryInvestigationCoordinator) ReleaseInvestigation(ctx context.Cont
 	defer m.mu.Unlock()
 
 	if claim, ok := m.claims[entityID]; ok {
-		if claim.agentName == agentName {
+		if claim.agentName == agentName && claim.acquisitionID == "" {
 			delete(m.claims, entityID)
 		}
 	}

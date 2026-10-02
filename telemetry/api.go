@@ -39,7 +39,7 @@ func Gauge(name string, value float64, labels ...string) {
 	// similar functionality without the complexity.
 	registry := globalRegistry.Load()
 	if registry != nil {
-		r := registry.(*Registry)
+		r := registry
 		// Mark this as a gauge internally for proper handling
 		_ = r.metrics.RecordHistogram(context.Background(), name, value)
 	}
@@ -218,7 +218,7 @@ func TimeOperation(name string, labels ...string) func() {
 func TrackGoroutines(name string, delta int, labels ...string) {
 	registry := globalRegistry.Load()
 	if registry != nil {
-		r := registry.(*Registry)
+		r := registry
 		// Use UpDownCounter for tracking goroutines
 		ctx := context.Background()
 		_ = r.metrics.RecordUpDownCounter(ctx, name, int64(delta))

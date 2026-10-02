@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.15
+**Version**: 1.18
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -29,6 +29,13 @@ on core - core depends on no other framework modules.**
 ---
 
 ## Core Design Principles
+
+`ObservedEpisodicReader` is an optional foundational read-health contract used
+by memory providers and orchestration consumers. It returns backend/index/record
+failures rather than reporting a successful empty read. The existing
+`EpisodicMemory` interface and its legacy fail-open behavior remain unchanged.
+Nil error describes the returned bounded retained window, not an atomic snapshot
+or full historical coverage. Optional-memory fallback remains consumer-owned.
 
 ### 1. **Interface-First Architecture**
 
@@ -275,6 +282,17 @@ topology forms—for example `REDIS_URL` plus structured mode/address fields—f
 validation instead of silently overriding one another.
 
 ---
+
+## Additive Investigation Ownership Contract
+
+`InvestigationLeaseCoordinator` in `investigation_lease.go` optionally extends
+the legacy name-owned coordinator. It exposes acquire with a fresh caller-owned
+acquisition identity, plus release by exact handle and observed outcome. Names
+remain display identity; ownership IDs are omitted from JSON. Core provides no
+backend, timer, planner policy or orchestration dependency. Backend errors remain
+observable so the owning optional lifecycle can fail open without inventing
+successful release. Repeating a live acquisition is idempotent, not a TTL renewal.
+Legacy custom coordinators remain supported without token-safety guarantees.
 
 ## Conversation Correlation Context Contract
 
@@ -568,6 +586,32 @@ func WithDiscovery(enabled bool, provider string) Option {
 ```
 
 #### 3. **Configuration Validation**
+
+Shared-memory/activity numeric fields owned by `core.Config` are validated on
+environment load, JSON-file load and final `Config.Validate`/`NewConfig`
+construction, including when the optional feature is disabled. `DefaultConfig`
+installs their documented defaults. Environment presence is checked explicitly:
+an absent value leaves the configured value unchanged; an empty, malformed,
+out-of-range or overflowing value returns `ErrInvalidConfiguration`. Error text
+identifies the key and constraint, not the raw value. Invalid environment input
+fails before code options; valid options/file overlays keep their existing order.
+This does not change the separately documented Redis source-resolution rules.
+
+Positive counts and TTLs remain positive; `CompactionRecentDetail=0` remains the
+supported off switch. The enrichment token-to-byte conversion is checked for
+overflow. Retrieval weights must be finite, but their sum is not constrained
+and signed/zero finite weights retain their existing relative-scoring semantics.
+JSON numeric `null` and null memory/activity sections are rejected rather than
+silently inheriting defaults. JSON durations remain integer nanoseconds; env
+durations use Go syntax, including compound/fractional durations. A direct
+`Config.Validate` checks a resolved configuration; callers begin with
+`DefaultConfig` or `NewConfig`, not an unresolved zero-valued `Config`.
+
+This is startup validation, not runtime memory availability policy. Hook-only
+settings and convenience/direct backend construction remain owned by their
+modules; core validation alone does not prove those paths enforce the contract.
+No optional module dependency or runtime telemetry lifecycle is introduced.
+
 ```go
 // ✅ Good: Validate configuration after all options applied
 func (c *Config) Validate() error {
@@ -1157,6 +1201,9 @@ for composition, panic behavior, and the approved-checkpoint resume boundary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.18 | 2026-09-30 | Additive observed episodic read-health contract; no provider dependency or change to legacy fail-open API |
+| 1.17 | 2026-09-29 | Additive acquisition-safe investigation contract with private handles and observed release outcomes; legacy coordinator remains source-compatible |
+| 1.16 | 2026-09-29 | Added fail-fast core-owned shared-memory/activity numeric validation across env/file/typed construction, presence-aware null/empty handling and complete documented defaults; preserved optional runtime fail-open and relative retrieval weights |
 | 1.15 | 2026-09-11 | Completed required after-planning marker documentation and corrected the implementation-status wording to distinguish foundational contracts from module-owned lifecycle contracts |
 | 1.14 | 2026-09-09 | Reconciled interface ownership with the canonical module DAG and documented the foundational `RequiredAfterPlanningHook` declaration contract |
 | 1.13 | 2026-09-08 | Removed numbered-DB constructors/constants and deprecation-only resolution plumbing under the author-approved development exception; all owned topologies validate DB 0 and borrowed-client ownership is unchanged |

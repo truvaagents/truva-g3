@@ -290,8 +290,8 @@ func GetLogger() *TelemetryLogger {
 		serviceName := "telemetry"
 		// Try to get service name from registry if available
 		if registry := globalRegistry.Load(); registry != nil {
-			if r, ok := registry.(*Registry); ok && r.config.ServiceName != "" {
-				serviceName = r.config.ServiceName
+			if registry.config.ServiceName != "" {
+				serviceName = registry.config.ServiceName
 			}
 		}
 		telemetryLogger = createTelemetryLogger(serviceName)

@@ -1,5 +1,19 @@
 # TruvaG3 Framework Environment Variables Guide
 
+### Failed-operation evidence (implemented)
+
+`TRUVAG3_FAILED_OPERATION_VIEW_DISABLED` defaults to `false`.
+`TRUVAG3_FAILED_OPERATION_MAX_VALUE_BYTES`,
+`TRUVAG3_FAILED_OPERATION_MAX_STEP_BYTES`, and
+`TRUVAG3_FAILED_OPERATION_MAX_PROMPT_BYTES` default to `4096`, `16384`, and
+`32768`. Numeric values must be positive; canonical orchestration
+`EnvironmentStrict` rejects invalid values and `EnvironmentCompatible` reports
+ignored invalid overrides. Code zero means unset; negative code limits fail
+validation. Explicit `WithFailedOperationView` options take precedence over env.
+These are final-encoded child ceilings inside continuation's existing failure
+share, not a way to raise its parent budget. See the Limits Cheatsheet and
+Result Compaction Guide for measurement and omission semantics.
+
 This document provides a comprehensive reference for all environment variables supported by the TruvaG3 framework. Variables are organized by module/functionality with their default values, descriptions, and verification status.
 
 ## Important Notes
@@ -714,15 +728,27 @@ Configure state storage for agents.
 
 Configure cross-agent shared memory — episodic events, knowledge extraction, activity compaction, and digest caching. Shared memory enables agents in the same domain to see each other's actions and coordinate.
 
+**Core configuration validation:** `Config.LoadFromEnv`/`NewConfig` now reject
+explicitly empty, malformed, non-positive or overflowing core-owned numeric
+memory/activity settings, including when disabled. Compaction recent detail
+allows zero. Absent settings use `DefaultConfig` values; the enrichment budget
+also checks the four-byte conversion bound. File and typed configuration receive
+the same range checks. This startup rule does not alter runtime fail-open behavior.
+The hook builder also validates all hook-owned numeric settings before checking
+optional dependencies; invalid input returns an error, not a partial hook bundle.
+The event-summarizer override is hook-owned, not parsed by core. Core validation
+alone is not backend wiring.
+
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_SHARED_MEMORY_PROVIDER` | `noop` | **Implemented** | Storage provider (`redis`, `noop`). Agents must use `redis` for cross-agent memory. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AGENT_DOMAIN` | `default` | **Implemented** | Groups agents for memory scoping. Agents in the same domain see each other's events. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN` | `100000` | **Implemented** | Max events in the Redis domain stream (approximate, uses `~MAXLEN`). | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL` | `30m` | **Implemented** | Auto-expiry for investigation claims. Must be >= HITL timeout + execution buffer for agents using cross-agent delegation. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` | `2000` | **Implemented** | Max tokens of memory context injected into the planning prompt. Caps enrichment to prevent prompt bloat. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` | `2000` | **Implemented** | `BuildMemoryHooks` reads this at startup for both raw and compacted memory views. Bounds the hook's own contribution at four encoded bytes per token; complete records and omission markers fit inside that budget. Invalid/empty/non-positive/overflowing values fail construction. Direct construction uses `WithEnrichmentMaxTokens`, which rejects invalid values. | [memory_hook_builder.go](../../orchestration/memory_hook_builder.go) |
 | `TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT` | `20` | **Implemented** | Recent domain events for baseline situational awareness (without compactor). Higher values show more cross-agent activity but consume more prompt tokens. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `""` (agent default) | **Implemented** | Model for LLM event summarization and activity compaction calls. Accepts aliases such as `fast` and `smart` only when the selected provider defines them, or a concrete model ID. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` | Unset: max(300, 150 × batch size) | **Implemented** | Positive fixed output-token allowance per event-summary call. Read at startup by `BuildMemoryHooks`; invalid explicit values fail construction, including without an AI client. Independent of synthesis and compaction. Direct constructors use `WithSummarizerMaxTokens(n)` instead. | [orchestration/memory_hook_builder.go](../../orchestration/memory_hook_builder.go) |
 | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | **Implemented** | Max token budget for the compacted domain activity digest. Controls the output size of the `ActivityCompactor` LLM call. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` | `200` | **Implemented** | Max raw events fetched before compaction. Higher values give the compactor more context but increase LLM input size. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` | `15` | **Implemented** | Raw events appended after the compacted digest for immediate detail access. Set to `0` to disable. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
@@ -1518,6 +1544,7 @@ Configure execution debug storage for DAG visualization and debugging. This feat
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | **Implemented** | Maximum executions returned by one framework conversation lookup | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | **Implemented** | Maximum conversation-index members scanned by one framework lookup, including stale members | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | **Implemented** | Per-write timeout for asynchronous execution-debug persistence. Code configuration through `WithExecutionStoreWriteTimeout` has higher precedence. | [orchestration/config_resolution.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/config_resolution.go) |
+| `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` | `5s` | **Implemented** | Joined request-resource cleanup deadline, independent of caller cancellation. Explicit empty/invalid/non-positive values fail in strict and compatible modes. `WithExecutionCleanupTimeout` overrides valid env settings. | [orchestration/execution_resources.go](../../orchestration/execution_resources.go) |
 
 The two conversation limits accept only positive integers. Missing, malformed,
 zero, or negative values retain the safe defaults. Environment values populate
@@ -1974,6 +2001,7 @@ and Registry Viewer examples, see the
 | `TRUVAG3_SKILL_CACHE_MODE` | `local` | **Implemented** | `local` for verified immutable-body LRU caching or `disabled`. Aliases and catalog reads are never cached. |
 | `TRUVAG3_SKILL_CACHE_MAX_BYTES` | `16777216` | **Implemented** | Positive byte capacity of the process-local immutable-content cache. |
 | `TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT` | `5s` | **Implemented** | Positive timeout for each runtime registry operation. |
+| `TRUVAG3_SKILL_RESOURCE_SELECTION_ATTEMPT_TIMEOUT` | `0s` | **Implemented** | Nonnegative duration for each built-in resource AI attempt; zero inherits parent. Resource v2 retries timeout within two total attempts. |
 | `TRUVAG3_SKILL_ACTIVATION_MODEL` | agent/client model | **Implemented** | Model intent for the bounded activation selector. |
 | `TRUVAG3_SKILL_RESOURCE_MODEL` | agent/client model | **Implemented** | Model intent for the bounded resource selector. |
 | `TRUVAG3_SKILL_ACTIVATION_GUIDANCE_FILE` | none | **Implemented** | Mounted UTF-8 file containing bounded additive activation-selector guidance. |
@@ -2011,6 +2039,14 @@ strict JSON parsing, retry count, fixed prompts, and output ceilings are
 framework contracts and are not environment switches. The unset response
 format avoids provider-specific wire values; the fixed prompt/parser/retry path
 still enforces structured JSON output.
+
+Resource selector v2 accepts a complete outer JSON/unlabelled fence before strict
+body validation. Its retry eligibility includes child-attempt timeout, within
+the unchanged two-attempt ceiling; activation is unchanged. The attempt-duration
+setting is tunable: code zero is unset, nonzero code wins over env, and explicit
+env `0s` inherits the parent deadline. Invalid consulted values fail in both
+compatible and strict modes; disabled-env mode ignores them. Optional omission
+is diagnosed, while parent cancellation remains terminal.
 
 ### Runtime limits
 
@@ -2249,3 +2285,12 @@ To use these variables, you would need to either:
 - [AI Module README](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md)
 - [Telemetry README](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md)
 - [Auto-Discovery Guide](../operations/AUTO_DISCOVERY_GUIDE.md)
+
+### Builtin event-summary deadline
+
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT`: positive Go duration, default
+`2m`, resolved by `orchestration.BuildMemoryHooks`. Explicit empty, malformed,
+non-positive or overflowing values fail construction even when AI or memory is
+absent. Only the builtin AI invocation gets a child deadline; shorter enclosing
+contexts win. Custom summarizers are unchanged. Direct constructor users choose
+`WithSummarizerTimeout`; that layer does not read this environment variable.

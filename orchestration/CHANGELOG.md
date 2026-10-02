@@ -1,5 +1,86 @@
 # Changelog
 
+## Unreleased — typed bindings and failed-operation evidence (2026-09-30)
+
+- Preserve exact whole-value container bindings and JSON-looking string inputs;
+  reject known container/scalar mismatches before dispatch without changing
+  semantic nested extraction or application transform/approval ordering.
+- Add configurable bounded same-attempt failure evidence to continuation and
+  both built-in synthesis paths, an application restriction interface and an
+  explicit delegation projector. Raw records and custom synthesizers remain
+  unchanged. Report effective encoded limits, omissions and successful-step
+  retention tradeoffs in request-correlated span events.
+
+## Unreleased — bounded digest windows (2026-09-30)
+
+- Reuse activity digests only for an observed, matching bounded event window
+  and configuration/AI identity. Deduplicate exact content, admit late events,
+  rebaseline after expiry/edits/eviction, and preserve the prior cache on failure.
+  Keep legacy episodic APIs fail-open; unknown read health bypasses cache reuse.
+  Add read-health and digest-window hook effects plus bounded trace diagnostics.
+
+## Unreleased — post-memory verification corrections (2026-09-29)
+
+- Emit request lifecycle independently of step success, with monotonic record
+  revisions and latest-snapshot merges for delayed hook effects. Preserve legacy
+  unknown state and request-ID-linked resume. Own activity renewal per request,
+  serialize status changes, and join renewal before all-exit bounded cleanup;
+  submission telemetry does not assert backend health.
+
+- Manage token-safe investigation claims in a private request-segment scope with
+  observed, bounded all-exit cleanup and fresh resume acquisition. Preserve the
+  legacy custom-coordinator/direct-hook path. Add configurable 5s cleanup timeout
+  with fail-fast explicit values; preserve original failure/panic and raw payloads.
+
+- Return construction errors from `BuildMemoryHooks`; validate all hook-owned
+  numeric environment values even without AI/dependencies. Keep absent defaults,
+  zero-detail/zero-announcement sentinels and runtime fail-open. Update in-repo
+  callers to validate synchronously before orchestrator startup. Reject non-finite
+  weights/temperatures and overflowing calculated summary allowances.
+- Classify declared prior-phase template inclusions as Debug rather than missing
+  dependencies. Preserve legacy inclusion totals/metadata, with additive bounded
+  reason telemetry; no scheduling or parameter-binding changes.
+- Accept one complete summary array with plain prose before and/or after it.
+  Preserve exact decoded payloads and truncated-prefix fallback behavior;
+  reject additional JSON values/envelopes or ambiguous multiple arrays.
+
+## Unreleased
+
+- Compact request-local memory event provenance into self-contained tuples with
+  a budgeted field legend and `event-detail/v1` view identity in hook effects and
+  traces. Preserve exact admitted IDs, named entity fields, section priority and
+  explicit omissions. Stored events and full compactor inputs remain unchanged.
+
+- Align both built-in event-summary prompts on the complete entity output
+  contract. Add retained-summary entity-field coverage to existing hook effects,
+  trace events and completion logs without redefining batch/provider success,
+  changing the public summarizer interface or adding model calls. Preserve exact
+  IDs, valid summary text and custom/explicit-metadata extraction paths.
+
+- Preserve complete, individually valid event summaries before a truncated JSON
+  suffix, with call-local complete/partial/fallback coverage and one recorder-owned
+  fallback pass. Keep custom summarizers and model-derived entity extraction.
+  Reject empty compactor digests without replacing usable cached history.
+- Add semantic summary outcome telemetry alongside legacy provider-completion
+  metrics; carry coverage in existing hook effects and use the actual trace ID
+  (not a request ID) for newly recorded memory events.
+
+- Bound derived memory views with complete encoded records, UTF-8-safe labelled
+  shortening and admission/omission counts. Preserve stored events and existing
+  section priority; deduplicate admitted rather than fetched records. Wire the
+  existing enrichment-budget environment setting into raw and compacted hook
+  construction, validate overflow and advance the digest view to v3.
+- Count optional resource omission once per operation while preserving timeout
+  diagnostics for each attempt and terminal parent cancellation.
+- Render compact declared return fields in both full and tier-selected planner
+  catalogs, including capabilities without a top-level return type.
+- Version historical memory digest views, retain event/request origins and
+  times, and distinguish request-start history from current execution evidence.
+- Resource selector v2 accepts complete outer JSON fences and supports a
+  configurable per-attempt deadline with one timeout retry within two attempts.
+  Activation remains unchanged; timeout omissions and parent cancellation are
+  distinct, and zero retains the prior parent-inherited deadline.
+
 ## v0.5.0
 
 See the [root changelog](../CHANGELOG.md)
@@ -84,3 +165,11 @@ request-local atomicity, and separate advisory debug indexes.
 The subsequent API cleanup does not change the new canonical key schema
 further. This is not compatibility with the v0.4.0 numbered-DB layout. See the
 [root changelog](../CHANGELOG.md) for the development-only cleanup authorization.
+
+### Pending-work completion — 2026-10-01
+
+- Attribute returned and stored terminal execution results to the owning request
+  segment with copy-on-write metadata, including early failure publishers.
+- Bound builtin event-summary AI calls to a configurable 2m default; distinguish
+  child timeout from parent cancellation and retain successful late responses.
+- Preserve plan validation, regeneration and executor behavior unchanged.

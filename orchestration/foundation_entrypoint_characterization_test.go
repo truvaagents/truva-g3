@@ -465,10 +465,10 @@ func TestFoundationLifecycle_FailuresEmitExactlyOneDeliveryCompletion(t *testing
 			}
 			orchestrator.executionWg.Wait()
 			records, _ := store.snapshot()
-			if len(records) != 1 || len(records[0].PipelineHooks) != 1 {
-				t.Fatalf("stored before-planning diagnostics = %#v, want one record and hook", records)
+			if len(records) != 2 || len(records[1].PipelineHooks) != 1 || records[1].Lifecycle == nil || records[1].Lifecycle.State != RequestLifecycleFailed {
+				t.Fatalf("stored before-planning diagnostics = %#v, want diagnostic then settled lifecycle with one hook", records)
 			}
-			hookRecord := records[0].PipelineHooks[0]
+			hookRecord := records[1].PipelineHooks[0]
 			if hookRecord.HookName != "foundation-invalid-decision" ||
 				hookRecord.Phase != PipelineHookPhaseBeforePlanning ||
 				hookRecord.Status != PipelineHookFailed || hookRecord.Error == "" {

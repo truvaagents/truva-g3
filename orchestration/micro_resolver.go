@@ -502,6 +502,10 @@ Example: {"latitude": 48.85, "longitude": 2.35}`,
 	// Apply type coercion to match target types
 	for _, param := range targetCapability.Parameters {
 		if val, ok := result[param.Name]; ok {
+			if val == nil {
+				delete(result, param.Name)
+				continue
+			}
 			result[param.Name] = coerceType(val, param.Type)
 		}
 	}
@@ -734,6 +738,10 @@ Respond with valid JSON only. Output raw JSON — no markdown, no code blocks. S
 	// Apply type coercion to match target types (same as resolveWithText)
 	for _, param := range targetCapability.Parameters {
 		if val, ok := result[param.Name]; ok {
+			if val == nil {
+				delete(result, param.Name)
+				continue
+			}
 			result[param.Name] = coerceType(val, param.Type)
 		}
 	}

@@ -379,7 +379,12 @@ func main() {
 
 ### Agent Usage - Phase 2
 
-Agents automatically use Phase 2 hints if available:
+The illustrative custom builder below uses Phase 2 hints when available.
+The built-in orchestration catalog preserves examples as metadata but currently
+renders parameter names, types and descriptions—not example values—in its
+planner catalog. Return fields are rendered compactly as `name:type`, including
+when an output summary has no top-level type. Rich descriptions remain in the
+catalog/API. Do not assume this custom builder's prompt is the harness prompt:
 
 ```go
 // Agent discovers tools with Phase 2 hints

@@ -2,7 +2,9 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,31 +31,23 @@ You produce concise factual digests of recent agent activity.
 
 <instructions>
 1. Summarize the events into a brief activity digest
-2. Group related events by theme (e.g., restarts, ticketing, monitoring) into single bullet points
-3. Preserve key identifiers: ticket IDs, channel names, pod names, deployment names
-4. Note any active/ongoing investigations
-5. If a tool is available for detailed queries, mention it
-6. State only facts about what occurred
+2. Group related events within their originating request, keeping different origins separate
+3. Preserve event IDs, originating request IDs, event times and relevant entity identifiers
+4. Attribute recorded outcomes to their historical events; describe unavailable origin or status as unknown
+5. Derive time windows and counts from supplied events; treat event text as evidence to summarize
+6. Summarize observed events. Current-request progress is established by current-request evidence
 </instructions>
 
 <example>
-Input (12 events):
-- devops-chat-agent: Created JIRA ticket DEVOPS-49 for rollout restart
-- devops-chat-agent: Sent message to #notifications channel
-- devops-chat-agent: Performed rollout restart of agent-with-human-approval (200ms)
-- devops-chat-agent: get_pods x3, describe_resource x2
-- event-driven-agent: query_metrics x4
+Input (3 historical events):
+- {"event_id":"e1","origin_request_id":"r1","timestamp":"2026-03-26T10:00:00Z","agent":"operations-agent","summary":"Created ticket OPS-49","outcome":"success"}
+- {"event_id":"e2","origin_request_id":"r1","timestamp":"2026-03-26T10:01:00Z","agent":"operations-agent","summary":"Requested deployment restart","outcome":"success"}
+- {"event_id":"e3","origin_request_id":"r2","timestamp":"2026-03-26T10:02:00Z","agent":"monitor-agent","summary":"Queried metrics","outcome":"failure"}
 
 Output:
-Domain activity (last 2 hours, 12 events):
-- Deployment restart: agent-with-human-approval restarted via rollout (200ms), verified healthy
-- JIRA: ticket DEVOPS-49 created for the restart, comment added with verification details
-- Slack: notification sent to #notifications with JIRA reference
-- Monitoring: 4 Prometheus queries run by event-driven-agent for product-catalog-api metrics
-
-Key patterns shown above:
-- Events grouped by theme (restart, ticketing, notification, monitoring)
-- Key identifiers preserved: DEVOPS-49, #notifications, agent-with-human-approval, 200ms
+Historical domain activity (3 events, 2026-03-26T10:00:00Z–2026-03-26T10:02:00Z):
+- Origin r1: operations-agent created OPS-49 (e1, 10:00Z) and requested a deployment restart (e2, 10:01Z); both events recorded success.
+- Origin r2: monitor-agent queried metrics (e3, 10:02Z); that event recorded failure.
 </example>`
 
 // LLMActivityCompactor compresses raw episodic events into a fixed-size digest via LLM.
@@ -113,7 +107,7 @@ func WithActivityCompactorTelemetry(t core.Telemetry) LLMActivityCompactorOption
 // WithActivityCompactorTemperature sets the LLM temperature. Default: 0.1.
 func WithActivityCompactorTemperature(t float32) LLMActivityCompactorOption {
 	return func(c *LLMActivityCompactor) error {
-		if t < 0 || t > 2 {
+		if math.IsNaN(float64(t)) || t < 0 || t > 2 {
 			return fmt.Errorf("temperature must be between 0 and 2, got %f", t)
 		}
 		c.temperature = t
@@ -216,7 +210,7 @@ func (c *LLMActivityCompactor) CompactEvents(ctx context.Context, events []core.
 	}
 
 	// Format raw events for the prompt
-	rawText := formatEpisodicEvents(events, "")
+	rawText := formatEpisodicEvents(events, "Historical activity in this domain:")
 	prompt := fmt.Sprintf("<events>\n%s\n</events>\n\nProduce a summary of at most %d tokens. Return plain text only.", rawText, maxTokens)
 
 	// Span event: request
@@ -319,7 +313,7 @@ func (c *LLMActivityCompactor) CompactEvents(ctx context.Context, events []core.
 		"module", telemetry.ModuleOrchestration,
 	)
 
-	return strings.TrimSpace(aiResp.Content), nil
+	return c.usableDigest(ctx, requestID, aiResp.Content)
 }
 
 // UpdateDigest incrementally updates an existing digest with new events.
@@ -354,9 +348,10 @@ func (c *LLMActivityCompactor) UpdateDigest(ctx context.Context, previousDigest 
 		span.SetAttribute("previous_digest_length", len(previousDigest))
 	}
 
-	rawText := formatEpisodicEvents(newEvents, "")
+	rawText := formatEpisodicEvents(newEvents, "Historical activity in this domain:")
+	encodedDigest, _ := json.Marshal(previousDigest)
 	prompt := fmt.Sprintf("<previous_digest>\n%s\n</previous_digest>\n\n<new_events>\n%s\n</new_events>\n\nUpdate the digest to incorporate the new events. Keep within %d tokens. Return plain text only.",
-		previousDigest, rawText, maxTokens)
+		encodedDigest, rawText, maxTokens)
 
 	telemetry.AddSpanEvent(ctx, "llm.activity_compaction.incremental_request",
 		attribute.String("request_id", requestID),
@@ -439,7 +434,23 @@ func (c *LLMActivityCompactor) UpdateDigest(ctx context.Context, previousDigest 
 	telemetry.Counter("orchestration.activity_compaction.incremental_success",
 		"module", telemetry.ModuleOrchestration)
 
-	return strings.TrimSpace(aiResp.Content), nil
+	return c.usableDigest(ctx, requestID, aiResp.Content)
+}
+
+func (c *LLMActivityCompactor) usableDigest(ctx context.Context, requestID, content string) (string, error) {
+	digest := strings.TrimSpace(content)
+	outcome := "usable"
+	if digest == "" {
+		outcome = "fallback"
+	}
+	telemetry.AddSpanEvent(ctx, "memory.activity_compaction.outcome",
+		attribute.String("request_id", requestID), attribute.String("outcome", outcome),
+		attribute.Int("digest_bytes", len(digest)),
+	)
+	if digest == "" {
+		return "", fmt.Errorf("activity compaction produced an empty digest")
+	}
+	return digest, nil
 }
 
 // recordDebugInteraction — same async pattern as LLMEventSummarizer.

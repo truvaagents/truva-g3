@@ -55,7 +55,8 @@ func BuildReflectionJob(
 	opts ...ReflectionJobOption,
 ) (*ReflectionJob, error) {
 	// Phase 2 required — return nil (not error) when backends are unavailable.
-	// Same fail-open pattern as BuildMemoryHooks returning empty hooks list.
+	// Optional reflection has its own fallback contract; shared-memory hook
+	// construction separately returns invalid-configuration errors.
 	if deps == nil || deps.Episodic == nil || deps.Knowledge == nil || deps.Embedder == nil {
 		return nil, nil
 	}

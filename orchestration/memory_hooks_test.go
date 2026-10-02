@@ -329,13 +329,14 @@ func TestMemoryRecordHook_SkipsOnlySkippedSteps(t *testing.T) {
 				Instruction: "Do something on pod pod-fail1",
 				Parameters:  map[string]interface{}{"entity_type": "pod", "entity_id": "pod-fail1"}},
 			{StepID: "step-2", Success: true, Skipped: true, AgentName: "tool-b", Capability: "action_b"},
+			{StepID: "step-3", Success: false, Skipped: true, AgentName: "tool-c", Capability: "action_c", Error: "dependency failed"},
 		},
 	}
 
 	hook.AfterExecution(context.Background(), &core.PipelineContext{}, result)
 	// Failed steps ARE recorded (other agents need to know about failures).
 	// Skipped steps are NOT recorded (no execution occurred).
-	assert.GreaterOrEqual(t, episodic.RecordEventCt, 1, "should record failed steps")
+	assert.Equal(t, 1, episodic.RecordEventCt, "record the actual failure, not dependency or refinement skips")
 }
 
 func TestMemoryRecordHook_DelegationDetection(t *testing.T) {
@@ -740,14 +741,14 @@ func TestDigestCache_CacheMiss_FullCompact(t *testing.T) {
 
 	digestCache := &core.MockDigestCache{} // Returns nil on Get (cache miss)
 
-	episodic := &core.MockEpisodicMemory{
+	episodic := &observedCacheFixture{
 		QueryRecentEventsFn: func(ctx context.Context, domain string, since time.Time, limit int) ([]core.AgentEvent, error) {
 			return events, nil
 		},
 	}
 
 	hook, err := NewMemoryEnrichmentHook(episodic, nil, "test-agent", "test-domain",
-		WithActivityCompactor(compactor),
+		withStableTestCompactor(compactor),
 		WithDigestCache(digestCache),
 		WithCompactionRawLimit(200),
 		WithCompactionRecentDetail(5),
@@ -779,23 +780,17 @@ func TestDigestCache_CacheHit_NoNewEvents(t *testing.T) {
 	baseTime := time.Now().Add(-1 * time.Hour)
 	lastEventTS := baseTime.Add(29 * time.Minute) // Timestamp of newest cached event
 
-	cached := cachedDigestData{
+	cached := cachedDigestData{ViewVersion: activityDigestViewVersion,
+		Window:      testDigestWindow(t, makeEvents(30, baseTime)),
 		Content:     "cached-digest-content",
 		LastEventTS: lastEventTS,
 		GeneratedAt: time.Now().Add(-2 * time.Minute),
 	}
 	cachedJSON, _ := json.Marshal(cached)
 
-	callCount := 0
-	episodic := &core.MockEpisodicMemory{
+	episodic := &observedCacheFixture{
 		QueryRecentEventsFn: func(ctx context.Context, domain string, since time.Time, limit int) ([]core.AgentEvent, error) {
-			callCount++
-			if callCount == 1 {
-				// First call: initial query (returns events for the baseline)
-				return makeEvents(30, baseTime), nil
-			}
-			// Second call: query for events after lastEventTS — none
-			return nil, nil
+			return makeEvents(30, baseTime), nil
 		},
 	}
 
@@ -808,7 +803,7 @@ func TestDigestCache_CacheHit_NoNewEvents(t *testing.T) {
 	}
 
 	hook, err := NewMemoryEnrichmentHook(episodic, nil, "test-agent", "test-domain",
-		WithActivityCompactor(compactor),
+		withStableTestCompactor(compactor),
 		WithDigestCache(digestCache),
 		WithCompactionRecentDetail(5),
 	)
@@ -833,12 +828,12 @@ func TestDigestCache_CacheHit_NoNewEvents(t *testing.T) {
 
 func TestDigestCacheUsesStableAIFingerprintAndBypassesUnstable(t *testing.T) {
 	events := makeEvents(3, time.Now().Add(-time.Hour))
-	episodic := &core.MockEpisodicMemory{
+	episodic := &observedCacheFixture{
 		QueryRecentEventsFn: func(context.Context, string, time.Time, int) ([]core.AgentEvent, error) {
 			return events, nil
 		},
 	}
-	staleJSON, err := json.Marshal(cachedDigestData{
+	staleJSON, err := json.Marshal(cachedDigestData{ViewVersion: activityDigestViewVersion,
 		Content:           "stale-digest",
 		LastEventTS:       newestEventTS(events),
 		GeneratedAt:       time.Now(),
@@ -850,7 +845,7 @@ func TestDigestCacheUsesStableAIFingerprintAndBypassesUnstable(t *testing.T) {
 	}
 	compactor := &fingerprintActivityCompactor{fingerprint: "policy-v2", stable: true}
 	hook, err := NewMemoryEnrichmentHook(episodic, nil, "agent", "domain",
-		WithActivityCompactor(compactor), WithDigestCache(cache))
+		withStableTestCompactor(compactor), WithDigestCache(cache))
 	require.NoError(t, err)
 	_, err = hook.BeforePlanning(t.Context(), &core.PipelineContext{Enrichments: map[string]interface{}{}})
 	require.NoError(t, err)
@@ -883,22 +878,20 @@ func TestDigestCache_CacheHit_FewNewEvents_IncrementalUpdate(t *testing.T) {
 	lastEventTS := baseTime.Add(29 * time.Minute)
 	newEvents := makeEvents(5, lastEventTS.Add(time.Minute)) // 5 new events after cache
 
-	cached := cachedDigestData{
+	cached := cachedDigestData{ViewVersion: activityDigestViewVersion,
+		Window:      testDigestWindow(t, makeEvents(30, baseTime)),
 		Content:     "old-digest",
 		LastEventTS: lastEventTS,
 		GeneratedAt: time.Now().Add(-2 * time.Minute),
 	}
 	cachedJSON, _ := json.Marshal(cached)
 
-	callCount := 0
-	episodic := &core.MockEpisodicMemory{
+	for i := range newEvents {
+		newEvents[i].EventID = "new-" + newEvents[i].EventID
+	}
+	episodic := &observedCacheFixture{
 		QueryRecentEventsFn: func(ctx context.Context, domain string, since time.Time, limit int) ([]core.AgentEvent, error) {
-			callCount++
-			if callCount == 1 {
-				return makeEvents(30, baseTime), nil
-			}
-			// Second call: query for events after lastEventTS — returns 5 new
-			return newEvents, nil
+			return append(makeEvents(30, baseTime), newEvents...), nil
 		},
 	}
 
@@ -919,7 +912,7 @@ func TestDigestCache_CacheHit_FewNewEvents_IncrementalUpdate(t *testing.T) {
 	}
 
 	hook, err := NewMemoryEnrichmentHook(episodic, nil, "test-agent", "test-domain",
-		WithActivityCompactor(compactor),
+		withStableTestCompactor(compactor),
 		WithDigestCache(digestCache),
 		WithIncrementalThreshold(20),
 		WithCompactionRecentDetail(5),
@@ -957,27 +950,20 @@ func TestDigestCache_CacheHit_ManyNewEvents_FullRecompact(t *testing.T) {
 	// 50 new events (above threshold of 20)
 	manyNewEvents := makeEvents(50, lastEventTS.Add(time.Minute))
 
-	cached := cachedDigestData{
+	cached := cachedDigestData{ViewVersion: activityDigestViewVersion,
+		Window:      testDigestWindow(t, makeEvents(30, baseTime)),
 		Content:     "stale-digest",
 		LastEventTS: lastEventTS,
 		GeneratedAt: time.Now().Add(-10 * time.Minute),
 	}
 	cachedJSON, _ := json.Marshal(cached)
 
-	callCount := 0
-	episodic := &core.MockEpisodicMemory{
+	for i := range manyNewEvents {
+		manyNewEvents[i].EventID = "new-" + manyNewEvents[i].EventID
+	}
+	episodic := &observedCacheFixture{
 		QueryRecentEventsFn: func(ctx context.Context, domain string, since time.Time, limit int) ([]core.AgentEvent, error) {
-			callCount++
-			if callCount == 1 {
-				return makeEvents(30, baseTime), nil
-			}
-			if callCount == 2 {
-				// Second call: query for events after lastEventTS — 50 new (above threshold)
-				return manyNewEvents, nil
-			}
-			// Third call: full re-fetch for burst recompaction
-			allEvents := append(makeEvents(30, baseTime), manyNewEvents...)
-			return allEvents, nil
+			return append(makeEvents(30, baseTime), manyNewEvents...), nil
 		},
 	}
 
@@ -994,7 +980,7 @@ func TestDigestCache_CacheHit_ManyNewEvents_FullRecompact(t *testing.T) {
 	}
 
 	hook, err := NewMemoryEnrichmentHook(episodic, nil, "test-agent", "test-domain",
-		WithActivityCompactor(compactor),
+		withStableTestCompactor(compactor),
 		WithDigestCache(digestCache),
 		WithIncrementalThreshold(20), // 50 > 20 → burst
 		WithCompactionRecentDetail(5),
@@ -1030,14 +1016,14 @@ func TestDigestCache_CompactError_CacheMiss_FallsOpenToRawEvents(t *testing.T) {
 
 	digestCache := &core.MockDigestCache{} // cache miss
 
-	episodic := &core.MockEpisodicMemory{
+	episodic := &observedCacheFixture{
 		QueryRecentEventsFn: func(ctx context.Context, domain string, since time.Time, limit int) ([]core.AgentEvent, error) {
 			return events, nil
 		},
 	}
 
 	hook, err := NewMemoryEnrichmentHook(episodic, nil, "test-agent", "test-domain",
-		WithActivityCompactor(compactor),
+		withStableTestCompactor(compactor),
 		WithDigestCache(digestCache),
 		WithEnrichmentRecentEventsLimit(10),
 	)
@@ -1054,29 +1040,28 @@ func TestDigestCache_CompactError_CacheMiss_FallsOpenToRawEvents(t *testing.T) {
 	// Should fall open — RAG context with raw events
 	ragCtx, ok := pctx.Enrichments[core.EnrichmentRAGContext].(string)
 	assert.True(t, ok, "should inject raw event context on compaction failure")
-	assert.Contains(t, ragCtx, "Recent activity in this domain:")
+	assert.Contains(t, ragCtx, "Historical domain events:")
 }
 
-func TestDigestCache_IncrementalError_FallsBackToStaleCache(t *testing.T) {
+func TestDigestCache_IncrementalError_FallsBackToCurrentRawEvents(t *testing.T) {
 	baseTime := time.Now().Add(-1 * time.Hour)
 	lastEventTS := baseTime.Add(29 * time.Minute)
 	newEvents := makeEvents(5, lastEventTS.Add(time.Minute))
 
-	cached := cachedDigestData{
+	cached := cachedDigestData{ViewVersion: activityDigestViewVersion,
+		Window:      testDigestWindow(t, makeEvents(30, baseTime)),
 		Content:     "stale-but-usable-digest",
 		LastEventTS: lastEventTS,
 		GeneratedAt: time.Now().Add(-3 * time.Minute),
 	}
 	cachedJSON, _ := json.Marshal(cached)
 
-	callCount := 0
-	episodic := &core.MockEpisodicMemory{
+	for i := range newEvents {
+		newEvents[i].EventID = "new-" + newEvents[i].EventID
+	}
+	episodic := &observedCacheFixture{
 		QueryRecentEventsFn: func(ctx context.Context, domain string, since time.Time, limit int) ([]core.AgentEvent, error) {
-			callCount++
-			if callCount == 1 {
-				return makeEvents(30, baseTime), nil
-			}
-			return newEvents, nil
+			return append(makeEvents(30, baseTime), newEvents...), nil
 		},
 	}
 
@@ -1093,7 +1078,7 @@ func TestDigestCache_IncrementalError_FallsBackToStaleCache(t *testing.T) {
 	}
 
 	hook, err := NewMemoryEnrichmentHook(episodic, nil, "test-agent", "test-domain",
-		WithActivityCompactor(compactor),
+		withStableTestCompactor(compactor),
 		WithDigestCache(digestCache),
 		WithIncrementalThreshold(20),
 		WithCompactionRecentDetail(5),
@@ -1108,10 +1093,10 @@ func TestDigestCache_IncrementalError_FallsBackToStaleCache(t *testing.T) {
 	_, err = hook.BeforePlanning(context.Background(), pctx)
 	assert.NoError(t, err)
 
-	// Should fall back to stale cache
+	// Preserve the cache, but expose current raw evidence instead.
 	ragCtx, ok := pctx.Enrichments[core.EnrichmentRAGContext].(string)
 	assert.True(t, ok)
-	assert.Contains(t, ragCtx, "stale-but-usable-digest", "should use stale cache on incremental failure")
+	assert.Contains(t, ragCtx, "Historical domain events:", "current raw evidence replaces an uncovered stale digest")
 }
 
 func TestDigestCache_NilCache_FullCompactEveryTime(t *testing.T) {
@@ -1124,7 +1109,7 @@ func TestDigestCache_NilCache_FullCompactEveryTime(t *testing.T) {
 		},
 	}
 
-	episodic := &core.MockEpisodicMemory{
+	episodic := &observedCacheFixture{
 		QueryRecentEventsFn: func(ctx context.Context, domain string, since time.Time, limit int) ([]core.AgentEvent, error) {
 			return events, nil
 		},
@@ -1132,7 +1117,7 @@ func TestDigestCache_NilCache_FullCompactEveryTime(t *testing.T) {
 
 	// No digestCache configured
 	hook, err := NewMemoryEnrichmentHook(episodic, nil, "test-agent", "test-domain",
-		WithActivityCompactor(compactor),
+		withStableTestCompactor(compactor),
 		WithCompactionRecentDetail(5),
 	)
 	require.NoError(t, err)
@@ -1152,29 +1137,25 @@ func TestDigestCache_NilCache_FullCompactEveryTime(t *testing.T) {
 	assert.Contains(t, ragCtx, "no-cache-digest")
 }
 
-func TestDigestCache_BurstRecompactError_FallsBackToStaleCache(t *testing.T) {
+func TestDigestCache_BurstRecompactError_FallsBackToCurrentRawEvents(t *testing.T) {
 	baseTime := time.Now().Add(-2 * time.Hour)
 	lastEventTS := baseTime.Add(29 * time.Minute)
 	manyNewEvents := makeEvents(50, lastEventTS.Add(time.Minute))
 
-	cached := cachedDigestData{
+	cached := cachedDigestData{ViewVersion: activityDigestViewVersion,
+		Window:      testDigestWindow(t, makeEvents(30, baseTime)),
 		Content:     "stale-burst-digest",
 		LastEventTS: lastEventTS,
 		GeneratedAt: time.Now().Add(-10 * time.Minute),
 	}
 	cachedJSON, _ := json.Marshal(cached)
 
-	callCount := 0
-	episodic := &core.MockEpisodicMemory{
+	for i := range manyNewEvents {
+		manyNewEvents[i].EventID = "new-" + manyNewEvents[i].EventID
+	}
+	episodic := &observedCacheFixture{
 		QueryRecentEventsFn: func(ctx context.Context, domain string, since time.Time, limit int) ([]core.AgentEvent, error) {
-			callCount++
-			if callCount == 1 {
-				return makeEvents(30, baseTime), nil
-			}
-			if callCount == 2 {
-				return manyNewEvents, nil
-			}
-			return makeEvents(80, baseTime), nil
+			return append(makeEvents(30, baseTime), manyNewEvents...), nil
 		},
 	}
 
@@ -1191,7 +1172,7 @@ func TestDigestCache_BurstRecompactError_FallsBackToStaleCache(t *testing.T) {
 	}
 
 	hook, err := NewMemoryEnrichmentHook(episodic, nil, "test-agent", "test-domain",
-		WithActivityCompactor(compactor),
+		withStableTestCompactor(compactor),
 		WithDigestCache(digestCache),
 		WithIncrementalThreshold(20),
 		WithCompactionRecentDetail(5),
@@ -1208,7 +1189,7 @@ func TestDigestCache_BurstRecompactError_FallsBackToStaleCache(t *testing.T) {
 
 	ragCtx, ok := pctx.Enrichments[core.EnrichmentRAGContext].(string)
 	assert.True(t, ok)
-	assert.Contains(t, ragCtx, "stale-burst-digest", "burst recompact failure should fall back to stale cache")
+	assert.Contains(t, ragCtx, "Historical domain events:", "current raw evidence replaces an uncovered stale digest")
 }
 
 // --- Helper function tests ---
