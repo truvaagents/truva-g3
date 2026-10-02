@@ -163,8 +163,9 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.work
-      # Examples are intentionally out of go.work and use `replace` directives
-      # pointing to local framework source. We only verify they compile — no
+      # Examples are intentionally out of go.work. Install checkout-local
+      # replacements during CI so release-pinned examples also validate the
+      # framework changes in this checkout. We only verify they compile — no
       # tests, no lint, no vulnerability scan. This catches framework changes
       # that break example builds without subjecting examples to framework rigor.
       - name: Build all example modules
@@ -177,6 +178,12 @@ jobs:
           while IFS= read -r modfile; do
             dir=$(dirname "$modfile")
             echo "::group::build $dir"
+            # These edits exist only in the CI checkout; checked-in release
+            # dependencies and release Docker builds remain unchanged.
+            (cd "$dir" && go mod edit "-replace=github.com/truvaagents/truva-g3=${GITHUB_WORKSPACE}" &&
+              for framework_mod in ai core memory orchestration resilience telemetry; do
+                go mod edit "-replace=github.com/truvaagents/truva-g3/${framework_mod}=${GITHUB_WORKSPACE}/${framework_mod}"
+              done)
             # `go mod tidy` first because framework dep bumps (in core, ai,
             # memory, etc.) propagate to examples via replace directives,
             # which leaves each example's go.sum stale relative to current
