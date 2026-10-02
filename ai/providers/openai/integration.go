@@ -171,13 +171,14 @@ func (c *Client) executeWithCredential(
 	ctx context.Context,
 	request *http.Request,
 	credentialRequest ai.CredentialRequest,
-) (*http.Response, error) {
+	decode providers.ResponseAttemptDecoder,
+) (*core.AIResult, error) {
 	if c.credentialSource == nil {
-		return c.ExecuteWithRetry(ctx, request)
+		return c.ExecuteWithRetryDecoded(ctx, request, nil, decode)
 	}
-	return c.ExecuteWithRetryPrepared(ctx, request, func(attemptCtx context.Context, attempt *http.Request) error {
+	return c.ExecuteWithRetryDecoded(ctx, request, func(attemptCtx context.Context, attempt *http.Request) error {
 		return c.prepareCredential(attemptCtx, attempt, credentialRequest)
-	})
+	}, decode)
 }
 
 func (c *Client) prepareCredential(

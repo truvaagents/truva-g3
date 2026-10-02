@@ -79,6 +79,16 @@ func newRequestPolicyEngineWithIntegration(
 	mode requestpolicy.CompatibilityMode,
 ) (*requestpolicy.Engine, error) {
 	return requestpolicy.NewEngine(requestpolicy.Config{
+		// The routed endpoint contract is independent of native OpenAI. All
+		// advertised Luna endpoints omit temperature (reviewed 2026-09-28).
+		// Reuse policy modes, adjustment reporting and application overrides.
+		BuiltIns: []core.AIProviderPatch{{
+			Name: "openrouter-luna-sampling", Version: "1",
+			Selector: core.AIProviderSelector{
+				ProviderAlias: openRouterProviderAlias, Surface: "chat-completions", Model: "openai/gpt-6-luna",
+			},
+			Remove: []string{"/temperature"},
+		}},
 		AppRules:   appRules,
 		Middleware: middleware,
 		Mode:       mode,
@@ -150,6 +160,7 @@ func (c *Client) prepareSemantics(
 	}
 
 	reasoningEffort := options.ReasoningEffort
+	clientDefaultEffort := request.Generation.ReasoningEffort.Mode == core.AIParameterInherit && reasoningEffort == "" && c.ReasoningEffort != ""
 	if reasoningEffort == "" {
 		reasoningEffort = c.ReasoningEffort
 	}
@@ -168,7 +179,11 @@ func (c *Client) prepareSemantics(
 	}
 	preparationAdjustments := make([]core.AIRequestAdjustment, 0, 2)
 	if reasoningEffort != "" && caps.ReasoningStyle != "openai" {
-		providers.LogTranslationDegraded(ctx, c.Logger, providerAlias, options.Model, "reasoning_effort_stripped", "reasoning_effort")
+		if clientDefaultEffort {
+			providers.LogInheritedEffortOmitted(ctx, c.Logger, providerAlias, options.Model)
+		} else {
+			providers.LogTranslationDegraded(ctx, c.Logger, providerAlias, options.Model, "reasoning_effort_stripped", "reasoning_effort")
+		}
 		reasoningEffort = ""
 		if request.Generation.ReasoningEffort.Mode == core.AIParameterInherit {
 			preparationAdjustments = append(preparationAdjustments,

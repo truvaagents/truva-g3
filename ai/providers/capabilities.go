@@ -36,6 +36,9 @@ var modelCapabilities = []ModelCapabilities{
 	{ProviderAlias: "openai.openrouter", ModelPrefix: "deepseek/deepseek-v4.1-flash", ExactModel: true, SupportsJSONMode: true, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai.openrouter", ModelPrefix: "z-ai/glm-5.3-flash", ExactModel: true, SupportsJSONMode: true, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai.openrouter", ModelPrefix: "openai/gpt-5.6-luna", ExactModel: true, ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
+	// OpenRouter endpoint metadata reviewed 2026-09-28. Required-parameter routing
+	// filters endpoints without JSON/schema support; this is not a live inference certification.
+	{ProviderAlias: "openai.openrouter", ModelPrefix: "openai/gpt-6-luna", ExactModel: true, ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 
 	{ProviderAlias: "openai.groq", ModelPrefix: "", ReasoningStyle: "", SupportsJSONMode: false, SupportsJSONSchema: false, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai.groq", ModelPrefix: "gpt-oss", ReasoningStyle: "", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},

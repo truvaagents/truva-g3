@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.10
+**Version**: 1.11
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -179,6 +179,35 @@ agent with real OpenAI selection, JSON planning and streaming synthesis.
 distinguish these successful smoke runs from mocked coverage of other effort,
 override and rejection combinations. They do not certify native tool calling,
 all effort settings, arbitrary future IDs or output-ceiling behavior.
+
+### Scoped OpenRouter Compatibility and Default Adaptation
+
+OpenRouter's exact `openai/gpt-6-luna` capability row is independent of native
+GPT-6 classification. Endpoint metadata reviewed on 2026-09-28 advertises
+reasoning and selected endpoints advertise JSON/schema support. Required-parameter
+routing filters unsuitable endpoints. A scoped `openrouter-luna-sampling@1`
+built-in rule removes `/temperature`, using the existing request-policy engine,
+Compatible/Strict semantics and adjustment reports. No global alias changes or
+generic capability engine are introduced. This metadata/offline validation is
+not a live inference or current ZDR-endpoint availability certification.
+
+The codec validates both before policy evaluation and after it. Thus explicit
+temperature with active reasoning can fail at draft construction before a rule
+can remove it. The `none`-effort route reaches the sampling rule; inherited active
+reasoning sampling is already omitted by the codec. Existing pre-policy guards
+remain unchanged. Native OpenAI and unmatched routes keep their behavior and
+policy fingerprints. Application rules/middleware still own optional routing
+preferences; protected privacy and required-parameter settings remain enforced.
+
+OpenAI-compatible and direct Azure (classic/v1) adapters classify only unsupported
+**client-default** reasoning effort as normal adaptation: Debug logging and a
+retained request adjustment, without a degraded warning/event/counter. Explicit
+portable unsupported effort still fails; explicit omission is quiet; legacy
+per-request effort and native-extra degradation retain their warning paths.
+Azure now also records the omission adjustment. The shared degradation helper's
+behavior is unchanged. This applies to generate, stream and fingerprint
+preparation; it changes diagnostic counts intentionally, not provider retry or
+failover policy.
 
 ### OpenAI-Compatible Decode and SSE Boundary
 
@@ -902,6 +931,39 @@ Application composition examples belong in
 dependency, lifecycle, ordering, and classification contracts they must obey.
 
 ### Per-Provider Retry Budget
+
+OpenAI-compatible clients use the additive `ExecuteWithRetryDecoded` composition
+seam: one existing base loop owns the budget for both transport and decoded API
+failures. The provider supplies `ResponseAttemptDecoder`, returning result,
+normalized error, an explicit **same-provider** retry decision and a normalized
+semantic status. The codec remains decode-only. Legacy `ExecuteWithRetry` and
+`ExecuteWithRetryPrepared` remain transport-only for non-adopting providers;
+Azure, Anthropic and Gemini are not silently migrated to decoded retry behavior.
+Injected transports retain caller ownership; credentials are prepared on each
+attempt, while route, policy and serialized semantics are prepared once.
+
+The new helper consumes/closes API response bodies, including streams, inside
+the attempt. It retains only the terminal attempt's result, including partial
+failure evidence; earlier content and token totals are not merged into success.
+Available usage and sanitized response IDs are attempt-span observations, not
+additional logical request/token metrics. Stream output or callback termination
+prevents replay. Existing `ProviderError` chain flags retain their meanings.
+Recognized transient error types may retry; a genuine status-only 429/500/502/503/504
+may retry. Terminal or unknown nonempty types, image-download failures, and a
+synthetic fallback 500 do not grant new retry permission. A semantic 429/503 can
+honor `Retry-After` without rewriting the actual HTTP status. Constructors retain
+their defaults; consequently standalone/default heterogeneous OpenAI-compatible
+entries now also cover eligible decoded failures without an option change.
+
+**Compatibility change for OpenRouter:** this classifier also handles actual
+non-HTML HTTP error responses. Unlike the former status-only loop, an unknown
+nonempty error type stops same-provider retries even on HTTP 429/5xx, and untyped
+501/505 are not retried. Known terminal types also take precedence over a
+retryable-looking HTTP status. Other OpenAI-compatible aliases retain their
+HTTP status-based retry policy, subject to terminal provider/account errors.
+The outer chain failover policy is unchanged. Request-level regression coverage
+is `TestOpenRouterHTTPRetryNarrowing`; this is a deliberate narrowing, not a
+claim that every 5xx is transient.
 
 Inside each provider, `BaseClient.ExecuteWithRetry` may retry transient errors
 (5xx, 429, network, CDN) with exponential backoff. On exhausted JSON/API 429
@@ -1857,6 +1919,8 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.12 | 2026-09-30 | Opt-in decoded-attempt composition shares one provider retry budget; OpenAI-compatible adoption, transport-only adapter compatibility, per-attempt usage/status and stream no-replay boundaries |
+| 1.11 | 2026-09-28 | Scoped OpenRouter Luna metadata/sampling compatibility using the existing policy engine; documented pre-policy validation boundary; inherited-default reasoning omission diagnostics and report parity for OpenAI-compatible and direct Azure adapters |
 | 1.10 | 2026-09-26 | Added native GPT-6 family compatibility and post-policy validation, declarative family-boundary capability matching, developer overrides, token-ceiling limitations, prompt-cache migration guidance, and bounded three-model live-verification evidence |
 | 1.9 | 2026-08-22 | Added the OpenRouter provider contract and priority, application-composed circuit breaking, explicit OpenAI-wire token/response/SSE boundaries, and shared retry, failover, error-sanitization, observability, and cache-identity hardening; corrected the Together endpoint |
 | 1.8 | 2026-08-17 | Added Gemini's request-aware GenerateContent profile, static model-capability policy, HTTP integration seams, and corrected orchestration request-evidence semantics |

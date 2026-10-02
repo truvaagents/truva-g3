@@ -41,3 +41,17 @@ func TestLogTranslationDegradedCarriesBoundedRequestMetadata(t *testing.T) {
 func TestLogTranslationDegradedToleratesNilContextAndLogger(t *testing.T) {
 	LogTranslationDegraded(nil, nil, "openai", "model", "unsupported", "feature")
 }
+
+func TestInheritedEffortOmissionIsDebugAdaptation(t *testing.T) {
+	logger := &mockLogger{}
+	ctx := telemetry.WithBaggage(context.Background(), "request_id", "synthetic-default")
+	LogInheritedEffortOmitted(ctx, logger, "openai.openrouter", "synthetic-model")
+	if len(logger.warnCalls) != 0 || len(logger.debugCalls) != 1 {
+		t.Fatalf("debug=%d warn=%d", len(logger.debugCalls), len(logger.warnCalls))
+	}
+	fields := logger.debugCalls[0]
+	if fields["status"] != "adapted" || fields["source"] != "client-default" || fields["request_id"] != "synthetic-default" {
+		t.Fatalf("adaptation metadata = %#v", fields)
+	}
+	LogInheritedEffortOmitted(nil, nil, "openai", "synthetic-model")
+}

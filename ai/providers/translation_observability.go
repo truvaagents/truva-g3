@@ -8,6 +8,23 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
+// LogInheritedEffortOmitted reports normal adaptation of a client default to a
+// model without portable reasoning support. The adapter also retains its request
+// adjustment. Explicit/legacy request degradation continues through the separate
+// warning helper below; normal adaptation emits no degraded event or metric.
+func LogInheritedEffortOmitted(ctx context.Context, logger core.Logger, providerAlias, model string) {
+	if logger == nil {
+		return
+	}
+	fields := map[string]interface{}{
+		"operation": "ai_request", "provider_alias": providerAlias, "model": model,
+		"status": "adapted", "capability": "reasoning_effort", "source": "client-default",
+		"reason": "unsupported_model_capability",
+	}
+	AddObservationRequestID(ctx, fields)
+	logger.DebugWithContext(ctx, "Inapplicable AI client reasoning default omitted", fields)
+}
+
 func LogTranslationDegraded(ctx context.Context, logger core.Logger, providerAlias, model, warningType, capability string) {
 	fields := map[string]interface{}{
 		"operation":      "ai_request",

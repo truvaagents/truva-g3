@@ -72,6 +72,13 @@ import (
 
 ## Scenario 1: A Provider Rejects a Parameter It Used to Accept
 
+Rules apply after draft construction and before final validation. They cannot
+repair a request rejected by an earlier portable-feature or codec check. For
+example, explicit temperature with active reasoning can fail during OpenAI-wire
+draft construction. OpenRouter Luna's scoped built-in sampling rule works on the
+`none`-effort path without changing that shared validation contract. Confirm the
+actual final request with an offline transport before a paid compatibility probe.
+
 **Situation:** A newly released model family returns 400 for a parameter your
 requests always sent — for example, a sampling control such as `temperature`.
 This has happened in production before; it will happen again.
@@ -641,6 +648,12 @@ change collides with protected structure — a hosted surface that forbids the
 body `model`, a new wire contract, an SDK migration — the escalation path is a
 narrowly scoped custom adapter that reuses the framework's codec, policy,
 retry, and credential planes:
+
+For decoded provider-error recovery, adopt `BaseClient.ExecuteWithRetryDecoded`
+inside the adapter instead of wrapping a transport retry loop. The adapter
+classifies same-provider eligibility; the base owns one common budget. Public
+`ProviderError` failover flags remain distinct. Built-in OpenAI-compatible clients
+use this seam; other adapters retain their existing transport-only behavior.
 
 - [The Three Integration Levels](CUSTOM_AI_PROVIDER_GUIDE.md#the-three-integration-levels)
   — confirm you actually need Level 3.

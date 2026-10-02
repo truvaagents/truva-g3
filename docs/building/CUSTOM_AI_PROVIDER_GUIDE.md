@@ -1,5 +1,12 @@
 # Custom AI Providers and Enterprise Integration Guide
 
+For the scoped OpenRouter Luna sampling rule, existing Compatible/Strict modes
+and inherited-default omission diagnostics (including Azure parity), see the
+[AI architecture contract](https://github.com/truvaagents/truva-g3/blob/main/ai/ARCHITECTURE.md#scoped-openrouter-compatibility-and-default-adaptation).
+Rules run after initial draft validation; they do not bypass an earlier feature
+rejection. Verify concrete provider routing, required parameters and protected
+privacy together before live rollout.
+
 Welcome to the TruvaG3 custom AI provider guide! This guide begins where the
 [AI Providers Setup Guide](AI_PROVIDERS_SETUP_GUIDE.md#request-aware-and-custom-integrations)
 ends. It covers enterprise integration hooks and the contracts needed to add a
@@ -2533,6 +2540,21 @@ headers such as `Content-Type` in the transport layer, and call
 `providers.BaseClient.ExecuteWithRetry` or `ExecuteWithRetryPrepared`. Decode a
 successful response with `client.codec.Decode`; decode a successful event
 stream with `client.codec.DecodeStream`. Always close the response body.
+
+Those two helpers retry **transport/HTTP** failures only. An adapter that needs
+in-band error recovery can instead opt into `ExecuteWithRetryDecoded(ctx, req,
+prepare, decode)`. `prepare` may be nil or acquire attempt-local credentials;
+`decode` returns `providers.DecodedAttempt` with `Result`, `Err`, `Retryable`
+(same-provider permission), and `SemanticStatus`. The base consumes one common
+budget, closes every decoded response body, and returns the terminal result/error.
+Decode streaming responses within the callback; after any delivered callback,
+return `Retryable:false`. Never wrap a full HTTP retry loop inside the decoder.
+Classify structured provider errors at the adapter boundary, preserving public
+chain flags. A synthetic default status is not evidence of a transient error.
+Return available usage with the result, and supply `ProviderRequestID` only under
+an explicit bounded/sanitized provider observation contract. The existing HTTP-only
+helpers remain available; adoption is explicit, not a requirement for custom SDK
+clients or caller-owned chain entries.
 
 The adapter still owns the following deliberately provider-specific work:
 

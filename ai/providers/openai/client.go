@@ -215,31 +215,7 @@ func (c *Client) Generate(ctx context.Context, request *core.AIRequest) (result 
 		return resultWithReport(prepared, nil), fmt.Errorf("create OpenAI request: %w", err)
 	}
 	httpRequest.Header = prepared.Headers.Clone()
-	credentialRequest := c.credentialRequest(prepared, route)
-	response, err := c.executeWithCredential(ctx, httpRequest, credentialRequest)
-	if err != nil {
-		return resultWithReport(prepared, nil), fmt.Errorf("send OpenAI request: %w", err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	providerRequestID := c.observeProviderRequestID(span, response.Header.Get("X-Generation-Id"))
-	c.observeCredentialRejection(ctx, credentialRequest, response.StatusCode)
-	if response.StatusCode != http.StatusOK {
-		body, _ := providers.ReadErrorBody(response.Body)
-		providerErr := c.compatibleHTTPError(response.StatusCode, body, prepared.Model)
-		span.SetAttribute("http.status_code", response.StatusCode)
-		return resultWithReport(prepared, nil), providerErr
-	}
-
-	result, err = prepared.Codec.Decode(response.Body)
-	if result != nil && result.Response != nil {
-		result.Response.Provider = c.getProviderName()
-		c.observeResponseIdentity(span, result.Response, providerRequestID)
-	}
-	if err != nil {
-		return resultWithReport(prepared, result), c.normalizeCompatibleError(err, prepared.Model)
-	}
-	c.recordSuccessfulResponse(ctx, span, prepared.Model, result.Response, providerRequestID, started)
-	return resultWithReport(prepared, result), nil
+	return c.executePreparedResponse(ctx, span, prepared, route, httpRequest, nil, started)
 }
 
 // StreamResponse adapts the legacy streaming interface to the request-aware path.
@@ -309,49 +285,7 @@ func (c *Client) Stream(
 		return resultWithReport(prepared, nil), fmt.Errorf("create OpenAI stream request: %w", err)
 	}
 	httpRequest.Header = prepared.Headers.Clone()
-	credentialRequest := c.credentialRequest(prepared, route)
-	response, err := c.executeWithCredential(ctx, httpRequest, credentialRequest)
-	if err != nil {
-		return resultWithReport(prepared, nil), fmt.Errorf("send OpenAI stream request: %w", err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	providerRequestID := c.observeProviderRequestID(span, response.Header.Get("X-Generation-Id"))
-	c.observeCredentialRejection(ctx, credentialRequest, response.StatusCode)
-	if response.StatusCode != http.StatusOK {
-		body, _ := providers.ReadErrorBody(response.Body)
-		providerErr := c.compatibleHTTPError(response.StatusCode, body, prepared.Model)
-		span.SetAttribute("http.status_code", response.StatusCode)
-		return resultWithReport(prepared, nil), providerErr
-	}
-
-	callbackStopped := false
-	observedCallback := func(chunk core.StreamChunk) error {
-		callbackErr := callback(chunk)
-		if callbackErr != nil {
-			callbackStopped = true
-		}
-		return callbackErr
-	}
-	result, err = prepared.Codec.DecodeStream(response.Body, observedCallback)
-	if callbackStopped {
-		span.SetAttribute("ai.stream_stopped_by_callback", true)
-		span.SetAttribute("ai.stream_status", "callback_stop")
-	}
-	if result != nil && result.Response != nil {
-		result.Response.Provider = c.getProviderName()
-		c.observeResponseIdentity(span, result.Response, providerRequestID)
-		if err == nil {
-			c.recordSuccessfulResponse(ctx, span, prepared.Model, result.Response, providerRequestID, started)
-		}
-	}
-	if err != nil {
-		normalized := c.normalizeCompatibleError(err, prepared.Model)
-		if errors.Is(err, core.ErrStreamPartiallyCompleted) {
-			normalized = errors.Join(core.ErrStreamPartiallyCompleted, normalized)
-		}
-		err = normalized
-	}
-	return resultWithReport(prepared, result), err
+	return c.executePreparedResponse(ctx, span, prepared, route, httpRequest, callback, started)
 }
 
 func (c *Client) compatibleHTTPError(status int, body []byte, model string) error {

@@ -416,7 +416,7 @@ func (e *transportRequestError) Unwrap() error { return e.cause }
 // when MaxRetries is zero. http.NewRequestWithContext sets GetBody automatically
 // for *bytes.Buffer, *bytes.Reader, and *strings.Reader bodies.
 func (b *BaseClient) ExecuteWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
-	return b.executeWithRetry(ctx, req, nil)
+	return b.executeWithRetry(ctx, req, nil, nil)
 }
 
 // ExecuteWithRetryPrepared behaves like ExecuteWithRetry and invokes prepare
@@ -430,13 +430,14 @@ func (b *BaseClient) ExecuteWithRetryPrepared(
 	if prepare == nil {
 		return nil, errors.New("AI request attempt preparer is nil")
 	}
-	return b.executeWithRetry(ctx, req, prepare)
+	return b.executeWithRetry(ctx, req, prepare, nil)
 }
 
 func (b *BaseClient) executeWithRetry(
 	ctx context.Context,
 	req *http.Request,
 	prepare RequestAttemptPreparer,
+	decoded *decodedOperation,
 ) (*http.Response, error) {
 	var lastErr error
 	lastErrorType := "unknown"
@@ -447,6 +448,9 @@ func (b *BaseClient) executeWithRetry(
 	}
 
 	for attempt := 0; attempt <= b.MaxRetries; attempt++ {
+		if decoded != nil {
+			decoded.result = nil
+		}
 		attemptCtx, attemptSpan := b.StartSpan(ctx, "ai.http_attempt")
 		attemptSpan.SetAttribute("ai.attempt", attempt+1)
 		attemptSpan.SetAttribute("ai.max_retries", b.MaxRetries)
@@ -514,9 +518,56 @@ func (b *BaseClient) executeWithRetry(
 		}
 		attemptDuration := time.Since(attemptStart)
 		attemptSpan.SetAttribute("ai.attempt_duration_ms", attemptDuration.Milliseconds())
+		isHTMLResponse := err == nil && resp.StatusCode >= 400 && strings.Contains(
+			strings.ToLower(resp.Header.Get("Content-Type")), "text/html",
+		)
+		retryStatus := 0
+		if resp != nil {
+			retryStatus = resp.StatusCode
+		}
+		decodedFailure := false
+		if decoded != nil && err == nil && !isHTMLResponse {
+			outcome := decoded.decode(attemptCtx, resp)
+			decoded.result = outcome.Result
+			closeResponse(resp)
+			attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
+			attemptSpan.SetAttribute("ai.attempt_duration_ms", time.Since(attemptStart).Milliseconds())
+			recordAttemptUsage(attemptSpan, outcome.Result)
+			if len(outcome.ProviderRequestID) > 0 && len(outcome.ProviderRequestID) <= 128 {
+				attemptSpan.SetAttribute("ai.provider_request_id", outcome.ProviderRequestID)
+			}
+			if outcome.Err == nil {
+				attemptSpan.SetAttribute("ai.attempt_status", "success")
+				attemptSpan.End()
+				if attempt > 0 && b.Logger != nil {
+					b.logInfoWithContext(ctx, "AI request succeeded after retry", map[string]interface{}{
+						"operation": "ai_request_recovery", "status": "recovered",
+						"successful_attempt": attempt + 1, "total_attempts": attempt + 1,
+					})
+				}
+				return resp, nil
+			}
+			lastErr = outcome.Err
+			lastErrorType = RecordObservationError(attemptSpan, outcome.Err, "provider_client")
+			attemptSpan.SetAttribute("ai.attempt_status", "decoded_error")
+			attemptSpan.SetAttribute("ai.semantic_status_code", outcome.SemanticStatus)
+			eligible := outcome.Retryable && ctx.Err() == nil &&
+				!errors.Is(outcome.Err, context.Canceled) && !errors.Is(outcome.Err, context.DeadlineExceeded) &&
+				!errors.Is(outcome.Err, core.ErrStreamPartiallyCompleted)
+			attemptSpan.SetAttribute("ai.retryable", eligible)
+			attemptSpan.End()
+			if !eligible || attempt == b.MaxRetries {
+				if eligible {
+					b.recordRetryExhaustion(ctx, lastErr, lastErrorType)
+				}
+				return resp, lastErr
+			}
+			retryStatus = outcome.SemanticStatus
+			decodedFailure = true
+		}
 
 		// Success - return if no error and status is not retryable
-		if err == nil && resp.StatusCode < 400 {
+		if !decodedFailure && err == nil && resp.StatusCode < 400 {
 			attemptSpan.SetAttribute("ai.attempt_status", "success")
 			attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
 			attemptSpan.End()
@@ -544,11 +595,10 @@ func (b *BaseClient) executeWithRetry(
 			return resp, nil
 		}
 
-		isHTMLResponse := err == nil && strings.Contains(
-			strings.ToLower(resp.Header.Get("Content-Type")),
-			"text/html",
-		)
-		if err == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 &&
+		if decodedFailure {
+			// Already decoded, classified and observed above; use the same wait
+			// and remaining budget as transport/HTTP failures below.
+		} else if err == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 &&
 			resp.StatusCode != http.StatusTooManyRequests && !isHTMLResponse {
 			// Real API error — non-retryable, return immediately
 			RecordObservationError(
@@ -629,10 +679,12 @@ func (b *BaseClient) executeWithRetry(
 		}
 
 		backoff := exponentialDelay(b.RetryDelay, attempt)
-		delay, source := retryDelay(backoff, resp, time.Now())
+		delay, source := retryDelayForStatus(backoff, resp, retryStatus, time.Now())
 		waitCap := b.retryWaitCap()
 		effectiveDelay := retryDelayWithinDeadline(ctx, min(delay, waitCap))
-		closeResponse(resp)
+		if !decodedFailure {
+			closeResponse(resp)
+		}
 		if b.Logger != nil {
 			_, safeError := SanitizedObservationError(lastErr, lastErrorType)
 			b.logWarnWithContext(ctx, "AI request failed, retrying", map[string]interface{}{
@@ -717,11 +769,19 @@ func exponentialDelay(base time.Duration, attempt int) time.Duration {
 }
 
 func retryDelay(backoff time.Duration, response *http.Response, now time.Time) (time.Duration, string) {
+	status := 0
+	if response != nil {
+		status = response.StatusCode
+	}
+	return retryDelayForStatus(backoff, response, status, now)
+}
+
+func retryDelayForStatus(backoff time.Duration, response *http.Response, status int, now time.Time) (time.Duration, string) {
 	if backoff < 0 {
 		backoff = 0
 	}
 	if response == nil || response.Header == nil ||
-		(response.StatusCode != http.StatusTooManyRequests && response.StatusCode != http.StatusServiceUnavailable) {
+		(status != http.StatusTooManyRequests && status != http.StatusServiceUnavailable) {
 		return backoff, "exponential"
 	}
 	serverDelay, ok := parseRetryAfter(response.Header.Get("Retry-After"), now)
