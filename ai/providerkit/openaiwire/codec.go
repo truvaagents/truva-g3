@@ -373,7 +373,11 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 		options.Extra["top_p"] = value
 	}
 
-	if reasoningEffort == "" {
+	// Omission controls budget and sampling preparation too, not just the final
+	// removal of the wire field below.
+	if request.Generation.ReasoningEffort.Mode == core.AIParameterOmit {
+		reasoningEffort = ""
+	} else if reasoningEffort == "" {
 		reasoningEffort = c.defaultReasoningEffort
 	}
 	legacySystemPrompt := options.SystemPrompt
@@ -497,6 +501,11 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 		explicit:        explicit,
 		adjustments:     adjustments,
 		headerConflicts: headerConflicts,
+	}
+	if request.Generation.ReasoningEffort.Mode == core.AIParameterOmit {
+		// Invalidate cached output prepared under the old omission semantics
+		// without changing identities for inherited or explicitly set effort.
+		draft.profileIdentity += ":reasoning-omission-v1"
 	}
 	if err := draft.Validate(); err != nil {
 		return nil, fmt.Errorf("validate OpenAI wire draft: %w", err)
