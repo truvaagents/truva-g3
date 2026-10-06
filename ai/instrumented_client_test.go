@@ -350,10 +350,13 @@ func TestInstrumentedClient_GenerateResponse(t *testing.T) {
 	t.Run("records when request ID is in context key", func(t *testing.T) {
 		mock := &mockAIClientForInstr{
 			generateResp: &core.AIResponse{
-				Content:  "response",
-				Model:    "gpt-4o",
-				Provider: "openai",
-				Usage:    core.TokenUsage{PromptTokens: 5, CompletionTokens: 10, TotalTokens: 15},
+				Content:          "response",
+				ReasoningContent: "exact reason",
+				FinishReason:     "length",
+				ContentSource:    core.AIContentSourceFinal,
+				Model:            "gpt-4o",
+				Provider:         "openai",
+				Usage:            core.TokenUsage{PromptTokens: 5, CompletionTokens: 10, TotalTokens: 15},
 			},
 		}
 		rec := &mockRecorder{}
@@ -383,6 +386,9 @@ func TestInstrumentedClient_GenerateResponse(t *testing.T) {
 			t.Fatalf("expected 1 recording, got %d", len(records))
 		}
 		r := records[0]
+		if r.ReasoningContent != "exact reason" || r.FinishReason != "length" || r.ContentSource != core.AIContentSourceFinal {
+			t.Fatalf("debug recording lost completion facts: %+v", r)
+		}
 		if r.SourceComponent != "test-agent" {
 			t.Errorf("SourceComponent: expected 'test-agent', got %q", r.SourceComponent)
 		}
@@ -1123,9 +1129,12 @@ func TestInstrumentedClient_StreamResponse_DeferralHonoured(t *testing.T) {
 func TestInstrumentedClient_Generate_RequestCapabilityAndLogicalSpan(t *testing.T) {
 	providerResult := &core.AIResult{
 		Response: &core.AIResponse{
-			Content:  "normalized response",
-			Model:    "response-model",
-			Provider: "response-provider",
+			Content:          "normalized response",
+			ReasoningContent: "separate reasoning",
+			FinishReason:     "length",
+			ContentSource:    core.AIContentSourceFinal,
+			Model:            "response-model",
+			Provider:         "response-provider",
 			Usage: core.TokenUsage{
 				PromptTokens:     13,
 				CompletionTokens: 21,
@@ -1181,19 +1190,24 @@ func TestInstrumentedClient_Generate_RequestCapabilityAndLogicalSpan(t *testing.
 		t.Fatalf("span completion = ended %d, errors %#v", span.ended, span.errors)
 	}
 	wantAttributes := map[string]interface{}{
-		"ai.provider":                   "anthropic",
-		"ai.provider_alias":             "anthropic.enterprise",
-		"ai.surface":                    "messages",
-		"ai.model":                      "deployment-sonnet",
-		"ai.purpose":                    "planning",
-		"ai.prompt_tokens":              13,
-		"ai.completion_tokens":          21,
-		"ai.total_tokens":               34,
-		"ai.cached_input_tokens":        int64(5),
-		"ai.reasoning_tokens":           int64(8),
-		"ai.request.policy_fingerprint": "stable-fingerprint",
-		"ai.request.adjusted_paths":     "/metadata,/temperature",
-		"ai.request.adjustment_rules":   "application/tenant-policy,provider/sampling-policy",
+		"ai.response.content_source":      "final",
+		"ai.response.finish_reported":     true,
+		"ai.response.token_limit_reached": true,
+		"ai.response.content_bytes":       len("normalized response"),
+		"ai.response.reasoning_bytes":     len("separate reasoning"),
+		"ai.provider":                     "anthropic",
+		"ai.provider_alias":               "anthropic.enterprise",
+		"ai.surface":                      "messages",
+		"ai.model":                        "deployment-sonnet",
+		"ai.purpose":                      "planning",
+		"ai.prompt_tokens":                13,
+		"ai.completion_tokens":            21,
+		"ai.total_tokens":                 34,
+		"ai.cached_input_tokens":          int64(5),
+		"ai.reasoning_tokens":             int64(8),
+		"ai.request.policy_fingerprint":   "stable-fingerprint",
+		"ai.request.adjusted_paths":       "/metadata,/temperature",
+		"ai.request.adjustment_rules":     "application/tenant-policy,provider/sampling-policy",
 	}
 	for key, want := range wantAttributes {
 		if got := span.attributes[key]; got != want {

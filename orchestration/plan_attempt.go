@@ -106,6 +106,15 @@ func (o *AIOrchestrator) buildRegenerationPrompt(ctx context.Context, attempt *p
 	remaining := limit - len(base) - len(ending) - len(omittedMarker)
 	var details strings.Builder
 	omitted := false
+	var envelope *planEnvelopeError
+	if errors.As(validationErr, &envelope) {
+		envelopeFeedback, err := buildPlanEnvelopeFeedbackWithin(ctx, envelope, remaining)
+		if err != nil {
+			return nil, err
+		}
+		details.WriteString(envelopeFeedback)
+		remaining -= len(envelopeFeedback)
+	}
 	add := func(label string, kind promptDynamicValueKind, field, value string) (bool, error) {
 		prepared, err := preparePromptValue(ctx, promptRegeneration, kind, field, value)
 		if err != nil {

@@ -151,9 +151,7 @@ func TestAnalyzeError_429TooManyRequests(t *testing.T) {
 	}
 }
 
-// TestAnalyzeError_503ServiceUnavailable triggers LLM analysis (may contain semantic errors)
-// Note: 503 errors from tools often contain semantic information like "location not found"
-// that LLM can analyze to suggest corrections, unlike pure infrastructure failures.
+// A service failure delegates to unchanged retry without a model call.
 func TestAnalyzeError_503ServiceUnavailable(t *testing.T) {
 	ai := &errorAnalyzerMockAI{
 		response: `{"should_retry": false, "reason": "Service timeout - infrastructure issue, not fixable with parameter changes"}`,
@@ -168,25 +166,20 @@ func TestAnalyzeError_503ServiceUnavailable(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
-	if result == nil {
-		t.Fatal("503 should trigger LLM analysis, not delegate to resilience")
-	}
-	// LLM correctly identifies this as not retryable
-	if result.ShouldRetry {
-		t.Error("Expected ShouldRetry=false for infrastructure timeout")
+	if result != nil || ai.lastOpts != nil {
+		t.Fatal("503 must bypass LLM analysis")
 	}
 }
 
-// TestAnalyzeError_503WithSemanticError shows LLM can suggest corrections for semantic 503 errors
-// This is why 503 is not delegated to resilience - tools may return 503 with fixable error messages.
-func TestAnalyzeError_503WithSemanticError(t *testing.T) {
+// Input failures use 4xx and retain semantic correction.
+func TestAnalyzeError_422WithSemanticError(t *testing.T) {
 	ai := &errorAnalyzerMockAI{
 		response: `{"should_retry": true, "reason": "Location typo detected", "suggested_changes": {"location": "Seoul, South Korea"}}`,
 	}
 	analyzer := NewErrorAnalyzer(ai, &mockLogger{})
 
 	result, err := analyzer.AnalyzeError(context.Background(), &ErrorAnalysisContext{
-		HTTPStatus:      503,
+		HTTPStatus:      422,
 		ErrorResponse:   `{"error": "Location 'Soul' not found", "code": "LOCATION_NOT_FOUND"}`,
 		OriginalRequest: map[string]interface{}{"location": "Soul"},
 		UserQuery:       "Get weather in Seoul",
@@ -196,7 +189,7 @@ func TestAnalyzeError_503WithSemanticError(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 	if result == nil {
-		t.Fatal("503 with semantic error should trigger LLM analysis")
+		t.Fatal("422 with semantic error should trigger LLM analysis")
 	}
 	if !result.ShouldRetry {
 		t.Error("Expected ShouldRetry=true for typo that can be fixed")
@@ -240,11 +233,9 @@ func TestErrorAnalyzer_SetAIOptionsOverride_PropagatesToGenerateResponse(t *test
 }
 
 // TestAnalyzeError_AllResilienceCodes verifies all codes delegated to resilience
-// Note: 503 is intentionally NOT in this list - it triggers LLM analysis instead
-// because tool 503 responses often contain semantic error information.
 func TestAnalyzeError_AllResilienceCodes(t *testing.T) {
 	analyzer := NewErrorAnalyzer(nil, &mockLogger{})
-	resilienceCodes := []int{408, 429, 500, 502, 504} // 503 removed - now goes to LLM
+	resilienceCodes := []int{0, 408, 429, 500, 501, 502, 503, 504, 505, 599}
 
 	for _, code := range resilienceCodes {
 		result, err := analyzer.AnalyzeError(context.Background(), &ErrorAnalysisContext{
@@ -702,8 +693,7 @@ func TestTruncateString(t *testing.T) {
 	}
 }
 
-// TestAnalyzeError_503TransientError verifies that transient errors (timeouts, service unavailable)
-// are correctly identified by LLM with is_transient_error=true
+// Service unavailability bypasses the model even when the body looks semantic.
 func TestAnalyzeError_503TransientError(t *testing.T) {
 	ai := &errorAnalyzerMockAI{
 		response: `{
@@ -722,20 +712,13 @@ func TestAnalyzeError_503TransientError(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
-	if result == nil {
-		t.Fatal("Expected result for 503 transient error")
-	}
-	if result.ShouldRetry {
-		t.Error("Expected ShouldRetry=false for transient error (not a parameter issue)")
-	}
-	if !result.IsTransientError {
-		t.Error("Expected IsTransientError=true for timeout error")
+	if result != nil || ai.lastOpts != nil {
+		t.Fatal("503 must bypass LLM analysis")
 	}
 }
 
-// TestAnalyzeError_503NonTransientError verifies that non-transient 503 errors
-// (semantic errors like "location not found") are NOT marked as transient
-func TestAnalyzeError_503NonTransientError(t *testing.T) {
+// Semantic errors are analyzed on an input-error status.
+func TestAnalyzeError_422NonTransientError(t *testing.T) {
 	ai := &errorAnalyzerMockAI{
 		response: `{
 			"should_retry": false,
@@ -746,7 +729,7 @@ func TestAnalyzeError_503NonTransientError(t *testing.T) {
 	analyzer := NewErrorAnalyzer(ai, &mockLogger{})
 
 	result, err := analyzer.AnalyzeError(context.Background(), &ErrorAnalysisContext{
-		HTTPStatus:      503,
+		HTTPStatus:      422,
 		ErrorResponse:   `{"error": "Location 'Narnia' not found", "code": "LOCATION_NOT_FOUND"}`,
 		OriginalRequest: map[string]interface{}{"location": "Narnia"},
 	})
@@ -755,7 +738,7 @@ func TestAnalyzeError_503NonTransientError(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 	if result == nil {
-		t.Fatal("Expected result for 503 semantic error")
+		t.Fatal("Expected result for 422 semantic error")
 	}
 	if result.IsTransientError {
 		t.Error("Expected IsTransientError=false for semantic error (location doesn't exist)")
@@ -842,7 +825,7 @@ func TestAnalyzeError_TransientErrorField(t *testing.T) {
 			analyzer := NewErrorAnalyzer(ai, &mockLogger{})
 
 			result, err := analyzer.AnalyzeError(context.Background(), &ErrorAnalysisContext{
-				HTTPStatus:    503,
+				HTTPStatus:    422,
 				ErrorResponse: "test error",
 			})
 

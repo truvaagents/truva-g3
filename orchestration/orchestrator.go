@@ -1833,7 +1833,7 @@ Respond with ONLY the corrected JSON parameters object. No explanation, no markd
 	if err != nil {
 		// LLM Debug: Record failed correction attempt
 		errModel, errProvider := effectiveAIIdentity(invocationResult, response, err)
-		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 			Type:         "correction",
 			Timestamp:    llmStartTime,
 			DurationMs:   llmDuration.Milliseconds(),
@@ -1846,13 +1846,13 @@ Respond with ONLY the corrected JSON parameters object. No explanation, no markd
 			Success:      false,
 			Error:        err.Error(),
 			Attempt:      1,
-		})
+		}, response))
 		return nil, fmt.Errorf("LLM correction request failed: %w", err)
 	}
 
 	// LLM Debug: Record successful correction attempt
 	model, provider := effectiveAIIdentity(invocationResult, response, nil)
-	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 		Type:             "correction",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
@@ -1868,7 +1868,7 @@ Respond with ONLY the corrected JSON parameters object. No explanation, no markd
 		TotalTokens:      response.Usage.TotalTokens,
 		Success:          true,
 		Attempt:          1,
-	})
+	}, response))
 
 	// Extract JSON from response (handle potential markdown wrapping)
 	content := response.Content
@@ -3249,7 +3249,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 		if err == core.ErrStreamPartiallyCompleted {
 			// LLM Debug: Record partial streaming synthesis (interrupted but has content)
 			model, provider := effectiveAIIdentity(invocationResult, aiResponse, err)
-			o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+			o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 				Type:             "synthesis_streaming",
 				Timestamp:        synthesisStart,
 				DurationMs:       time.Since(synthesisStart).Milliseconds(),
@@ -3266,7 +3266,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 				Success:          true,                              // Partial success - we have content
 				Error:            "stream partially completed",
 				Attempt:          1,
-			})
+			}, aiResponse))
 
 			if synthesisSpan != nil {
 				synthesisSpan.SetAttribute("synthesis.partial", true)
@@ -3306,7 +3306,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 
 		// LLM Debug: Record failed streaming synthesis
 		errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 			Type:         "synthesis_streaming",
 			Timestamp:    synthesisStart,
 			DurationMs:   time.Since(synthesisStart).Milliseconds(),
@@ -3319,7 +3319,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 			Success:      false,
 			Error:        err.Error(),
 			Attempt:      1,
-		})
+		}, aiResponse))
 
 		if synthesisSpan != nil {
 			synthesisSpan.RecordError(err)
@@ -3332,7 +3332,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 	// Record the completed model call before application hooks can panic.
 	// LLM Debug: Record successful streaming synthesis
 	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 		Type:             "synthesis_streaming",
 		Timestamp:        synthesisStart,
 		DurationMs:       time.Since(synthesisStart).Milliseconds(),
@@ -3348,7 +3348,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 		TotalTokens:      aiResponse.Usage.TotalTokens,
 		Success:          true,
 		Attempt:          1,
-	})
+	}, aiResponse))
 
 	// --- Pipeline hooks: after synthesis (streaming path) ---
 	// Note: tokens were already streamed to the client. AfterSynthesis hooks
@@ -3850,7 +3850,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 
 			// LLM Debug: Record the actual prepared request, even on failure.
 			errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-			o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+			o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 				Type:         "plan_generation",
 				Timestamp:    llmStartTime,
 				DurationMs:   llmDuration.Milliseconds(),
@@ -3863,7 +3863,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 				Success:      false,
 				Error:        err.Error(),
 				Attempt:      attempt,
-			})
+			}, aiResponse))
 
 			if o.logger != nil {
 				o.logger.ErrorWithContext(ctx, "Plan generation failed", map[string]interface{}{
@@ -3903,7 +3903,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 
 		// LLM Debug: Record successful interaction with full prompt and response
 		model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 			Type:             "plan_generation",
 			Timestamp:        llmStartTime,
 			DurationMs:       llmDuration.Milliseconds(),
@@ -3919,7 +3919,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 			TotalTokens:      aiResponse.Usage.TotalTokens,
 			Success:          true,
 			Attempt:          attempt,
-		})
+		}, aiResponse))
 
 		if o.logger != nil {
 			o.logger.DebugWithContext(ctx, "LLM response received", map[string]interface{}{
@@ -3975,151 +3975,172 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 					// If disabled, maxHallRetries stays 0 - skip retry loop entirely
 				}
 
-				// Build allowed agents list for logging and error messages
-				// Done outside retry loop since AllowedAgents doesn't change
-				allowedList := make([]string, 0, len(promptResult.AllowedAgents))
-				for name := range promptResult.AllowedAgents {
-					allowedList = append(allowedList, name)
-				}
+				// Keep rejection evidence paired with the attempt being validated.
+				// These values are diagnostics only; correction prompts use retryBase.
+				allowedList := getAllowedAgentKeys(promptResult.AllowedAgents)
+				originalToolCount := len(allowedList)
+				rejectedRequest, rejectedResponse := effective, aiResponse.Content
 
+				// A malformed replacement shares this recovery budget. Its next
+				// correction reuses the selected base and reports the latest error.
+				var retryBase *PlanningPromptResult
+				var retryParseErr error
 				// Retry loop for hallucination recovery
 				for hallRetry := 0; hallRetry < maxHallRetries; hallRetry++ {
 					retryStartTime := time.Now()
-
-					// Pattern 4 (Tracing): Record error on span FIRST (visible in Jaeger)
-					telemetry.RecordSpanError(ctx, hallErr)
-
-					// Pattern 6 (Tracing): Span event with request_id as FIRST attribute
-					telemetry.AddSpanEvent(ctx, "llm.hallucination_detected",
-						attribute.String("request_id", requestID), // FIRST attribute per Pattern 6
-						attribute.String("hallucinated_agent", hallucinatedAgent),
-						attribute.Int("allowed_agent_count", len(allowedList)),
-						attribute.Int("hall_retry", hallRetry+1),
-						attribute.Int("max_hall_retries", maxHallRetries),
-						attribute.Int("attempt", attempt),
-					)
-
-					// Pattern 5 (Tracing): Counter with module label
-					telemetry.Counter("plan_generation.hallucinations",
-						"module", telemetry.ModuleOrchestration, // REQUIRED per Pattern 5
-						"agent", hallucinatedAgent,
-					)
-
-					// Logging Patterns 1, 2, 3: nil check + operation + request_id + duration_ms
-					if o.logger != nil {
-						o.logger.WarnWithContext(ctx, "LLM hallucinated non-existent agent", map[string]interface{}{
-							"operation":          "hallucination_detection", // REQUIRED: Pattern 2
-							"request_id":         requestID,                 // REQUIRED: Pattern 3
-							"hallucinated_agent": hallucinatedAgent,
-							"allowed_agents":     allowedList,
-							"attempt":            attempt,
-							"hall_retry":         hallRetry + 1,
-							"max_hall_retries":   maxHallRetries,
-							"error":              hallErr.Error(),                          // REQUIRED: error field for warn/error logs
-							"duration_ms":        time.Since(hallStartTime).Milliseconds(), // Time since hallucination first detected
-						})
-					}
-
-					// LLM Debug Store: Record hallucination for production debugging (per ARCHITECTURE.md §9.9)
-					if o.debugStore != nil {
-						// Embed hallucination details in the error message since LLMInteraction has no Metadata field
-						hallErrDetail := fmt.Sprintf("%s | hallucinated_agent=%s | allowed_agents=%v | hall_retry=%d",
-							hallErr.Error(), hallucinatedAgent, allowedList, hallRetry+1)
-						o.recordDebugInteraction(ctx, requestID, LLMInteraction{
-							Type:      "hallucination_detection",
-							Timestamp: time.Now(),
-							Prompt:    promptResult.Prompt,
-							Response:  aiResponse.Content,
-							Success:   false,
-							Error:     hallErrDetail,
-							Attempt:   hallRetry + 1,
-						})
-					}
-
-					// On a hallucinated tool, retry with refreshed selection context:
-					// 1. Extract context about what the LLM was trying to do
-					// 2. Build an enhanced request with capability hints
-					// 3. Re-run tiered selection (may find different/better tools)
-					// 4. Prepend critical feedback to the new prompt
-
-					// Step 1: Extract hallucination context (agent name, capability, instruction)
-					hallCtx := extractHallucinationContext(plan, hallucinatedAgent)
-
-					// Step 2: Build enhanced request with context for tiered selection
-					// This is GENERIC - no domain-specific keyword mappings
-					enhancedRequest := buildEnhancedRequestForRetry(request, hallCtx)
-
-					// Step 3: Re-run tiered selection with enhanced request
-					// This may discover tools that match the hallucinated capability
-					retryPromptResult, retryPromptErr := o.buildPlanningPrompt(ctx, enhancedRequest)
-					if retryPromptErr != nil {
-						// Pattern 6 (Tracing): Span event with request_id as FIRST attribute
-						telemetry.AddSpanEvent(ctx, "llm.hallucination_enhanced_retry_fallback",
-							attribute.String("request_id", requestID), // FIRST attribute per Pattern 6
-							attribute.String("error", retryPromptErr.Error()),
-							attribute.String("hallucinated_agent", hallucinatedAgent),
+					var retryPromptResult *PlanningPromptResult
+					var hallucinationFeedback string
+					if retryParseErr != nil {
+						var feedbackErr error
+						retryPromptResult, feedbackErr = o.buildPlanningPromptWithParseError(ctx, retryBase, retryParseErr)
+						if feedbackErr != nil {
+							return nil, fmt.Errorf("prepare plan retry feedback: %w", feedbackErr)
+						}
+						hallucinationFeedback = retryPromptResult.Prompt
+						telemetry.AddSpanEvent(ctx, "llm.plan_generation.retry_parse_correction",
+							attribute.String("request_id", requestID),
+							attribute.String("reason", planParseReason(retryParseErr)),
 							attribute.Int("hall_retry", hallRetry+1),
-							attribute.String("fallback_reason", "enhanced_tiered_selection_failed"),
+						)
+					} else {
+						// Pattern 4 (Tracing): Record error on span FIRST (visible in Jaeger)
+						telemetry.RecordSpanError(ctx, hallErr)
+
+						// Pattern 6 (Tracing): Span event with request_id as FIRST attribute
+						telemetry.AddSpanEvent(ctx, "llm.hallucination_detected",
+							attribute.String("request_id", requestID), // FIRST attribute per Pattern 6
+							attribute.String("hallucinated_agent", hallucinatedAgent),
+							attribute.Int("allowed_agent_count", len(allowedList)),
+							attribute.Int("hall_retry", hallRetry+1),
+							attribute.Int("max_hall_retries", maxHallRetries),
+							attribute.Int("attempt", attempt),
 						)
 
-						// Pattern 1, 2, 3 (Logging): Warn log for graceful degradation
+						// Pattern 5 (Tracing): Counter with module label
+						telemetry.Counter("plan_generation.hallucinations",
+							"module", telemetry.ModuleOrchestration, // REQUIRED per Pattern 5
+							"agent", hallucinatedAgent,
+						)
+
+						// Logging Patterns 1, 2, 3: nil check + operation + request_id + duration_ms
 						if o.logger != nil {
-							o.logger.WarnWithContext(ctx, "Enhanced tiered selection failed, falling back to original prompt", map[string]interface{}{
-								"operation":          "hallucination_retry", // REQUIRED: Pattern 2
-								"request_id":         requestID,             // REQUIRED: Pattern 3
-								"hall_retry":         hallRetry + 1,
+							o.logger.WarnWithContext(ctx, "LLM hallucinated non-existent agent", map[string]interface{}{
+								"operation":          "hallucination_detection", // REQUIRED: Pattern 2
+								"request_id":         requestID,                 // REQUIRED: Pattern 3
 								"hallucinated_agent": hallucinatedAgent,
-								"error":              retryPromptErr.Error(),
-								"fallback":           "original_prompt_result",
+								"allowed_agents":     allowedList,
+								"attempt":            attempt,
+								"hall_retry":         hallRetry + 1,
+								"max_hall_retries":   maxHallRetries,
+								"error":              hallErr.Error(),                          // REQUIRED: error field for warn/error logs
+								"duration_ms":        time.Since(hallStartTime).Milliseconds(), // Time since hallucination first detected
 							})
 						}
-						// Fall back to original prompt result if enhanced retry fails
-						retryPromptResult = promptResult
-					}
-					planAttemptFromContext(ctx).captureBase(retryPromptResult)
 
-					// Update allowed agents list from the NEW prompt (may have different tools)
-					newAllowedList := make([]string, 0, len(retryPromptResult.AllowedAgents))
-					for name := range retryPromptResult.AllowedAgents {
-						newAllowedList = append(newAllowedList, name)
-					}
+						// LLM Debug Store: Record hallucination for production debugging (per ARCHITECTURE.md §9.9)
+						if o.debugStore != nil {
+							// Embed hallucination details in the error message since LLMInteraction has no Metadata field
+							hallErrDetail := fmt.Sprintf("%s | hallucinated_agent=%s | allowed_agents=%v | hall_retry=%d",
+								hallErr.Error(), hallucinatedAgent, allowedList, hallRetry+1)
+							o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+								Type:         "hallucination_detection",
+								Timestamp:    time.Now(),
+								Prompt:       rejectedRequest.Prompt,
+								SystemPrompt: rejectedRequest.SystemPrompt,
+								Response:     rejectedResponse,
+								Success:      false,
+								Error:        hallErrDetail,
+								Attempt:      hallRetry + 1,
+							})
+						}
 
-					// Step 4: Build retry prompt with CRITICAL FEEDBACK FIRST
-					capabilityHint := hallCtx.Capability
-					if capabilityHint == "" {
-						capabilityHint = hallCtx.AgentName
-					}
-					hallucinationFeedback := fmt.Sprintf(`CRITICAL ERROR - YOUR PREVIOUS PLAN WAS REJECTED:
+						// On a hallucinated tool, retry with refreshed selection context:
+						// 1. Extract context about what the LLM was trying to do
+						// 2. Build an enhanced request with capability hints
+						// 3. Re-run tiered selection (may find different/better tools)
+						// 4. Prepend critical feedback to the new prompt
+
+						// Step 1: Extract hallucination context (agent name, capability, instruction)
+						hallCtx := extractHallucinationContext(plan, hallucinatedAgent)
+
+						// Step 2: Build enhanced request with context for tiered selection
+						// This is GENERIC - no domain-specific keyword mappings
+						enhancedRequest := buildEnhancedRequestForRetry(request, hallCtx)
+
+						// Step 3: Re-run tiered selection with enhanced request
+						// This may discover tools that match the hallucinated capability
+						var retryPromptErr error
+						retryPromptResult, retryPromptErr = o.buildPlanningPrompt(ctx, enhancedRequest)
+						if retryPromptErr != nil {
+							// Pattern 6 (Tracing): Span event with request_id as FIRST attribute
+							telemetry.AddSpanEvent(ctx, "llm.hallucination_enhanced_retry_fallback",
+								attribute.String("request_id", requestID), // FIRST attribute per Pattern 6
+								attribute.String("error", retryPromptErr.Error()),
+								attribute.String("hallucinated_agent", hallucinatedAgent),
+								attribute.Int("hall_retry", hallRetry+1),
+								attribute.String("fallback_reason", "enhanced_tiered_selection_failed"),
+							)
+
+							// Pattern 1, 2, 3 (Logging): Warn log for graceful degradation
+							if o.logger != nil {
+								o.logger.WarnWithContext(ctx, "Enhanced tiered selection failed, falling back to original prompt", map[string]interface{}{
+									"operation":          "hallucination_retry", // REQUIRED: Pattern 2
+									"request_id":         requestID,             // REQUIRED: Pattern 3
+									"hall_retry":         hallRetry + 1,
+									"hallucinated_agent": hallucinatedAgent,
+									"error":              retryPromptErr.Error(),
+									"fallback":           "original_prompt_result",
+								})
+							}
+							// Fall back to original prompt result if enhanced retry fails
+							retryPromptResult = promptResult
+						}
+						planAttemptFromContext(ctx).captureBase(retryPromptResult)
+
+						// Update allowed agents list from the NEW prompt (may have different tools)
+						newAllowedList := make([]string, 0, len(retryPromptResult.AllowedAgents))
+						for name := range retryPromptResult.AllowedAgents {
+							newAllowedList = append(newAllowedList, name)
+						}
+
+						// Step 4: Build retry prompt with CRITICAL FEEDBACK FIRST
+						capabilityHint := hallCtx.Capability
+						if capabilityHint == "" {
+							capabilityHint = hallCtx.AgentName
+						}
+						hallucinationFeedback = fmt.Sprintf(`CRITICAL ERROR - YOUR PREVIOUS PLAN WAS REJECTED:
 You used agent '%s' which does NOT exist in the available agents list.
 
 STRICT RULES FOR THIS RETRY:
 1. You MUST ONLY use agents from the "Available Agents" section below
 2. DO NOT invent, guess, or hallucinate any agent names
-3. If you cannot fulfill the request with available agents, return a plan with ZERO steps
+3. If available agents cannot fulfill the request, return {"terminal": true, "steps": []}
 4. The capability you were trying to use ('%s') may be available under a DIFFERENT agent name - check the list carefully!
 
 %s`, hallucinatedAgent, capabilityHint, retryPromptResult.Prompt)
 
-					// Log the retry attempt
-					if o.logger != nil {
-						o.logger.DebugWithContext(ctx, "Retrying plan generation with enhanced tiered selection", map[string]interface{}{
-							"operation":           "hallucination_retry",
-							"request_id":          requestID,
-							"hall_retry":          hallRetry + 1,
-							"hallucinated_agent":  hallucinatedAgent,
-							"hallucinated_cap":    hallCtx.Capability,
-							"hallucinated_instr":  hallCtx.Instruction,
-							"original_tool_count": len(allowedList),
-							"new_tool_count":      len(newAllowedList),
-							"prompt_length":       len(hallucinationFeedback),
-						})
+						// Log the retry attempt
+						if o.logger != nil {
+							o.logger.DebugWithContext(ctx, "Retrying plan generation with enhanced tiered selection", map[string]interface{}{
+								"operation":           "hallucination_retry",
+								"request_id":          requestID,
+								"hall_retry":          hallRetry + 1,
+								"hallucinated_agent":  hallucinatedAgent,
+								"hallucinated_cap":    hallCtx.Capability,
+								"hallucinated_instr":  hallCtx.Instruction,
+								"original_tool_count": originalToolCount,
+								"new_tool_count":      len(newAllowedList),
+								"prompt_length":       len(hallucinationFeedback),
+							})
+						}
+						retryBase = retryPromptResult
 					}
 
 					// Call LLM with the enhanced prompt (may have NEW tools from tiered selection).
 					// Defer wrapper-side recording — the retry records its own
 					// `plan_generation` typed interaction below.
 					retryLLMStartTime := time.Now()
-					retryPlanOpts := o.planAIOptions(0.2, promptResult.SystemPrompt)
+					retryPlanOpts := o.planAIOptions(0.2, retryPromptResult.SystemPrompt)
 					retryInvocation := aiInvocation{
 						Purpose:        "planning",
 						Prompt:         hallucinationFeedback,
@@ -4159,7 +4180,7 @@ STRICT RULES FOR THIS RETRY:
 
 						// LLM Debug: Record failed hallucination retry plan generation
 						retryErrModel, retryErrProvider := effectiveAIIdentity(retryInvocationResult, retryResponse, retryErr)
-						o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+						o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 							Type:         "plan_generation",
 							Timestamp:    retryLLMStartTime,
 							DurationMs:   retryLLMDuration.Milliseconds(),
@@ -4172,14 +4193,14 @@ STRICT RULES FOR THIS RETRY:
 							Success:      false,
 							Error:        fmt.Sprintf("hallucination_retry (attempt %d): %s", hallRetry+1, retryErr.Error()),
 							Attempt:      attempt, // Keep original attempt, error indicates it's a hallucination retry
-						})
+						}, retryResponse))
 
 						return nil, fmt.Errorf("plan regeneration failed: %w", retryErr)
 					}
 
 					// LLM Debug: Record successful hallucination retry plan generation
 					retryModel, retryProvider := effectiveAIIdentity(retryInvocationResult, retryResponse, nil)
-					o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+					o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 						Type:             "plan_generation",
 						Timestamp:        retryLLMStartTime,
 						DurationMs:       retryLLMDuration.Milliseconds(),
@@ -4195,25 +4216,38 @@ STRICT RULES FOR THIS RETRY:
 						TotalTokens:      retryResponse.Usage.TotalTokens,
 						Success:          true,
 						Attempt:          attempt, // Original attempt number; hallRetry context in prompt
-					})
+					}, retryResponse))
 
 					// Parse the retry response
 					planAttemptFromContext(ctx).rememberOutput(retryResponse.Content)
-					plan, retryErr = o.parsePlan(retryResponse.Content)
-					if retryErr != nil {
+					var retryPlan *RoutingPlan
+					retryPlan, retryParseErr = o.parsePlan(retryResponse.Content)
+					if retryParseErr != nil {
+						telemetry.RecordSpanError(ctx, retryParseErr)
+						telemetry.AddSpanEvent(ctx, "llm.plan_generation.parse_error",
+							attribute.String("request_id", requestID),
+							attribute.String("error", retryParseErr.Error()),
+							attribute.String("reason", planParseReason(retryParseErr)),
+							attribute.Int("attempt", attempt),
+							attribute.Int("hall_retry", hallRetry+1),
+							attribute.Bool("will_retry", hallRetry+1 < maxHallRetries),
+							attribute.String("retry_context", "hallucination_recovery"),
+						)
 						// Parse error on retry - log and continue to next retry attempt
 						if o.logger != nil {
 							o.logger.WarnWithContext(ctx, "Failed to parse retry plan response", map[string]interface{}{
 								"operation":   "hallucination_retry",
 								"request_id":  requestID,
 								"hall_retry":  hallRetry + 1,
-								"error":       retryErr.Error(),
+								"error":       retryParseErr.Error(),
 								"duration_ms": time.Since(retryStartTime).Milliseconds(),
 							})
 						}
-						// Continue to next retry - hallErr is still set from previous validation
+						// Retain the last parsed plan for discovery context. The
+						// next attempt corrects this latest parse failure.
 						continue
 					}
+					plan = retryPlan
 
 					// Normalize before re-validating, same as the first-parse path above.
 					o.normalizeTerminalSynthesisPlan(ctx, plan, knownStepIDSet(nil, plan), requestID)
@@ -4227,6 +4261,8 @@ STRICT RULES FOR THIS RETRY:
 					// Validate the regenerated plan against the NEW allowed agents
 					// (retryPromptResult may have different tools from enhanced tiered selection)
 					hallucinatedAgent, hallErr = o.validatePlanAgainstAllowedAgents(ctx, plan, retryPromptResult.AllowedAgents)
+					rejectedRequest, rejectedResponse = retryEffective, retryResponse.Content
+					allowedList = getAllowedAgentKeys(retryPromptResult.AllowedAgents)
 					if hallErr == nil {
 						// Pattern 5 (Tracing): Counter for successful recovery
 						telemetry.Counter("plan_generation.hallucination_recovered",
@@ -4250,6 +4286,32 @@ STRICT RULES FOR THIS RETRY:
 						}
 						break // Success!
 					}
+				}
+
+				// A parse failure is the current cause, even though this recovery
+				// episode began with an unavailable agent. Preserve its typed error.
+				if retryParseErr != nil {
+					finalErr := fmt.Errorf("plan correction failed after %d retries: %w", maxHallRetries, retryParseErr)
+					telemetry.RecordSpanError(ctx, finalErr)
+					telemetry.AddSpanEvent(ctx, "llm.plan_generation.retry_parse_exhausted",
+						attribute.String("request_id", requestID),
+						attribute.String("reason", planParseReason(retryParseErr)),
+						attribute.String("error", retryParseErr.Error()),
+						attribute.Int("retries_exhausted", maxHallRetries),
+					)
+					telemetry.Counter("plan_generation.retry_parse_exhausted",
+						"module", telemetry.ModuleOrchestration, "reason", planParseReason(retryParseErr))
+					if o.logger != nil {
+						o.logger.ErrorWithContext(ctx, "Plan correction exhausted after parse failure", map[string]interface{}{
+							"operation": "plan_generation", "request_id": requestID,
+							"retries_exhausted": maxHallRetries, "error": retryParseErr.Error(),
+							"reason": planParseReason(retryParseErr), "duration_ms": time.Since(hallStartTime).Milliseconds(),
+						})
+					}
+					telemetry.Histogram("plan_generation.duration_ms", float64(time.Since(planGenStart).Milliseconds()),
+						"module", telemetry.ModuleOrchestration, "status", "error")
+					telemetry.Counter("plan_generation.total", "module", telemetry.ModuleOrchestration, "status", "error")
+					return nil, finalErr
 				}
 
 				// Check if we exhausted retries
@@ -4326,6 +4388,7 @@ STRICT RULES FOR THIS RETRY:
 		telemetry.AddSpanEvent(ctx, "llm.plan_generation.parse_error",
 			attribute.String("request_id", requestID),
 			attribute.String("error", parseErr.Error()),
+			attribute.String("reason", planParseReason(parseErr)),
 			attribute.Int("attempt", attempt),
 			attribute.Bool("will_retry", willRetry),
 		)
@@ -4514,7 +4577,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 
 			// Debug store: record the actual prepared request on failure.
 			errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-			o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+			o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 				Type:            "continuation_plan_generation",
 				PhaseNumber:     phaseNumber,
 				Timestamp:       llmStartTime,
@@ -4529,7 +4592,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 				Error:           err.Error(),
 				Attempt:         attempt,
 				CallDescription: fmt.Sprintf("Phase %d continuation plan generation", phaseNumber),
-			})
+			}, aiResponse))
 
 			if o.logger != nil {
 				o.logger.ErrorWithContext(ctx, "Continuation plan LLM call failed", map[string]interface{}{
@@ -4581,7 +4644,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 
 		// Debug store: record successful LLM call
 		model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 			Type:             "continuation_plan_generation",
 			PhaseNumber:      phaseNumber,
 			Timestamp:        llmStartTime,
@@ -4599,7 +4662,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 			Success:          true,
 			Attempt:          attempt,
 			CallDescription:  fmt.Sprintf("Phase %d continuation plan generation", phaseNumber),
-		})
+		}, aiResponse))
 
 		// Parse the plan
 		planAttemptFromContext(ctx).rememberOutput(responseContent)
@@ -4617,6 +4680,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 			telemetry.AddSpanEvent(ctx, "llm.continuation_plan_generation.parse_error",
 				attribute.String("request_id", requestID),
 				attribute.String("error", parseErr.Error()),
+				attribute.String("reason", planParseReason(parseErr)),
 				attribute.Int("attempt", attempt),
 				attribute.Bool("will_retry", willRetry),
 				attribute.Int("phase_number", phaseNumber),
@@ -4877,7 +4941,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 
 		// Debug store: record failed LLM call
 		errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 			Type:            "continuation_plan_regeneration",
 			PhaseNumber:     phaseNumber,
 			Timestamp:       llmStartTime,
@@ -4892,7 +4956,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 			Error:           err.Error(),
 			Attempt:         1,
 			CallDescription: fmt.Sprintf("Phase %d continuation plan REGENERATION (trigger: %s)", phaseNumber, truncateString(validationErr.Error(), 200)),
-		})
+		}, aiResponse))
 
 		if o.logger != nil {
 			o.logger.ErrorWithContext(ctx, "Continuation plan regeneration LLM call failed", map[string]interface{}{
@@ -4944,7 +5008,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 
 	// Debug store: record successful LLM call
 	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 		Type:             "continuation_plan_regeneration",
 		PhaseNumber:      phaseNumber,
 		Timestamp:        llmStartTime,
@@ -4962,7 +5026,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 		Success:          true,
 		Attempt:          1,
 		CallDescription:  fmt.Sprintf("Phase %d continuation plan REGENERATION (trigger: %s)", phaseNumber, truncateString(validationErr.Error(), 200)),
-	})
+	}, aiResponse))
 
 	phaseAttempt.rememberOutput(aiResponse.Content)
 	plan, err := o.parsePlan(aiResponse.Content)
@@ -5099,7 +5163,7 @@ func buildDefaultFormatRules(iterConfig *IterativePlanConfig) string {
 2. Match parameter names and types to each capability's schema
 3. Order steps by dependencies
 4. Template references are always quoted strings: "{{step-1.response.data.field}}"
-5. If no available agent can fulfill the request, return a plan with zero steps
+5. If available agents cannot fulfill the request, return {"terminal": true, "steps": []}
 6. Write specific, actionable instructions for each step
 7. Include steps for every part of the user's request
 </constraints>
@@ -6092,6 +6156,14 @@ Error: %s
 
 Regenerate the execution plan as one JSON object. Start with { and end with }; these delimit the entire response.`,
 		parseErr.Error())
+	var envelope *planEnvelopeError
+	if errors.As(parseErr, &envelope) {
+		var err error
+		errorFeedback, err = o.buildPlanEnvelopeFeedback(ctx, envelope)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Reuse previous prompt, AllowedAgents, and SystemPrompt — no fresh tiered selection
 	return &PlanningPromptResult{
@@ -6106,15 +6178,19 @@ Regenerate the execution plan as one JSON object. Start with { and end with }; t
 func (o *AIOrchestrator) parsePlan(llmResponse string) (*RoutingPlan, error) {
 	cleaned := cleanLLMResponse(llmResponse)
 
-	var plan RoutingPlan
-	if err := json.Unmarshal([]byte(cleaned), &plan); err != nil {
+	plan, err := decodePlanEnvelope([]byte(cleaned))
+	if err != nil {
+		// Valid JSON with invalid types or intent is not syntax-repair input.
+		if json.Valid([]byte(cleaned)) {
+			return nil, fmt.Errorf("failed to parse plan JSON: %w", err)
+		}
 		// C2: Try quoting unquoted templates (try-parse-first recovery)
 		quoted := cleaned
 		if !json.Valid([]byte(cleaned)) {
 			quoted = quoteUnquotedTemplates(cleaned)
 		}
 		if quoted != cleaned {
-			if err2 := json.Unmarshal([]byte(quoted), &plan); err2 == nil {
+			if recovered, err2 := decodePlanEnvelope([]byte(quoted)); err2 == nil {
 				if o.logger != nil {
 					o.logger.Info("Plan parsed after quoting unquoted templates", map[string]interface{}{
 						"operation": "plan_parsing_recovery",
@@ -6122,13 +6198,15 @@ func (o *AIOrchestrator) parsePlan(llmResponse string) (*RoutingPlan, error) {
 						"error":     err.Error(),
 					})
 				}
-				plan.CreatedAt = time.Now()
-				return &plan, nil
+				recovered.CreatedAt = time.Now()
+				return recovered, nil
+			} else if json.Valid([]byte(quoted)) {
+				return nil, fmt.Errorf("failed to parse plan JSON: %w", err2)
 			}
 		}
 		// B3: Attempt structural repair (trailing commas, BOM)
 		if repaired, ok := repairInvalidPlanJSON(cleaned); ok {
-			if err2 := json.Unmarshal([]byte(repaired), &plan); err2 == nil {
+			if recovered, err2 := decodePlanEnvelope([]byte(repaired)); err2 == nil {
 				if o.logger != nil {
 					o.logger.Info("Plan parsed after structural JSON repair", map[string]interface{}{
 						"operation": "plan_parsing_recovery",
@@ -6136,8 +6214,10 @@ func (o *AIOrchestrator) parsePlan(llmResponse string) (*RoutingPlan, error) {
 						"error":     err.Error(),
 					})
 				}
-				plan.CreatedAt = time.Now()
-				return &plan, nil
+				recovered.CreatedAt = time.Now()
+				return recovered, nil
+			} else if json.Valid([]byte(repaired)) {
+				return nil, fmt.Errorf("failed to parse plan JSON: %w", err2)
 			}
 		}
 		if o.logger != nil {
@@ -6152,7 +6232,7 @@ func (o *AIOrchestrator) parsePlan(llmResponse string) (*RoutingPlan, error) {
 	}
 
 	plan.CreatedAt = time.Now()
-	return &plan, nil
+	return plan, nil
 }
 
 // knownStepIDSet returns the step IDs that can satisfy a template reference at this point:
@@ -6901,7 +6981,7 @@ func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, req
 
 	if err != nil {
 		errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-		o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 			Type:         "plan_regeneration_fallback",
 			Timestamp:    llmStartTime,
 			DurationMs:   llmDuration.Milliseconds(),
@@ -6913,13 +6993,13 @@ func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, req
 			Provider:     errProvider,
 			Success:      false,
 			Error:        err.Error(),
-		})
+		}, aiResponse))
 		return nil, err
 	}
 	core.RecordTokenUsage(ctx, "correction", aiResponse.Usage)
 
 	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-	o.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 		Type:             "plan_regeneration_fallback",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
@@ -6934,7 +7014,7 @@ func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, req
 		CompletionTokens: aiResponse.Usage.CompletionTokens,
 		TotalTokens:      aiResponse.Usage.TotalTokens,
 		Success:          true,
-	})
+	}, aiResponse))
 
 	phaseAttempt.rememberOutput(aiResponse.Content)
 	plan, err := o.parsePlan(aiResponse.Content)

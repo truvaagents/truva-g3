@@ -8,11 +8,11 @@
 // Missing retry declarations retain bounded status-based compatibility handling.
 //
 // HTTP Status Code Routing:
-//   - 400, 404, 409, 422 → LLM Error Analyzer (might be fixable with different input)
-//   - 408, 429, 5xx      → Resilience module (same payload + exponential backoff)
+//   - Eligible 400, 404, 409, 422 → LLM Error Analyzer, subject to correction gates
+//   - 408, 429, 5xx      → Executor retry loop (same payload + exponential backoff)
 //   - 401, 403, 405      → Fail immediately (auth/permission issues)
 //
-// See PARAMETER_BINDING_FIX.md for the complete design rationale.
+// See docs/orchestration/ERROR_HANDLING_GUIDE.md in the repository for the contract.
 package orchestration
 
 import (
@@ -67,9 +67,9 @@ type ErrorAnalysisResult struct {
 	// Keys are parameter names, values are the suggested new values
 	SuggestedChanges map[string]interface{} `json:"suggested_changes,omitempty"`
 
-	// IsTransientError indicates this is a temporary infrastructure issue (timeout, service unavailable)
-	// that should be retried with the SAME parameters using exponential backoff.
-	// When true and ShouldRetry is false, the executor should continue with resilience retry.
+	// IsTransientError records the model's assessment, not permission to retry.
+	// The executor classifies transient HTTP statuses before invoking the analyzer;
+	// this field does not authorize unchanged retries of non-transient 4xx responses.
 	IsTransientError bool `json:"is_transient_error,omitempty"`
 }
 
@@ -183,20 +183,10 @@ func (e *ErrorAnalyzer) routeByHTTPStatus(status int) *ErrorAnalysisResult {
 	return nil // Needs further analysis
 }
 
-// shouldDelegateToResilience returns true if the error should be handled by the resilience module
-// (same payload, exponential backoff).
-// Note: 503 errors with structured tool responses (retryable: true) are now analyzed by LLM
-// to potentially suggest parameter corrections. True service outages will still be identified
-// by LLM as non-fixable.
+// shouldDelegateToResilience retains its historical name; true delegates to
+// the executor's existing same-payload retry/backoff, not a sibling module.
 func (e *ErrorAnalyzer) shouldDelegateToResilience(status int) bool {
-	switch status {
-	case 408, 429, 500, 502, 504:
-		return true
-		// Note: 503 is intentionally NOT included here
-		// Tool responses with 503 often contain semantic errors (e.g., "location not found")
-		// that LLM can help fix by suggesting corrected parameters
-	}
-	return false
+	return status == 0 || transientHTTPStatus(status)
 }
 
 // analyzeWithLLM uses LLM to determine if the error is fixable with different parameters.

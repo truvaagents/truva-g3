@@ -167,7 +167,8 @@ or discover something before you can act on the results), you may generate a PAR
 
 Set "terminal": true when the planned actions are expected to satisfy the objective,
 leaving only answer composition and no result-dependent decision about further actions.
-Omitting the field still defaults to true for compatibility.
+For nonempty plans, omitting terminal still defaults to true for compatibility.
+For zero-work plans, explicitly set "terminal": true and "steps": [].
 
 When to use "terminal": false:
 - User asks about "top/famous/popular [things]" but you need to search first
@@ -207,7 +208,7 @@ TERMINAL DECISION:
 - Set "terminal": false when interpreting results determines whether further investigation
   or action is needed, even for already-known entities.
 - Known entity names and parameter shapes alone do not establish task completeness.
-- Omitting terminal still defaults to true for compatibility.
+- For nonempty plans, omitting terminal still defaults to true for compatibility.
 
 PHASE SPLIT RULE:
 - Keep predictable actions in the SAME phase when parameters are expressible as

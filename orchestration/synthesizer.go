@@ -249,7 +249,7 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 
 		// LLM Debug: Record failed synthesis attempt from the prepared request.
 		model, provider := effectiveAIIdentity(invocationResult, aiResponse, err)
-		s.recordDebugInteraction(ctx, requestID, LLMInteraction{
+		s.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 			Type:         "synthesis",
 			Timestamp:    llmStartTime,
 			DurationMs:   llmDuration.Milliseconds(),
@@ -262,7 +262,7 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 			Success:      false,
 			Error:        err.Error(),
 			Attempt:      1,
-		})
+		}, aiResponse))
 
 		return "", fmt.Errorf("synthesis failed: %w", err)
 	}
@@ -293,7 +293,7 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 
 	// LLM Debug: Record successful synthesis
 	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-	s.recordDebugInteraction(ctx, requestID, LLMInteraction{
+	s.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
 		Type:             "synthesis",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
@@ -309,7 +309,7 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 		TotalTokens:      aiResponse.Usage.TotalTokens,
 		Success:          true,
 		Attempt:          1,
-	})
+	}, aiResponse))
 
 	return aiResponse.Content, nil
 }

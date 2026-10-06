@@ -111,11 +111,26 @@ type AIOptions struct {
 
 // AIResponse from AI client
 type AIResponse struct {
-	Content  string
-	Model    string
-	Provider string // Provider identifier (e.g., "openai", "openai.groq", "anthropic", "gemini", "bedrock")
-	Usage    TokenUsage
+	Content string
+	// ReasoningContent is provider-reported reasoning, separate from the answer.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// FinishReason is the exact provider value. Empty means unreported, not stop.
+	FinishReason string `json:"finish_reason,omitempty"`
+	// ContentSource identifies how Content was obtained; empty means unknown.
+	ContentSource AIContentSource `json:"content_source,omitempty"`
+	Model         string
+	Provider      string // Provider identifier (e.g., "openai", "openai.groq", "anthropic", "gemini", "bedrock")
+	Usage         TokenUsage
 }
+
+// AIContentSource describes response provenance, not application success.
+type AIContentSource string
+
+const (
+	AIContentSourceFinal             AIContentSource = "final"
+	AIContentSourceReasoningFallback AIContentSource = "reasoning_fallback"
+	AIContentSourceMixed             AIContentSource = "mixed"
+)
 
 // TokenUsage for AI responses
 type TokenUsage struct {
@@ -166,13 +181,15 @@ func (a *AggregatedTokenUsage) Snapshot() (TokenUsage, map[string]TokenUsage) {
 
 // StreamChunk represents a single chunk in a streaming response
 type StreamChunk struct {
-	Content      string                 `json:"content,omitempty"`
-	Delta        bool                   `json:"delta"`
-	Index        int                    `json:"index"`
-	FinishReason string                 `json:"finish_reason,omitempty"`
-	Model        string                 `json:"model,omitempty"`
-	Usage        *TokenUsage            `json:"usage,omitempty"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	Content          string                 `json:"content,omitempty"`
+	ReasoningContent string                 `json:"reasoning_content,omitempty"`
+	ContentSource    AIContentSource        `json:"content_source,omitempty"`
+	Delta            bool                   `json:"delta"`
+	Index            int                    `json:"index"`
+	FinishReason     string                 `json:"finish_reason,omitempty"`
+	Model            string                 `json:"model,omitempty"`
+	Usage            *TokenUsage            `json:"usage,omitempty"`
+	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // StreamCallback is called for each chunk in a streaming response.
@@ -726,6 +743,8 @@ type StepSummaryInput struct {
 	Parameters  map[string]interface{} `json:"parameters,omitempty"`
 	Response    string                 `json:"response"` // Tool response (truncated by caller)
 	Success     bool                   `json:"success"`
+	Error       string                 `json:"error,omitempty"`      // Recorded terminal error; interpretation belongs to the summarizer
+	ToolError   json.RawMessage        `json:"tool_error,omitempty"` // Copied structured component error, when available
 }
 
 // StepSummary is the per-step output produced by an EventSummarizer.

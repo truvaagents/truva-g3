@@ -384,6 +384,16 @@ func (c *InstrumentedAIClient) finishLogicalSpan(
 		setAdjustmentAttributes(span, report.Adjustments)
 	}
 	if response := result.Response; response != nil {
+		source := "unknown"
+		switch response.ContentSource {
+		case core.AIContentSourceFinal, core.AIContentSourceReasoningFallback, core.AIContentSourceMixed:
+			source = string(response.ContentSource)
+		}
+		span.SetAttribute("ai.response.content_source", source)
+		span.SetAttribute("ai.response.finish_reported", response.FinishReason != "")
+		span.SetAttribute("ai.response.token_limit_reached", response.FinishReason == "length" || response.FinishReason == "max_tokens")
+		span.SetAttribute("ai.response.content_bytes", len(response.Content))
+		span.SetAttribute("ai.response.reasoning_bytes", len(response.ReasoningContent))
 		if report == nil || report.Provider == "" {
 			setSpanString(span, "ai.provider", response.Provider)
 		}
@@ -473,6 +483,9 @@ func (c *InstrumentedAIClient) recordResult(
 		record.Model = response.Model
 		record.Provider = response.Provider
 		record.Response = response.Content
+		record.ReasoningContent = response.ReasoningContent
+		record.FinishReason = response.FinishReason
+		record.ContentSource = response.ContentSource
 		record.PromptTokens = response.Usage.PromptTokens
 		record.CompletionTokens = response.Usage.CompletionTokens
 		record.TotalTokens = response.Usage.TotalTokens

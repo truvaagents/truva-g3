@@ -128,6 +128,7 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 
 	// Create the client with resolved configuration
 	client := NewClient(apiKey, baseURL, config.ProviderAlias, logger)
+	client.ReasoningContentFallback = config.ReasoningContentFallback
 	if config.SSEEventMaxBytes > 0 {
 		client.sseEventMaxBytes = config.SSEEventMaxBytes
 	}

@@ -618,7 +618,7 @@ func TestCodecDecodeNormalizesUsageDetails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode returned error: %v", err)
 	}
-	if result.Response.Content != "answer" || result.Response.Provider != "" {
+	if result.Response.Content != "" || result.Response.ReasoningContent != "answer" || result.Response.FinishReason != "stop" || result.Response.ContentSource != core.AIContentSourceFinal || result.Response.Provider != "" {
 		t.Fatalf("response = %#v", result.Response)
 	}
 	wantDetails := &core.AIUsageDetails{
@@ -649,11 +649,14 @@ func TestCodecDecodeStreamNormalizesContentUsageAndFinish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeStream returned error: %v", err)
 	}
-	if result.Response.Content != "think answer" || result.Response.Usage.TotalTokens != 5 {
+	if result.Response.Content != "answer" || result.Response.ReasoningContent != "think " || result.Response.FinishReason != "stop" || result.Response.ContentSource != core.AIContentSourceFinal || result.Response.Usage.TotalTokens != 5 {
 		t.Fatalf("stream result = %#v", result.Response)
 	}
 	if len(chunks) != 3 || chunks[2].Delta || chunks[2].FinishReason != "stop" {
 		t.Fatalf("stream chunks = %#v", chunks)
+	}
+	if chunks[0].Content != "" || chunks[0].ReasoningContent != "think " || chunks[1].Content != "answer" {
+		t.Fatalf("reasoning crossed into final channel: %#v", chunks)
 	}
 }
 

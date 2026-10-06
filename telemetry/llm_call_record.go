@@ -3,6 +3,8 @@ package telemetry
 import (
 	"context"
 	"time"
+
+	"github.com/truvaagents/truva-g3/core"
 )
 
 // LLMCallRecord captures a single LLM call for debugging and observability.
@@ -32,10 +34,13 @@ type LLMCallRecord struct {
 	Provider     string  `json:"provider,omitempty"`
 
 	// Response
-	Response         string `json:"response"`
-	PromptTokens     int    `json:"prompt_tokens"`
-	CompletionTokens int    `json:"completion_tokens"`
-	TotalTokens      int    `json:"total_tokens"`
+	Response         string               `json:"response"`
+	ReasoningContent string               `json:"reasoning_content,omitempty"`
+	FinishReason     string               `json:"finish_reason,omitempty"`
+	ContentSource    core.AIContentSource `json:"content_source,omitempty"`
+	PromptTokens     int                  `json:"prompt_tokens"`
+	CompletionTokens int                  `json:"completion_tokens"`
+	TotalTokens      int                  `json:"total_tokens"`
 
 	// Status
 	Success bool `json:"success"`

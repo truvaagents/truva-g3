@@ -21,6 +21,8 @@ type summaryParseOutcome struct {
 	Truncated        bool                        `json:"truncated"`
 	Outcome          string                      `json:"outcome"`
 	EntityFields     summaryEntityCoverage       `json:"entity_fields"`
+	BatchExcluded    int                         `json:"batch_excluded"`
+	batchExcludedIDs map[string]bool
 	entityFields     map[string]entityFieldObservation
 }
 

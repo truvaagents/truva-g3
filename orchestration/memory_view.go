@@ -40,7 +40,7 @@ type memoryViewReport struct {
 
 // Detail is a request-local presentation, never a stored event or a compactor
 // input. Each tuple carries its own provenance (no cross-record references).
-const memoryDetailViewVersion = "event-detail/v1"
+const memoryDetailViewVersion = "event-detail/v2-record-facts"
 const memoryDetailLegend = "Event tuple (" + memoryDetailViewVersion + "): [event_id, origin_request_id, timestamp, agent, action, outcome]. Each record is self-contained."
 
 type memoryEventDetail struct {
@@ -50,6 +50,9 @@ type memoryEventDetail struct {
 	EntityID        string    `json:"entity_id,omitempty"`
 	EntitiesOmitted int       `json:"entities_omitted,omitempty"`
 	Shortened       bool      `json:"shortened,omitempty"`
+	SummarySource   string    `json:"summary_source"`
+	FallbackReason  string    `json:"summary_fallback_reason,omitempty"`
+	TimeBasis       string    `json:"event_time_basis"`
 }
 
 type memoryEventView struct {
@@ -65,6 +68,9 @@ type memoryEventView struct {
 	Entities        []core.EntityRef `json:"entities,omitempty"`
 	EntitiesOmitted int              `json:"entities_omitted,omitempty"`
 	Shortened       bool             `json:"shortened,omitempty"`
+	SummarySource   string           `json:"summary_source"`
+	FallbackReason  string           `json:"summary_fallback_reason,omitempty"`
+	TimeBasis       string           `json:"event_time_basis"`
 }
 
 func eventMemoryView(event core.AgentEvent, detail bool) memoryEventView {
@@ -76,6 +82,8 @@ func eventMemoryView(event core.AgentEvent, detail bool) memoryEventView {
 		EventID: event.EventID, Origin: origin, Agent: event.AgentName,
 		Action: event.ActionType, Summary: event.Summary, Outcome: event.Outcome,
 		EntityType: event.EntityType, EntityID: event.EntityID,
+		SummarySource: memorySummarySource(event.Metadata), FallbackReason: event.Metadata["summary_fallback_reason"],
+		TimeBasis: memoryTimeBasis(event.Metadata),
 	}
 	if !event.Timestamp.IsZero() {
 		view.Time = event.Timestamp.Format(time.RFC3339)
@@ -118,6 +126,7 @@ func encodeMemoryRecordFormat(record memoryViewRecord, limit int, compact bool) 
 			Event:   [6]string{source.EventID, source.Origin, source.Time, source.Agent, source.Action, source.Outcome},
 			Summary: source.Summary, EntityType: source.EntityType, EntityID: source.EntityID,
 			EntitiesOmitted: source.EntitiesOmitted,
+			SummarySource:   source.SummarySource, FallbackReason: source.FallbackReason, TimeBasis: source.TimeBasis,
 		}
 		summary = view.Summary
 		encode = func(value string, shortened bool) []byte {

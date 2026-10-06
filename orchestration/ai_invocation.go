@@ -397,6 +397,19 @@ func withEffectiveAIRequest(
 	if result != nil && result.Report != nil {
 		interaction.PolicyStable = result.Report.Stable
 	}
+	return withAICompletionFacts(interaction, response)
+}
+
+// withAICompletionFacts preserves the provider's completion evidence in the
+// opt-in debug record. It does not infer a finish reason/source, change outcome
+// semantics, or emit raw reasoning to logs, spans, or baggage. Pass the response
+// from this exact attempt, including a partial response returned with an error.
+func withAICompletionFacts(interaction LLMInteraction, response *core.AIResponse) LLMInteraction {
+	if response != nil {
+		interaction.ReasoningContent = response.ReasoningContent
+		interaction.FinishReason = response.FinishReason
+		interaction.ContentSource = response.ContentSource
+	}
 	return interaction
 }
 

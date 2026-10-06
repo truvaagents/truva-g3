@@ -129,6 +129,7 @@ func NewChainClient(opts ...ChainOption) (*ChainClient, error) {
 		if config.ReasoningEffort != "" {
 			opts = append(opts, WithReasoningEffort(config.ReasoningEffort))
 		}
+		opts = append(opts, WithReasoningContentFallback(config.ReasoningContentFallback))
 		// Per-provider MaxRetries with chain-specific default of 0.
 		//
 		// Why 0 for chain clients (vs 3 for single clients): provider-local
@@ -340,6 +341,7 @@ type ChainConfig struct {
 	Timeout                  time.Duration
 	ReasoningTokenMultiplier int    // Token multiplier for reasoning models (0 = use default 5x)
 	ReasoningEffort          string // Default reasoning effort: "none", "low", "medium", "high", "xhigh" (empty = model default)
+	ReasoningContentFallback bool
 	// CircuitBreakerFactory constructs an independent breaker for each requested
 	// provider entry. Nil leaves the chain unprotected.
 	CircuitBreakerFactory CircuitBreakerFactory
@@ -354,6 +356,12 @@ type ChainConfig struct {
 
 // ChainOption configures a chain client
 type ChainOption func(*ChainConfig)
+
+// WithChainReasoningContentFallback opts compatible entries into legacy answer
+// substitution. The default keeps reasoning separate; other codecs are unchanged.
+func WithChainReasoningContentFallback(enabled bool) ChainOption {
+	return func(c *ChainConfig) { c.ReasoningContentFallback = enabled }
+}
 
 // WithProviderChain sets the provider aliases to try in order
 // Example: WithProviderChain("openai", "openai.deepseek", "anthropic")

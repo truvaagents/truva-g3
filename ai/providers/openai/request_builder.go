@@ -476,6 +476,7 @@ func (c *Client) buildPolicyRequest(
 		ReasoningTokenMultiplier: c.ReasoningTokenMultiplier,
 		DefaultReasoningEffort:   options.ReasoningEffort,
 		MaxSSEEventBytes:         c.sseEventMaxBytes,
+		ReasoningContentFallback: c.ReasoningContentFallback,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create OpenAI wire codec: %w", err)

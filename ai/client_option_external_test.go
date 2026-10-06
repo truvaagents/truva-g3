@@ -18,8 +18,8 @@ func TestPublicClientOptionCompatibility(t *testing.T) {
 		t.Fatal("public integration configuration was not constructible with keyed fields")
 	}
 
-	// Operational SSE control is an intentional public configuration field.
-	if fields := reflect.TypeOf(ai.AIConfig{}).NumField(); fields != 18 {
-		t.Fatalf("AIConfig field count = %d, want current shape of 18", fields)
+	// SSE control and explicit response compatibility are public configuration.
+	if fields := reflect.TypeOf(ai.AIConfig{}).NumField(); fields != 19 {
+		t.Fatalf("AIConfig field count = %d, want current shape of 19", fields)
 	}
 }

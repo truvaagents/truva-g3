@@ -580,7 +580,9 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 				claimed, holder, claimErr = resourcesFromContext(ctx).acquire(ctx, coordinator, h.agentName, entity.ID)
 			} else {
 				claimed, holder, claimErr = h.coordinator.ClaimInvestigation(ctx, h.agentName, entity.ID, 0)
-				telemetry.AddSpanEvent(ctx, "memory.investigation.legacy_ownership", attribute.String("ownership", "agent_name_only"))
+				telemetry.AddSpanEvent(ctx, "memory.investigation.legacy_ownership",
+					attribute.String("request_id", requestID),
+					attribute.String("ownership", "agent_name_only"))
 			}
 			if claimErr != nil {
 				h.logger.WarnWithContext(ctx, "Investigation acquisition could not confirm ownership", map[string]interface{}{"operation": "investigation_acquire", "error_type": "ownership_unknown", "request_id": GetRequestID(ctx)})
@@ -721,11 +723,12 @@ func (h *MemoryEnrichmentHook) BeforePlanning(ctx context.Context, pctx *core.Pi
 // --- Memory Record Hook (AfterExecutionHook) ---
 
 type memoryEventEffect struct {
-	StepID                       string                        `json:"step_id"`
-	SubmittedEvent               core.AgentEvent               `json:"submitted_event"`
-	ProviderCallStatus           core.PipelineHookEffectStatus `json:"provider_call_status"`
-	BackendAssignsIDAndTimestamp bool                          `json:"backend_assigns_event_id_and_timestamp"`
-	ProviderError                string                        `json:"provider_error,omitempty"`
+	StepID                  string                        `json:"step_id"`
+	SubmittedEvent          core.AgentEvent               `json:"submitted_event"`
+	ProviderCallStatus      core.PipelineHookEffectStatus `json:"provider_call_status"`
+	BackendAssignsEventID   bool                          `json:"backend_assigns_event_id"`
+	BackendAssignsTimestamp bool                          `json:"backend_assigns_timestamp"`
+	ProviderError           string                        `json:"provider_error,omitempty"`
 }
 
 type memoryClaimReleaseEffect struct {
@@ -738,19 +741,34 @@ type memoryClaimReleaseEffect struct {
 // It records structured AgentEvents from execution results into episodic memory,
 // and releases investigation claims.
 type MemoryRecordHook struct {
-	episodic        core.EpisodicMemory
-	coordinator     core.InvestigationCoordinator // may be nil
-	summarizer      core.EventSummarizer          // may be nil — falls back to heuristic
-	agentName       string
-	agentDomain     string
-	entityExtractor EntityExtractor
-	importanceFunc  func(actionType, outcome string) float64
-	logger          core.Logger
+	episodic               core.EpisodicMemory
+	coordinator            core.InvestigationCoordinator // may be nil
+	summarizer             core.EventSummarizer          // may be nil — falls back to heuristic
+	agentName              string
+	agentDomain            string
+	entityExtractor        EntityExtractor
+	requestEntityExtractor EntityExtractor // opt-in; recording only, never owns claims
+	failureCauseMaxBytes   int
+	importanceFunc         func(actionType, outcome string) float64
+	logger                 core.Logger
 }
 
 // MemoryRecordOption configures MemoryRecordHook.
 // Returns error if the option value is invalid (fail-fast per core/ARCHITECTURE.md).
 type MemoryRecordOption func(*MemoryRecordHook) error
+
+// WithRecordFailureCauseMaxBytes bounds only the cause text in heuristic failure
+// summaries (default 256 bytes). A shortening marker is additional to this limit.
+// Model/custom summaries and original execution errors remain unchanged.
+func WithRecordFailureCauseMaxBytes(n int) MemoryRecordOption {
+	return func(h *MemoryRecordHook) error {
+		if n <= 0 {
+			return errPositiveRequired("record failure cause byte limit")
+		}
+		h.failureCauseMaxBytes = n
+		return nil
+	}
+}
 
 // WithRecordImportanceFunc sets a custom importance scoring function.
 func WithRecordImportanceFunc(fn func(actionType, outcome string) float64) MemoryRecordOption {
@@ -770,6 +788,22 @@ func WithRecordEntityExtractor(extractor EntityExtractor) MemoryRecordOption {
 			return fmt.Errorf("entity extractor cannot be nil")
 		}
 		h.entityExtractor = extractor
+		return nil
+	}
+}
+
+// WithRecordRequestEntityExtractor adds explicit request entities to each event.
+// The hook passes PipelineContext.Request and copied JSON-like Metadata containers
+// at recording time; opaque values are application-owned and read-only. Request
+// entities precede distinct step entities. These added indexes acquire or release
+// no investigation claims. Nil pipeline contexts provide no request entities.
+// Unset retains existing step-only extraction; nil is an invalid explicit option.
+func WithRecordRequestEntityExtractor(extractor EntityExtractor) MemoryRecordOption {
+	return func(h *MemoryRecordHook) error {
+		if extractor == nil {
+			return fmt.Errorf("record request entity extractor cannot be nil")
+		}
+		h.requestEntityExtractor = extractor
 		return nil
 	}
 }
@@ -833,13 +867,14 @@ func NewMemoryRecordHook(
 		return nil, fmt.Errorf("episodic memory is required for MemoryRecordHook")
 	}
 	h := &MemoryRecordHook{
-		episodic:        episodic,
-		coordinator:     coordinator,
-		agentName:       agentName,
-		agentDomain:     agentDomain,
-		entityExtractor: NoOpEntityExtractor{},
-		importanceFunc:  DefaultImportanceScorer,
-		logger:          &core.NoOpLogger{},
+		episodic:             episodic,
+		coordinator:          coordinator,
+		agentName:            agentName,
+		agentDomain:          agentDomain,
+		entityExtractor:      NoOpEntityExtractor{},
+		failureCauseMaxBytes: defaultRecordFailureCauseMaxBytes,
+		importanceFunc:       DefaultImportanceScorer,
+		logger:               &core.NoOpLogger{},
 	}
 	for _, opt := range opts {
 		if err := opt(h); err != nil {
@@ -879,8 +914,11 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 
 	// Batch-summarize steps via LLM if summarizer is configured
 	var llmSummaries map[string]core.StepSummary
+	var batchExcluded map[string]bool
+	fallbackReason := "not_configured"
 	summaryCoverage := memorySummaryCoverage{Source: "heuristic"}
 	if h.summarizer != nil {
+		fallbackReason = "missing_summary"
 		summaryCoverage.Source = "custom"
 		var inputs []core.StepSummaryInput
 		for _, step := range execResult.Steps {
@@ -895,6 +933,8 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 				Parameters:  step.Parameters,
 				Response:    step.Response,
 				Success:     step.Success,
+				Error:       step.Error,
+				ToolError:   append(json.RawMessage(nil), step.ToolError...),
 			})
 		}
 		if len(inputs) > 0 {
@@ -902,7 +942,9 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 			var err error
 			if builtin, ok := h.summarizer.(*LLMEventSummarizer); ok {
 				parsed := builtin.summarizeWithOutcome(ctx, inputs)
+				batchExcluded = parsed.batchExcludedIDs
 				summaryCoverage.Source, summaryCoverage.Batch = "builtin", &parsed
+				fallbackReason = parsed.Outcome
 				if ctx.Err() != nil {
 					reportStructuredPipelineHookEffect(ctx, "episodic_memory_records", "Episodic memory records",
 						core.PipelineHookEffectFailed, "Parent request cancelled during summarization; no fallback writes attempted",
@@ -914,6 +956,7 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 				summaries, err = h.summarizer.SummarizeSteps(ctx, inputs)
 			}
 			if err != nil {
+				fallbackReason = "summarizer_error"
 				h.logger.WarnWithContext(ctx, "Event summarizer failed, using heuristic fallback", map[string]interface{}{
 					"operation":  "memory_record",
 					"request_id": requestID,
@@ -931,6 +974,10 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 	var eventEffects []memoryEventEffect
 	var releaseEffects []memoryClaimReleaseEffect
 	var firstEffectErr error
+	var requestEntities []Entity
+	if h.requestEntityExtractor != nil && pctx != nil {
+		requestEntities = mergeMemoryEntities(h.requestEntityExtractor.ExtractEntities(pctx.Request, cloneParameterMap(pctx.Metadata)), nil)
+	}
 
 	for _, step := range execResult.Steps {
 		if step.Skipped {
@@ -962,7 +1009,11 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 			}
 		}
 
-		entities := h.entityExtractor.ExtractEntities(step.Instruction, extractionMetadata)
+		stepEntities := h.entityExtractor.ExtractEntities(step.Instruction, extractionMetadata)
+		entities := stepEntities
+		if h.requestEntityExtractor != nil {
+			entities = mergeMemoryEntities(requestEntities, stepEntities)
+		}
 
 		// Telemetry: emit memory.entity_extraction.completed span event + counter.
 		extractionSource := "none"
@@ -975,6 +1026,12 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 				}
 			} else {
 				extractionSource = "explicit_metadata"
+			}
+			if len(requestEntities) > 0 {
+				extractionSource = "request_metadata"
+				if len(stepEntities) > 0 {
+					extractionSource = "request_and_step"
+				}
 			}
 		}
 		extractorType := extractorTypeLabel(h.entityExtractor)
@@ -1010,18 +1067,34 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 		if capType == string(core.CapabilityOrchestrator) {
 			actionType = "delegated"
 		}
+		stepFallbackReason := memoryFallbackReason(fallbackReason)
+		if batchExcluded[step.StepID] {
+			stepFallbackReason = "batch_limit"
+		}
+		eventMetadata := memorySummaryMetadata(llmSummaries, step.StepID, h.summarizer, stepFallbackReason)
+		eventMetadata["entity_source"] = extractionSource
+		occurredAt := memoryEventTime(step, time.Now(), eventMetadata)
+		var primary Entity
+		if len(entities) > 0 {
+			primary = entities[0]
+		}
+		summary, causeShortened := resolveStepSummary(llmSummaries, step.StepID, actionType, primary, step, h.failureCauseMaxBytes)
+		if causeShortened {
+			eventMetadata["summary_cause_shortened"] = "true"
+		}
 
 		if len(entities) > 0 {
 			// One event per step, indexed under all entities
-			primary := entities[0]
 			event := core.AgentEvent{
+				Timestamp:   occurredAt,
+				Metadata:    eventMetadata,
 				AgentName:   h.agentName,
 				AgentDomain: h.agentDomain,
 				ActionType:  actionType,
 				EntityType:  primary.Type,
 				EntityID:    primary.ID,
 				Entities:    toEntityRefs(entities),
-				Summary:     resolveStepSummary(llmSummaries, step.StepID, actionType, primary, step),
+				Summary:     summary,
 				Outcome:     outcome,
 				TraceID:     memoryTraceID(ctx),
 				RequestID:   parentRequestID,
@@ -1032,10 +1105,11 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 
 			recordErr := h.episodic.RecordEvent(ctx, event)
 			eventEffect := memoryEventEffect{
-				StepID:                       step.StepID,
-				SubmittedEvent:               event,
-				ProviderCallStatus:           core.PipelineHookEffectSucceeded,
-				BackendAssignsIDAndTimestamp: event.EventID == "" || event.Timestamp.IsZero(),
+				StepID:                  step.StepID,
+				SubmittedEvent:          event,
+				ProviderCallStatus:      core.PipelineHookEffectSucceeded,
+				BackendAssignsEventID:   event.EventID == "",
+				BackendAssignsTimestamp: event.Timestamp.IsZero(),
 			}
 			if recordErr != nil {
 				if firstEffectErr == nil {
@@ -1056,16 +1130,18 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 				})
 			}
 
-			for _, entity := range entities {
+			for _, entity := range stepEntities {
 				investigatedEntities = append(investigatedEntities, entity.ID)
 			}
 		} else {
 			// Record a domain-level event with no entity index.
 			event := core.AgentEvent{
+				Timestamp:   occurredAt,
+				Metadata:    eventMetadata,
 				AgentName:   h.agentName,
 				AgentDomain: h.agentDomain,
 				ActionType:  actionType,
-				Summary:     resolveStepSummary(llmSummaries, step.StepID, actionType, Entity{}, step),
+				Summary:     summary,
 				Outcome:     outcome,
 				TraceID:     memoryTraceID(ctx),
 				RequestID:   parentRequestID,
@@ -1075,10 +1151,11 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 			}
 			recordErr := h.episodic.RecordEvent(ctx, event)
 			eventEffect := memoryEventEffect{
-				StepID:                       step.StepID,
-				SubmittedEvent:               event,
-				ProviderCallStatus:           core.PipelineHookEffectSucceeded,
-				BackendAssignsIDAndTimestamp: event.EventID == "" || event.Timestamp.IsZero(),
+				StepID:                  step.StepID,
+				SubmittedEvent:          event,
+				ProviderCallStatus:      core.PipelineHookEffectSucceeded,
+				BackendAssignsEventID:   event.EventID == "",
+				BackendAssignsTimestamp: event.Timestamp.IsZero(),
 			}
 			if recordErr != nil {
 				if firstEffectErr == nil {
@@ -1100,10 +1177,10 @@ func (h *MemoryRecordHook) AfterExecution(ctx context.Context, pctx *core.Pipeli
 	}
 
 	// Emit telemetry for recorded events
-	if len(investigatedEntities) > 0 {
+	if len(eventEffects) > 0 {
 		telemetry.AddSpanEvent(ctx, "memory.record.events_written",
 			attribute.String("request_id", requestID),
-			attribute.Int("events_recorded", len(investigatedEntities)),
+			attribute.Int("events_recorded", len(eventEffects)),
 			attribute.String("agent_name", h.agentName),
 		)
 		telemetry.Counter("memory.record.events_total",
@@ -1295,13 +1372,16 @@ func toEntityRefs(entities []Entity) []core.EntityRef {
 	return refs
 }
 
-func resolveStepSummary(llmSummaries map[string]core.StepSummary, stepID, actionType string, entity Entity, step StepResult) string {
+func resolveStepSummary(llmSummaries map[string]core.StepSummary, stepID, actionType string, entity Entity, step StepResult, maxCauseBytes int) (string, bool) {
 	if llmSummaries != nil {
 		if s, ok := llmSummaries[stepID]; ok && s.Summary != "" {
-			return s.Summary
+			return s.Summary, false
 		}
 	}
-	return buildActionableSummary(actionType, entity, step)
+	if !step.Success {
+		return failedMemorySummary(actionType, entity, step, maxCauseBytes)
+	}
+	return buildActionableSummary(actionType, entity, step), false
 }
 
 // buildActionableSummary creates a fact-based event summary that includes key output
@@ -1309,6 +1389,10 @@ func resolveStepSummary(llmSummaries map[string]core.StepSummary, stepID, action
 // downstream agents to make informed decisions based on what actually happened.
 func buildActionableSummary(actionType string, entity Entity, step StepResult) string {
 	toolName := step.AgentName
+	if !step.Success {
+		summary, _ := failedMemorySummary(actionType, entity, step, defaultRecordFailureCauseMaxBytes)
+		return summary
+	}
 
 	// Try to parse response JSON for key output fields
 	var respData map[string]interface{}
@@ -1389,10 +1473,16 @@ func buildActionableSummary(actionType string, entity Entity, step StepResult) s
 			entity.Type, entity.ID, toolName)
 
 	case "delegated":
+		if entity.Type == "" || entity.ID == "" {
+			return fmt.Sprintf("delegated to %s", toolName)
+		}
 		return fmt.Sprintf("delegated to %s for %s/%s",
 			toolName, entity.Type, entity.ID)
 
 	default:
+		if entity.Type == "" || entity.ID == "" {
+			return fmt.Sprintf("%s succeeded via %s", actionType, toolName)
+		}
 		return fmt.Sprintf("%s on %s/%s via %s",
 			actionType, entity.Type, entity.ID, toolName)
 	}
@@ -1478,7 +1568,7 @@ func getParentEventFromContext(ctx context.Context) string {
 
 // --- Digest caching helpers ---
 
-const activityDigestViewVersion = "historical-origin/v4-window"
+const activityDigestViewVersion = "historical-origin/v5-record-facts"
 
 type cachedDigestData struct {
 	Window            *digestWindow `json:"window,omitempty"`

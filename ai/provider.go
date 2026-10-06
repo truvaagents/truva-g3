@@ -68,6 +68,10 @@ type AIConfig struct {
 	// Per-request AIOptions.ReasoningEffort overrides this client-level default.
 	ReasoningEffort string
 
+	// ReasoningContentFallback opts compatible codecs into their legacy use of
+	// reasoning as answer text. False keeps final and reasoning channels separate.
+	ReasoningContentFallback bool
+
 	Logger    core.Logger
 	Telemetry core.Telemetry
 
@@ -83,6 +87,12 @@ type AIConfig struct {
 
 // AIOption configures an AI client
 type AIOption func(*AIConfig)
+
+// WithReasoningContentFallback selects the explicit compatibility behavior for
+// OpenAI-compatible response decoding. It does not change a request's budget.
+func WithReasoningContentFallback(enabled bool) AIOption {
+	return func(c *AIConfig) { c.ReasoningContentFallback = enabled }
+}
 
 // ProviderIntegrationConfig contains request-policy behavior supplied to a
 // request-capable provider factory. Its collections are defensively

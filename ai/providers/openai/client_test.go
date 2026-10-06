@@ -587,8 +587,7 @@ func TestClient_SupportsStreaming(t *testing.T) {
 }
 
 func TestClient_GenerateResponse_ReasoningContent(t *testing.T) {
-	// Test that content is extracted from reasoning_content field when content is empty
-	// This is used by reasoning models like GPT-5, o1, o3, o4
+	// An empty final answer remains empty; reasoning is preserved separately.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{
@@ -622,8 +621,8 @@ func TestClient_GenerateResponse_ReasoningContent(t *testing.T) {
 		t.Fatalf("GenerateResponse() error = %v", err)
 	}
 
-	if resp.Content != "This is the reasoning response from GPT-5" {
-		t.Errorf("Content = %q, want reasoning_content value", resp.Content)
+	if resp.Content != "" || resp.ReasoningContent != "This is the reasoning response from GPT-5" || resp.FinishReason != "stop" || resp.ContentSource != core.AIContentSourceFinal {
+		t.Errorf("reasoning provenance lost: %+v", resp)
 	}
 }
 
@@ -982,14 +981,13 @@ func TestClient_StreamResponse_ReasoningModel(t *testing.T) {
 		t.Error("Reasoning model should NOT have temperature")
 	}
 
-	// Both reasoning_content and content should be captured
-	if len(chunks) < 2 {
-		t.Errorf("Expected at least 2 chunks (reasoning + content), got %d", len(chunks))
+	// Only the final channel appears in Content callbacks.
+	if len(chunks) != 1 || chunks[0] != "The answer is 42" {
+		t.Errorf("unexpected answer chunks: %v", chunks)
 	}
 
-	// Final response should contain all content
-	if resp.Content == "" {
-		t.Error("Expected non-empty response content")
+	if resp.Content != "The answer is 42" || resp.ReasoningContent != "Thinking..." || resp.FinishReason != "stop" {
+		t.Errorf("stream channels lost: %+v", resp)
 	}
 }
 

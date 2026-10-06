@@ -189,10 +189,13 @@ type LLMInteraction struct {
 	PolicyStable      bool                       `json:"policy_stable"`
 
 	// Response fields
-	Response         string `json:"response"` // Complete LLM response
-	PromptTokens     int    `json:"prompt_tokens"`
-	CompletionTokens int    `json:"completion_tokens"`
-	TotalTokens      int    `json:"total_tokens"`
+	Response         string               `json:"response"` // Complete LLM response
+	ReasoningContent string               `json:"reasoning_content,omitempty"`
+	FinishReason     string               `json:"finish_reason,omitempty"`
+	ContentSource    core.AIContentSource `json:"content_source,omitempty"`
+	PromptTokens     int                  `json:"prompt_tokens"`
+	CompletionTokens int                  `json:"completion_tokens"`
+	TotalTokens      int                  `json:"total_tokens"`
 
 	// Status fields
 	Success bool   `json:"success"`

@@ -78,11 +78,11 @@ type ToolError struct {
 	// Message is a human-readable error description
 	Message string `json:"message"`
 
-	// Category groups errors for routing decisions
+	// Category describes the error for consumers; executor retry routing uses HTTP status and Retryable.
 	Category ErrorCategory `json:"category"`
 
-	// Retryable indicates if the agent should attempt to retry with corrected input
-	// When true, agents may use AI to analyze and fix the request
+	// Retryable permits retry consideration; false stops all same-step retries.
+	// True permits unchanged transient retries or eligible input correction, subject to executor gates.
 	Retryable bool `json:"retryable"`
 
 	// Details provides additional context for AI analysis
@@ -183,10 +183,10 @@ var upstreamStatusRegex = regexp.MustCompile(`(?:status|error|code)[:\s]+(\d{3})
 //
 // The returned HTTPStatus is designed to interact with the orchestrator's
 // error routing (error_analyzer.go):
-//   - 400 → LLM error analyzer (parameter correction)
+//   - 400 → stop (this classifier returns Retryable:false for input errors)
 //   - 401/403 → fail immediately (auth issues)
-//   - 429 → resilience retry with backoff (rate limit)
-//   - 502 → resilience retry with backoff (server error)
+//   - 429 → executor retry with backoff (rate limit)
+//   - 502 → executor retry with backoff (server error)
 //
 // Edge cases:
 //   - nil error → SERVICE_ERROR (502, retryable) — fail-safe default
@@ -208,7 +208,7 @@ func ClassifyUpstreamError(err error) UpstreamErrorInfo {
 	if len(matches) < 2 {
 		// No status code found — assume transient service error
 		return UpstreamErrorInfo{
-			HTTPStatus: http.StatusBadGateway, // 502 → resilience retry
+			HTTPStatus: http.StatusBadGateway, // 502 → executor retry
 			Category:   CategoryServiceError,
 			Retryable:  true,
 			Code:       "SERVICE_ERROR",
@@ -219,7 +219,7 @@ func ClassifyUpstreamError(err error) UpstreamErrorInfo {
 	switch {
 	case code == 400 || code == 404 || code == 409 || code == 422:
 		return UpstreamErrorInfo{
-			HTTPStatus: http.StatusBadRequest, // 400 → LLM error analyzer
+			HTTPStatus: http.StatusBadRequest, // Retryable:false stops correction and retry
 			Category:   CategoryInputError,
 			Retryable:  false,
 			Code:       "API_ERROR",
@@ -240,14 +240,14 @@ func ClassifyUpstreamError(err error) UpstreamErrorInfo {
 		}
 	case code == 429:
 		return UpstreamErrorInfo{
-			HTTPStatus: http.StatusTooManyRequests, // 429 → resilience retry
+			HTTPStatus: http.StatusTooManyRequests, // 429 → executor retry
 			Category:   CategoryRateLimit,
 			Retryable:  true,
 			Code:       "RATE_LIMIT",
 		}
 	case code >= 500:
 		return UpstreamErrorInfo{
-			HTTPStatus: http.StatusBadGateway, // 502 → resilience retry
+			HTTPStatus: http.StatusBadGateway, // 502 → executor retry
 			Category:   CategoryServiceError,
 			Retryable:  true,
 			Code:       "SERVICE_ERROR",

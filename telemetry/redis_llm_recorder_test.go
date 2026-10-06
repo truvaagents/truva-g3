@@ -817,6 +817,31 @@ func TestRecordLLMCall_PreservesApplicationPayloadsAtPersistence(t *testing.T) {
 	}
 }
 
+func TestRecordLLMCall_PreservesCompletionFactsAtPersistence(t *testing.T) {
+	_, recorder := setupRedisLLMRecorderTest(t)
+	for index, record := range []LLMCallRecord{
+		{Response: "final *exact*", ReasoningContent: "reason 界 *exact*", FinishReason: "length", ContentSource: core.AIContentSourceFinal, Success: true},
+		{Response: "legacy", ReasoningContent: "reason", FinishReason: "provider-specific", ContentSource: core.AIContentSourceMixed, Success: false},
+		{Response: "unreported", Success: true},
+	} {
+		requestID := fmt.Sprintf("completion-%d", index)
+		if err := recorder.RecordLLMCall(context.Background(), requestID, record); err != nil {
+			t.Fatal(err)
+		}
+		values, err := recorder.client.LRange(context.Background(), recorder.keys.Interactions(requestID), 0, -1).Result()
+		if err != nil || len(values) != 1 {
+			t.Fatalf("stored interactions: %v %v", values, err)
+		}
+		var stored LLMCallRecord
+		if err := json.Unmarshal([]byte(values[0]), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored.Response != record.Response || stored.ReasoningContent != record.ReasoningContent || stored.FinishReason != record.FinishReason || stored.ContentSource != record.ContentSource {
+			t.Fatalf("real writer dropped completion facts: got=%+v want=%+v", stored, record)
+		}
+	}
+}
+
 // TestRecordLLMCall_StampsOriginatingAgentFromBaggage is the format-twin
 // invariant regression guard. The telemetry recorder MUST mirror the
 // orchestration store's "originating_agent" meta hash field so that records

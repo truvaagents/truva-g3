@@ -240,7 +240,7 @@ func TestMemoryRecordHook_ReportsExactRecordedEvent(t *testing.T) {
 		data.Events[0].SubmittedEvent.ActionType != "forecast" ||
 		data.Events[0].SubmittedEvent.Summary == "" ||
 		data.Events[0].ProviderCallStatus != core.PipelineHookEffectSucceeded ||
-		!data.Events[0].BackendAssignsIDAndTimestamp {
+		!data.Events[0].BackendAssignsEventID || data.Events[0].BackendAssignsTimestamp {
 		t.Fatalf("recorded event effect = %#v", data.Events)
 	}
 }
