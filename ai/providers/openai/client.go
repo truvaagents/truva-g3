@@ -27,6 +27,7 @@ type Client struct {
 	defaultExtra             map[string]interface{}
 	ReasoningTokenMultiplier int
 	ReasoningEffort          string
+	ReasoningContentFallback bool
 	requestPolicy            *requestpolicy.Engine
 	credentialSource         ai.CredentialSource
 	endpointResolver         ai.EndpointResolver

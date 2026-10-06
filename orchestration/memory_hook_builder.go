@@ -10,12 +10,13 @@ import (
 
 // memoryHookConfig holds resolved behavioural configuration for BuildMemoryHooks.
 type memoryHookConfig struct {
-	recordExtractor     EntityExtractor // for MemoryRecordHook (AfterExecution)
-	enrichmentExtractor EntityExtractor // for MemoryEnrichmentHook (BeforePlanning)
-	importanceFunc      func(actionType, outcome string) float64
-	retrievalWeights    core.RetrievalWeights
-	lookbackWindow      time.Duration
-	activityFilter      ActivityFilter
+	recordExtractor        EntityExtractor // for MemoryRecordHook (AfterExecution)
+	recordRequestExtractor EntityExtractor // opt-in request entities for recording only
+	enrichmentExtractor    EntityExtractor // for MemoryEnrichmentHook (BeforePlanning)
+	importanceFunc         func(actionType, outcome string) float64
+	retrievalWeights       core.RetrievalWeights
+	lookbackWindow         time.Duration
+	activityFilter         ActivityFilter
 }
 
 // BuildMemoryHooksOption configures behavioural overrides for BuildMemoryHooks.
@@ -49,6 +50,19 @@ func WithBuilderRecordEntityExtractor(e EntityExtractor) BuildMemoryHooksOption 
 			return errNilParam("record entity extractor")
 		}
 		c.recordExtractor = e
+		return nil
+	}
+}
+
+// WithBuilderRecordRequestEntityExtractor adds request-local entities to recorded
+// events. It does not change enrichment extraction or investigation acquisition.
+// Unset preserves step-only extraction. See WithRecordRequestEntityExtractor.
+func WithBuilderRecordRequestEntityExtractor(e EntityExtractor) BuildMemoryHooksOption {
+	return func(c *memoryHookConfig) error {
+		if e == nil {
+			return errNilParam("record request entity extractor")
+		}
+		c.recordRequestExtractor = e
 		return nil
 	}
 }
@@ -279,6 +293,10 @@ func buildRecordOptions(logger core.Logger, aiClient core.AIClient, cfg *memoryH
 		WithRecordLogger(logger),
 		WithRecordEntityExtractor(cfg.recordExtractor),
 		WithRecordImportanceFunc(cfg.importanceFunc),
+	}
+	opts = append(opts, tuning.record...)
+	if cfg.recordRequestExtractor != nil {
+		opts = append(opts, WithRecordRequestEntityExtractor(cfg.recordRequestExtractor))
 	}
 	if aiClient != nil {
 		summarizerOpts := []LLMEventSummarizerOption{WithSummarizerLogger(logger)}

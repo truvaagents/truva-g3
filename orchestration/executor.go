@@ -1399,6 +1399,7 @@ func (e *SmartExecutor) buildStepContext(ctx context.Context, step RoutingStep, 
 							}
 						}
 						telemetry.AddSpanEvent(ctx, "orchestration.template.dependency_inclusion",
+							attribute.String("request_id", GetRequestID(ctx)),
 							attribute.String("reason", reason),
 							attribute.String("step_id", step.StepID),
 							attribute.String("referenced_step", referencedStepID))
@@ -3377,17 +3378,20 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 			}
 			break
 		}
-		correctionAllowed := !usePreResolved
-		if terminalHTTPStatus(status) || (!correctionAllowed && !transientHTTPStatus(status)) {
+		// Classify before every correction path. Transport failures and transient
+		// HTTP failures retry the admitted payload; they are not evidence that
+		// the caller's parameters are wrong. HITL inputs remain immutable.
+		correctionAllowed := !usePreResolved && status >= 400 && status < 500 && !transientHTTPStatus(status)
+		if terminalHTTPStatus(status) || (usePreResolved && nonTransientClientError(status)) {
 			break
 		}
 		// Layer 3: LLM-based Error Analysis (Phase 4 Enhancement)
 		// When ErrorAnalyzer is configured, use LLM to determine if error can be fixed
 		// with different parameters when correction is permitted. An explicit
-		// retryable:false on any response has already stopped the retry loop.
+		// retryable:false in a recognized failed-response envelope has already stopped the retry loop.
 		// HTTP Status Routing:
 		//   - 400, 404, 409, 422 → LLM Error Analyzer (might be fixable with different input)
-		//   - 408, 429, 5xx      → Resilience module (same payload + exponential backoff)
+		//   - 408, 429, 5xx      → Executor retry loop (same payload + exponential backoff)
 		//   - 401, 403, 405      → Fail immediately (auth/permission issues)
 		isOrchestrator := capabilitySchema != nil && capabilitySchema.Type == core.CapabilityOrchestrator
 		if correctionAllowed && e.errorAnalyzer != nil && e.errorAnalyzer.IsEnabled() && !isOrchestrator && validationRetries < e.maxValidationRetries {
@@ -3640,10 +3644,9 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 				// END LAYER 4
 
 				// ============================================================
-				// TRANSIENT ERROR HANDLING (503 timeouts, service unavailable)
-				// If LLM identified this as a transient error, continue with
-				// resilience retry (same payload + exponential backoff) instead
-				// of breaking out of the retry loop.
+				// Legacy transient-status branch. Current correctionAllowed gates
+				// exclude transient HTTP statuses before entering this analyzer path.
+				// Retry routing is status-based, not granted by the model's assessment.
 				// ============================================================
 				if transientHTTPStatus(httpStatus) {
 					isTransientErrorDetected = true // Flag to skip isNonRetryableToolError check below
@@ -3684,7 +3687,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		// Triggers on:
 		// 1. Type-related errors (string patterns like "cannot unmarshal", "type mismatch")
 		// 2. Tool errors with Retryable: true (structured ToolResponse.Error.Retryable)
-		// This ensures AI correction for ALL retryable errors per INTELLIGENT_ERROR_HANDLING.md
+		// Candidate detection remains subject to correctionAllowed and the other caller gates.
 		if correctionAllowed && !isOrchestrator && !terminalHTTPStatus(status) && e.errorAnalyzer == nil && e.validationFeedbackEnabled && e.correctionCallback != nil &&
 			validationRetries < e.maxValidationRetries && shouldAttemptAICorrection(err, responseBody) {
 
@@ -4314,12 +4317,11 @@ func isTypeRelatedError(err error, responseBody string) bool {
 }
 
 // shouldAttemptAICorrection determines if an error should trigger LLM-powered correction.
-// This is the primary entry point for deciding AI correction, combining multiple strategies:
+// This identifies candidates for the legacy callback, subject to caller eligibility gates:
 // 1. Type-related errors: Pattern matching for common type mismatches
 // 2. Structured Retryable errors: Parse ToolResponse and check Error.Retryable flag
 //
-// This function ensures compliance with docs/orchestration/INTELLIGENT_ERROR_HANDLING.md which states
-// that ANY error with Retryable=true should trigger AI correction, not just type errors.
+// A positive result does not override HTTP status, retry policy, HITL approval, or retry budgets.
 func shouldAttemptAICorrection(err error, responseBody string) bool {
 	// Strategy 1: Check for type-related error patterns (legacy support)
 	if isTypeRelatedError(err, responseBody) {
@@ -4335,8 +4337,8 @@ func shouldAttemptAICorrection(err error, responseBody string) bool {
 }
 
 // isRetryableToolError parses the response body as a ToolResponse and checks
-// if the error is marked as retryable. This enables AI correction for ALL
-// errors that tools indicate can be fixed with different input.
+// if the error is marked as retryable. The caller separately decides whether
+// HTTP status and execution policy permit correction.
 //
 // Expected format:
 //

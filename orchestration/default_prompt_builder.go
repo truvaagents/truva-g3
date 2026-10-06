@@ -208,6 +208,7 @@ func (d *DefaultPromptBuilder) BuildPlanningPrompt(ctx context.Context, input Pr
 	sb.WriteString("4. Use \"{{step-N.response.data.field}}\" template syntax for cross-step references (always quoted). Only reference fields listed in the capability's Return Fields. Do not guess field names.\n")
 	sb.WriteString("5. Declare dependencies in depends_on before referencing a step's data\n")
 	sb.WriteString("6. Parallelize independent steps (empty depends_on) for efficiency\n")
+	sb.WriteString("If available agents cannot fulfill the request, return {\"terminal\": true, \"steps\": []}\n")
 	if iterativeInstructions != "" {
 		sb.WriteString("\n")
 		sb.WriteString(iterativeInstructions)

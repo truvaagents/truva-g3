@@ -300,26 +300,29 @@ func normalizeRecorderConfig(cfg *recorderConfig) {
 // This is an internal serialization type — agents write this format, the registry-viewer
 // (which uses orchestration.RedisLLMDebugStore.GetRecord) reads it.
 type llmInteractionJSON struct {
-	Type             string    `json:"type"`
-	SourceComponent  string    `json:"source_component,omitempty"`
-	CallDescription  string    `json:"call_description,omitempty"`
-	StepID           string    `json:"step_id,omitempty"`
-	Timestamp        time.Time `json:"timestamp"`
-	DurationMs       int64     `json:"duration_ms"`
-	Prompt           string    `json:"prompt"`
-	SystemPrompt     string    `json:"system_prompt,omitempty"`
-	Temperature      float64   `json:"temperature"`
-	MaxTokens        int       `json:"max_tokens"`
-	Model            string    `json:"model,omitempty"`
-	Provider         string    `json:"provider,omitempty"`
-	Response         string    `json:"response"`
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	TotalTokens      int       `json:"total_tokens"`
-	Success          bool      `json:"success"`
-	Error            string    `json:"error,omitempty"`
-	Attempt          int       `json:"attempt"`
-	PhaseNumber      int       `json:"phase_number,omitempty"`
+	Type             string               `json:"type"`
+	SourceComponent  string               `json:"source_component,omitempty"`
+	CallDescription  string               `json:"call_description,omitempty"`
+	StepID           string               `json:"step_id,omitempty"`
+	Timestamp        time.Time            `json:"timestamp"`
+	DurationMs       int64                `json:"duration_ms"`
+	Prompt           string               `json:"prompt"`
+	SystemPrompt     string               `json:"system_prompt,omitempty"`
+	Temperature      float64              `json:"temperature"`
+	MaxTokens        int                  `json:"max_tokens"`
+	Model            string               `json:"model,omitempty"`
+	Provider         string               `json:"provider,omitempty"`
+	Response         string               `json:"response"`
+	ReasoningContent string               `json:"reasoning_content,omitempty"`
+	FinishReason     string               `json:"finish_reason,omitempty"`
+	ContentSource    core.AIContentSource `json:"content_source,omitempty"`
+	PromptTokens     int                  `json:"prompt_tokens"`
+	CompletionTokens int                  `json:"completion_tokens"`
+	TotalTokens      int                  `json:"total_tokens"`
+	Success          bool                 `json:"success"`
+	Error            string               `json:"error,omitempty"`
+	Attempt          int                  `json:"attempt"`
+	PhaseNumber      int                  `json:"phase_number,omitempty"`
 }
 
 // RecordLLMCall appends an LLM call record to the versioned DB-0 keyspace.
@@ -350,6 +353,9 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 			Model:            record.Model,
 			Provider:         record.Provider,
 			Response:         record.Response,
+			ReasoningContent: record.ReasoningContent,
+			FinishReason:     record.FinishReason,
+			ContentSource:    record.ContentSource,
 			PromptTokens:     record.PromptTokens,
 			CompletionTokens: record.CompletionTokens,
 			TotalTokens:      record.TotalTokens,

@@ -34,6 +34,7 @@ func TestTemplateInclusionReason(t *testing.T) {
 				}
 				recorder := setupExecutorTestTracer(t)
 				ctx, span := otel.Tracer("inclusion-test").Start(t.Context(), "context")
+				ctx = WithRequestID(ctx, "inclusion-request")
 				ctx, inclusions := executor.buildStepContext(ctx, step, results)
 				span.End()
 				deps := ctx.Value(dependencyResultsKey).(map[string]map[string]interface{})
@@ -63,8 +64,21 @@ func TestTemplateInclusionReason(t *testing.T) {
 						t.Fatal("metadata did not preserve reason and legacy fields")
 					}
 					events := recorder.Ended()[0].Events()
-					if len(events) != 1 || events[0].Name != "orchestration.template.dependency_inclusion" || events[0].Attributes[0].Value.AsString() != reason {
+					if len(events) != 1 || events[0].Name != "orchestration.template.dependency_inclusion" {
 						t.Fatalf("missing trace reason: %+v", events)
+					}
+					attrs := events[0].Attributes
+					if len(attrs) != 4 || string(attrs[0].Key) != "request_id" || attrs[0].Value.AsString() != "inclusion-request" {
+						t.Fatalf("missing first request correlation: %+v", attrs)
+					}
+					foundReason := false
+					for _, attr := range attrs {
+						if string(attr.Key) == "reason" && attr.Value.AsString() == reason {
+							foundReason = true
+						}
+					}
+					if !foundReason {
+						t.Fatalf("trace lost reason: %+v", attrs)
 					}
 					if (len(logger.warnCalls) > 0) != (declaration == "undeclared") {
 						t.Fatalf("misleading warning: %v", logger.warnCalls)

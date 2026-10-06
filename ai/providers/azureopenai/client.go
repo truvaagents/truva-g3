@@ -46,6 +46,7 @@ func newClient(
 		ReasoningTokenMultiplier: config.ReasoningTokenMultiplier,
 		DefaultReasoningEffort:   config.ReasoningEffort,
 		MaxSSEEventBytes:         config.SSEEventMaxBytes,
+		ReasoningContentFallback: config.ReasoningContentFallback,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create Azure OpenAI wire codec: %w", err)

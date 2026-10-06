@@ -21,7 +21,7 @@ import (
 const (
 	// DefaultSurfaceVersion is the versioned identity of the stock chat
 	// completions adapter.
-	DefaultSurfaceVersion = "openai-chat-completions-v1"
+	DefaultSurfaceVersion = "openai-chat-completions-v2"
 	// DefaultReasoningTokenMultiplier reserves room for reasoning tokens while
 	// retaining the legacy OpenAI provider behavior.
 	DefaultReasoningTokenMultiplier = 5
@@ -56,6 +56,10 @@ type Config struct {
 	// MaxSSEEventBytes bounds one complete server-sent event. Non-positive
 	// values use DefaultMaxSSEEventBytes.
 	MaxSSEEventBytes int
+	// ReasoningContentFallback explicitly restores the legacy substitution of
+	// reasoning for an empty answer (and mixed streaming content). The default
+	// keeps the channels separate. Both modes retain provenance and reasoning.
+	ReasoningContentFallback bool
 }
 
 type codec struct {
@@ -64,6 +68,7 @@ type codec struct {
 	defaultReasoningEffort   string
 	forceReasoningObject     bool
 	maxSSEEventBytes         int
+	reasoningContentFallback bool
 }
 
 // NewCodec constructs a reusable codec with stock OpenAI reasoning defaults.
@@ -100,6 +105,7 @@ func newConfiguredCodec(config Config) (*codec, error) {
 		defaultReasoningEffort:   config.DefaultReasoningEffort,
 		forceReasoningObject:     config.ForceReasoningObject,
 		maxSSEEventBytes:         maxSSEEventBytes,
+		reasoningContentFallback: config.ReasoningContentFallback,
 	}, nil
 }
 
@@ -480,7 +486,7 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 	draft := &Draft{
 		Document:        document,
 		surfaceVersion:  c.surfaceVersion,
-		profileIdentity: profileFingerprintIdentity(c.surfaceVersion, profile),
+		profileIdentity: profileFingerprintIdentity(c.surfaceVersion, profile) + fmt.Sprintf(":completion-v2:fallback=%t", c.reasoningContentFallback),
 		semanticModel:   profile.SemanticModel,
 		wireModel:       profile.WireModel,
 		modelField:      profile.ModelField,
@@ -542,10 +548,15 @@ func (c *codec) Decode(response io.Reader) (*core.AIResult, error) {
 	}
 	choice := decoded.Choices[0]
 	content := choice.Message.Content
-	if content == "" {
+	source := core.AIContentSourceFinal
+	if content == "" && c.reasoningContentFallback && choice.Message.ReasoningContent != "" {
 		content = choice.Message.ReasoningContent
+		source = core.AIContentSourceReasoningFallback
 	}
 	result := resultFor(content, decoded.Model, decoded.Usage)
+	result.Response.ReasoningContent = choice.Message.ReasoningContent
+	result.Response.FinishReason = choice.FinishReason
+	result.Response.ContentSource = source
 	if choice.Error != nil || strings.EqualFold(strings.TrimSpace(choice.FinishReason), "error") {
 		return result, endpointErrorOrUnmapped(choice.Error)
 	}
@@ -561,33 +572,51 @@ func (c *codec) DecodeStream(response io.Reader, callback core.StreamCallback) (
 	}
 	parser := newSSEParser(response, c.maxSSEEventBytes)
 	var content strings.Builder
+	var reasoning strings.Builder
+	var finalSeen, fallbackSeen bool
 	var model string
 	var usage usage
 	var finishReason string
 	chunkIndex := 0
 	terminal := false
+	// Any delivered channel prevents replay after a stream failure, including
+	// reasoning-only output. Completion metadata alone does not invent content.
+	emitted := false
+	completion := func() *core.AIResult {
+		result := resultFor(content.String(), model, usage)
+		result.Response.ReasoningContent = reasoning.String()
+		result.Response.FinishReason = finishReason
+		result.Response.ContentSource = core.AIContentSourceFinal
+		if fallbackSeen {
+			result.Response.ContentSource = core.AIContentSourceReasoningFallback
+			if finalSeen {
+				result.Response.ContentSource = core.AIContentSourceMixed
+			}
+		}
+		return result
+	}
 	for {
 		event, err := parser.Next()
 		if errors.Is(err, io.EOF) {
 			if terminal {
 				break
 			}
-			return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0,
+			return streamDecodeFailure(completion(), emitted,
 				errors.New("OpenAI wire stream ended before a terminal event"))
 		}
 		if err != nil {
-			return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0, err)
+			return streamDecodeFailure(completion(), emitted, err)
 		}
 		if event.Done {
 			break
 		}
 		var chunk streamEnvelope
 		if err := json.Unmarshal(event.Data, &chunk); err != nil {
-			return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0,
+			return streamDecodeFailure(completion(), emitted,
 				errors.New("decode OpenAI wire stream event"))
 		}
 		if chunk.Error != nil {
-			return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0,
+			return streamDecodeFailure(completion(), emitted,
 				endpointError(chunk.Error))
 		}
 		if model == "" && chunk.Model != "" {
@@ -597,19 +626,31 @@ func (c *codec) DecodeStream(response io.Reader, callback core.StreamCallback) (
 			usage = *chunk.Usage
 		}
 		for _, choice := range chunk.Choices {
-			delta := choice.Delta.Content
-			if delta == "" {
-				delta = choice.Delta.ReasoningContent
+			if choice.FinishReason != "" {
+				finishReason = choice.FinishReason
 			}
+			delta := choice.Delta.Content
+			reasoningDelta := choice.Delta.ReasoningContent
+			reasoning.WriteString(reasoningDelta)
+			source := core.AIContentSourceFinal
 			if delta != "" {
+				finalSeen = true
+			} else if c.reasoningContentFallback && reasoningDelta != "" {
+				delta = choice.Delta.ReasoningContent
+				source = core.AIContentSourceReasoningFallback
+				fallbackSeen = true
+			}
+			if delta != "" || reasoningDelta != "" {
 				content.WriteString(delta)
-				if callback(core.StreamChunk{Content: delta, Delta: true, Index: chunkIndex, Model: model}) != nil {
-					return resultFor(content.String(), model, usage), nil
+				emitted = true
+				if callback(core.StreamChunk{Content: delta, ReasoningContent: reasoningDelta, ContentSource: source, Delta: true, Index: chunkIndex, Model: model}) != nil {
+					return completion(), nil
 				}
 				chunkIndex++
 			}
 			if strings.EqualFold(strings.TrimSpace(choice.FinishReason), "error") || choice.Error != nil {
-				return streamDecodeFailure(resultFor(content.String(), model, usage), content.Len() > 0,
+				finishReason = choice.FinishReason
+				return streamDecodeFailure(completion(), emitted,
 					endpointErrorOrUnmapped(choice.Error))
 			}
 			if choice.FinishReason != "" {
@@ -621,14 +662,15 @@ func (c *codec) DecodeStream(response io.Reader, callback core.StreamCallback) (
 	if finishReason != "" {
 		normalized := normalizeUsage(usage)
 		_ = callback(core.StreamChunk{
-			Delta:        false,
-			Index:        chunkIndex,
-			FinishReason: finishReason,
-			Model:        model,
-			Usage:        &normalized,
+			Delta:         false,
+			Index:         chunkIndex,
+			FinishReason:  finishReason,
+			ContentSource: completion().Response.ContentSource,
+			Model:         model,
+			Usage:         &normalized,
 		})
 	}
-	return resultFor(content.String(), model, usage), nil
+	return completion(), nil
 }
 
 func streamDecodeFailure(result *core.AIResult, emitted bool, err error) (*core.AIResult, error) {

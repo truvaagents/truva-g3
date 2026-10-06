@@ -283,7 +283,7 @@ type ActivityCoordinationConfig struct {
 	Enabled bool `json:"enabled" env:"TRUVAG3_ACTIVITY_COORDINATION_ENABLED" default:"true"`
 
 	// SignalTTL is the time-to-live for activity signals. Signals expire after this duration.
-	// Should be longer than the longest expected request duration. Default: 5m.
+	// Managed requests renew at TTL/3; direct publishers own renewal. Default: 5m.
 	SignalTTL time.Duration `json:"signal_ttl" env:"TRUVAG3_ACTIVITY_SIGNAL_TTL" default:"5m"`
 
 	// MaxInPrompt is the maximum number of activity signals shown in <agent_coordination>.

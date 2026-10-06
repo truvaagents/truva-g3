@@ -785,11 +785,11 @@ type IterativePlanConfig struct {
 	// Default: 200
 	MaxTotalSteps int `json:"max_total_steps"`
 
-	// PhaseTimeout is the maximum duration for a single phase (plan generation + execution).
-	// Prevents a single continuation phase from hanging indefinitely.
-	// This is applied per-phase on top of the existing TotalTimeout which governs the
-	// entire request. If a phase exceeds this timeout, it is treated as a failure
-	// and the orchestrator synthesizes with whatever results have been collected.
+	// PhaseTimeout is the base budget for a phase (plan generation + execution).
+	// The phase loop enlarges it when the delegated-orchestrator allowance is greater.
+	// The parent context may end it earlier. ExecutionOptions.TotalTimeout is a
+	// base HTTP-call timeout, not an entire-request deadline. A phase timeout fails
+	// the phase; retained partial execution evidence does not guarantee synthesis.
 	// Default: 180s
 	// Env: TRUVAG3_ITERATIVE_PHASE_TIMEOUT
 	PhaseTimeout time.Duration `json:"phase_timeout"`
@@ -797,10 +797,11 @@ type IterativePlanConfig struct {
 	// MaxValidationRounds bounds how many times the phase loop will regenerate a
 	// plan that fails validation before failing the phase. Prevents an infinite
 	// regenerate↔reject loop. SEMANTICS: this is the number of REGENERATION attempts
-	// AFTER the first validation failure. Malformed regenerated JSON consumes one
-	// attempt from this same budget; only parsed candidates run the validators.
+	// AFTER the first validation failure. Malformed JSON or missing intent in a
+	// regenerated plan consumes an attempt; only decoded candidates run validators.
 	// With the default 4, at most 5 validations and 4 regenerations run before the
-	// phase fails. Provider, boundary, and cancellation errors still stop immediately.
+	// phase fails. Provider, boundary, and cancellation errors still stop immediately;
+	// persistent executed-step-ID conflicts may also stop before budget exhaustion.
 	// Default: 4
 	// Env: TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS
 	MaxValidationRounds int `json:"max_validation_rounds"`
