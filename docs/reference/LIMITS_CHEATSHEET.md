@@ -1,28 +1,5 @@
 # TruvaG3 Limits & Configuration Cheatsheet
 
-### Failed-operation prompt views
-
-| Environment setting | Default | Meaning |
-|---|---|---|
-| `TRUVAG3_FAILED_OPERATION_VIEW_DISABLED` | `false` | Disable the derived view; retain legacy failure rendering |
-| `TRUVAG3_FAILED_OPERATION_MAX_VALUE_BYTES` | `4096` | Final encoded bytes per complete attempted input value |
-| `TRUVAG3_FAILED_OPERATION_MAX_STEP_BYTES` | `16384` | Combined error/attempt/input view per failed step |
-| `TRUVAG3_FAILED_OPERATION_MAX_PROMPT_BYTES` | `32768` | Combined failure views per continuation or built-in synthesis prompt |
-
-All numeric env settings are positive. Code zero means unset, negatives fail
-validation. Canonical orchestration strict/compatible env modes apply; explicit
-options win. Continuation child ceilings cannot exceed the existing failure
-share; raising a child alone cannot bypass its parent. Final encoded child bytes
-and legacy pre-encoding parent bytes are reported separately. No new LLM calls
-are introduced. The per-error quarter-share is an internal allocation heuristic,
-not another operator limit: it reserves room for dispatch metadata and inputs.
-
-Episodic Redis retrieval uses internal batches of 256 references/GETs. This is
-transport chunking, not an event-count cap: all retained candidates are examined
-before selecting the newest visible `EventFilter.Limit` events. Retention remains
-controlled by `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN`; changing the batch size
-does not change query eligibility or ordering.
-
 Quick reference for configurable defaults and enforced framework/provider
 boundaries. A value is overrideable only where its row names an environment
 variable or programmatic option; fixed validation limits cannot be raised.
@@ -32,6 +9,11 @@ environment variable > constructor/config default.
 
 > For full details on environment variables see [ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md).
 > For programmatic configuration and `With*` options see [API_REFERENCE.md](API_REFERENCE.md).
+
+**Quick navigation:** [Token limits](#llm-token-limits),
+[execution limits](#execution-limits), [retry budgets](#retry-budgets),
+[failed-operation views](#failed-operation-prompt-views),
+and [shared memory](#shared-memory).
 
 ---
 
@@ -47,7 +29,7 @@ environment variable > constructor/config default.
 | Micro-resolution & semantic-retry model override | — | `TRUVAG3_MICRO_RESOLUTION_MODEL` | `WithMicroResolutionAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
 | Micro-resolution & semantic-retry output | 2000 / 1000 | `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` | `WithMicroResolutionAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
 | Tiered selection output | 2000 | `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `WithTieredSelectionMaxTokens(n)` |
-| Core AI max tokens | 2000 | `TRUVAG3_AI_MAX_TOKENS` | — |
+| Core AI max tokens | 2000 | `TRUVAG3_AI_MAX_TOKENS` is a reserved struct tag, not read by `LoadFromEnv` | Explicit AI-client options or orchestration call options |
 
 > `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` / `TRUVAG3_MICRO_RESOLUTION_MODEL` are **shared**: they govern both micro-resolution and Layer 4 semantic retry (contextual re-resolution). The base **defaults differ** — micro-resolution is 2000 tokens, semantic retry is 1000 — but setting either env var (or `WithMicroResolutionAIOptions`) overrides **both**. There is no separate `TRUVAG3_SEMANTIC_RETRY_MAX_TOKENS`; raise the micro-resolution token limit if a semantic-retry response is being truncated. `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS` (see Retry Budgets) controls retry *count*, not output tokens.
 
@@ -134,11 +116,37 @@ and [Titan Text Embeddings V2](https://docs.aws.amazon.com/bedrock/latest/usergu
 | Azure OpenAI v1 reasoning families | Uses `max_completion_tokens`, top-level `reasoning_effort`, and reasoning-restricted sampling |
 | Azure OpenAI classic | Ordinary `max_tokens` profile only; reasoning-family requests are rejected because no classic reasoning contract is verified |
 | Stock OpenAI reasoning families | Uses `max_completion_tokens`; the default reasoning token multiplier is 5 |
+| Native OpenAI GPT-6 family | Efforts `low`, `medium`, `high`, `xhigh`, `max`; `none` only for Sol/Luna. Active/default reasoning rejects sampling/logprob and native Chat Completions tool controls after policy |
+| Exact OpenRouter `openai/gpt-6-luna` | Built-in temperature removal; Compatible reports adaptation, Strict requires acknowledgement for explicit values. Exact model row declares JSON object/schema and OpenAI-style reasoning |
+| Exact OpenRouter DeepSeek v4.1 Flash / GLM 5.3 Flash | JSON object supported by adapter capability rows; schema and reasoning style not declared |
 | `openai.ollama` non-reasoning models | Retains `max_tokens` and ordinary sampling; nested reasoning effort is emitted only when effort is set |
 
 Compatible policy mode reports built-in adjustments. Strict mode rejects a
 built-in adjustment to explicit request-aware intent unless application policy
 acknowledges the affected path.
+
+The default ×5 token multiplier applies only to a scaling reasoning profile
+with effective nonempty effort other than `none`, including client/chain
+defaults inherited by calls that supply no effort. An empty effective effort
+or `none` leaves the configured budget unmultiplied. There is **no per-model
+output-token ceiling clamp**; developers must choose a budget/multiplier accepted by that
+model. No new model defaults or automatic model discovery were introduced.
+
+Final/reasoning separation defaults on for compatible codecs. The legacy
+opt-in is code-only: `ai.WithReasoningContentFallback(true)` or
+`ai.WithChainReasoningContentFallback(true)` (direct codec:
+`Config.ReasoningContentFallback`). It changes response projection/cache identity,
+not token, retry or timeout budgets. Empty final content or `finish_reason=length`
+does not by itself create another attempt.
+
+Decoded-provider errors share the existing provider `MaxRetries` budget with
+HTTP/transport errors; there is no separate in-body retry budget. Standalone
+clients and `ProviderEntry` default to three retries, legacy `NewChainClient`
+entries to zero; explicit options/positive retry env overrides apply as documented.
+Delivered answer or reasoning output prevents stream replay. OpenRouter allows
+status-only same-provider retries for 429/500/502/503/504, not 501/505; unknown
+typed errors are conservative. This is separate from outer-chain failover and
+from orchestration's tool-step retry policy.
 
 Provider contract sources: [Anthropic Sonnet 5 sampling changes](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5),
 [Anthropic model deprecations and migration behavior](https://platform.claude.com/docs/en/docs/about-claude/model-deprecations),
@@ -162,8 +170,20 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 | Enabled | true | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | — |
 | Max phases per request | 5 | `TRUVAG3_ITERATIVE_MAX_PHASES` | — |
 | Max total steps (all phases) | 200 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | — |
-| Phase timeout | 180s | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | — |
+| Configured phase budget (may be enlarged; see [Execution Limits](#execution-limits)) | 180s | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | — |
 | Max validation rounds | 4 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | Regen attempts after first validation failure; phase fails if exceeded |
+| Regeneration feedback | 16384 bytes | `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `IterativePlanning.RegenerationFeedbackMaxBytes`; effective value must be > 0 when validated. Encoded added correction context, not the full prompt |
+| Distinct prior validation errors retained per phase | 8 | — | Internal bounded history; the encoded feedback limit can omit entries earlier |
+
+At most `1 + MaxValidationRounds` candidates reach validation: malformed
+regenerated JSON spends a regeneration attempt without another validation.
+Provider, boundary and cancellation errors can stop earlier. A continuation
+regeneration that still reuses executed step IDs returns an error immediately;
+it need not consume every validation round. Correction context
+keeps the latest feedback and bounded prior evidence; omitted history is marked.
+If even required feedback cannot fit the configured byte limit, preparation
+fails before another model call. Standard orchestration configuration-resolution
+rules apply to invalid explicit values; see the environment guide.
 
 Dependency-only fixed point: consecutive all-skipped phases with identical
 failed ancestors stop non-terminal continuation after one opportunity to adapt;
@@ -174,20 +194,31 @@ this is a structural invariant, not a tunable retry budget. Actual work resets i
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
 | Max parallel steps | 25 | `TRUVAG3_EXECUTION_MAX_CONCURRENCY` | `WithMaxConcurrency(n)` |
-| Step timeout | 120s | `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `WithStepTimeout(d)` |
-| Total execution timeout | 600s | `TRUVAG3_ORCHESTRATION_TIMEOUT` | `WithTotalTimeout(d)` |
+| Delegation execution allowance | 120s | `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `WithStepTimeout(d)` |
+| Base outbound HTTP timeout | 600s | `TRUVAG3_ORCHESTRATION_TIMEOUT` | `WithTotalTimeout(d)` |
 | Execution-debug store write timeout | 5s | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `WithExecutionStoreWriteTimeout(d)` |
 | Request resource cleanup | 5s | `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` | `WithExecutionCleanupTimeout(d)`; explicit non-positive/invalid values fail startup in both config modes. Cancellation-independent, joined optional cleanup; providers honor context |
 
-## Scheduled Executor
+The cleanup budget bounds optional activity removal/investigation release after
+a managed request segment; it does not extend task, phase or provider timeouts.
+Provider calls must honor cancellation. Investigation leases are not renewed;
+activity signals are renewed at `max(TTL/3, 1ns)` while their request is active.
+That renewal cadence is derived, not a separate setting; each submission uses
+at most `min(cleanup timeout, renewal interval)`, subject to its parent context.
 
 For `SmartExecutor`, `StepTimeout` is not a direct deadline on ordinary tool
 calls. The shared HTTP client uses `TotalTimeout`, enlarged when
 `HITL.DefaultTimeout + StepTimeout` is greater. Delegated orchestrator calls also
-receive that extended context deadline, and iterative phase timeout can be
-enlarged to accommodate it. Parent cancellation, the effective phase deadline,
-and the target server's write timeout remain independent limits. The scheduled
-executor setting below configures a different dispatch path.
+receive a context deadline of `HITL.DefaultTimeout + StepTimeout`. With resolved
+positive settings, the iterative phase budget is the greater of its configured
+timeout and this delegation allowance, even when the plan contains no delegated
+call. Parent cancellation, the effective phase deadline, and the target server's
+write timeout remain independent limits. `TotalTimeout` does not impose an
+end-to-end workflow deadline; the caller/task context must supply that bound.
+
+## Scheduled Executor
+
+The scheduled executor configures a separate dispatch path:
 
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
@@ -197,7 +228,7 @@ executor setting below configures a different dispatch path.
 | Retry max delay | 60s | `TRUVAG3_EXECUTOR_RETRY_MAX_DELAY` | — |
 | Dispatch timeout | 15m | `TRUVAG3_EXECUTOR_DISPATCH_TIMEOUT` | — |
 
-> The dispatch timeout is the HTTP client timeout for the synchronous POST to the target agent. It must be ≥ the target agent's `TRUVAG3_ORCHESTRATION_TIMEOUT`, otherwise the executor cancels the request before multi-phase orchestration completes.
+> The dispatch timeout bounds the synchronous POST to the target agent. Size it for the target's entire request, including planning, all phases, retries, synthesis and any blocking HITL wait. Matching only `TRUVAG3_ORCHESTRATION_TIMEOUT` is insufficient: that setting is a per-call HTTP timeout, not the target's whole workflow budget. Earlier parent or server deadlines still apply.
 
 ## Redis and Valkey Connection Limits
 
@@ -259,6 +290,33 @@ under a soft aggregate target; escaping and later framing can increase sent size
 > `…_RESULT_MAX_CHARS` now sizes only the **non-JSON** floor preview (logs/markdown/CSV) — JSON results are digested, and orchestrator JSON delegation responses are additionally child-summary-extracted, so child sub-steps stay visible regardless. `…_MAX_TOTAL_CHARS` is a **soft target** for the whole section (not a hard cap — failed steps and the newest successful step are always kept, and notes are appended after the budget decision): digests fill newest-first; older steps evict with a "showing N of M" note (~268 B/digest measured → ~122 steps fit 32 KB). `…_MAX_ESCALATIONS` calls are newest-first, sequential fast-model calls and fire ~never on all-JSON workloads. Raise `…_DIGEST_SCALAR_MAX` so the planner sees longer salient values inline at plan time.
 
 > **Migration (upgrading from pre-Phase-14):** `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` previously truncated **every** completed-step result (raw, per-step). It now governs **only the non-JSON floor preview** — valid-JSON steps are digested and no longer honor it. The env var name and its default (`10000`) are unchanged, so **no action is required**; JSON steps simply render as structure-complete digests instead of raw 10 KB truncations. If a deployment relied on the old raw-truncation behavior for JSON results, there is no equivalent toggle — the digest path supersedes it.
+
+### Failed-operation prompt views
+
+| Environment setting | Default | Meaning |
+|---|---|---|
+| `TRUVAG3_FAILED_OPERATION_VIEW_DISABLED` | `false` | Disable the derived view; retain legacy failure rendering |
+| `TRUVAG3_FAILED_OPERATION_MAX_VALUE_BYTES` | `4096` | Final encoded bytes per complete attempted input value |
+| `TRUVAG3_FAILED_OPERATION_MAX_STEP_BYTES` | `16384` | Combined error/attempt/input view per failed step |
+| `TRUVAG3_FAILED_OPERATION_MAX_PROMPT_BYTES` | `32768` | Combined failure views per continuation or built-in synthesis prompt |
+
+All numeric env settings are positive. Code zero means unset, negatives fail
+validation. Canonical orchestration strict/compatible env modes apply.
+`WithFailedOperationView` replaces the entire environment-resolved view config;
+omitted code fields resolve to defaults, not retained environment values.
+Continuation child ceilings cannot exceed the existing failure
+share; raising a child alone cannot bypass its parent. Final encoded child bytes
+and legacy pre-encoding parent bytes are reported separately. No new LLM calls
+are introduced. The per-error quarter-share is an internal allocation heuristic,
+not another operator limit: it reserves room for dispatch metadata and inputs.
+
+The continuation failure share is
+`min(ContinuationResultMaxChars, ContinuationResultMaxTotalChars / (failedCount + 1))`
+in legacy pre-encoding bytes (defaults 10,000 and 32,768). Each encoded view
+also has to fit its value/step/prompt ceilings; whole values or attempts are
+omitted with markers rather than cut into invalid JSON. Built-in synthesis has
+the child limits but no equivalent continuation parent share. Raw dispatch
+records are unchanged; these limits do not cap their storage size or retention.
 
 ## Remediation Failure-Pattern Analyzer
 
@@ -330,14 +388,41 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | Plan parse retry | 2 | `TRUVAG3_PLAN_RETRY_MAX` | `WithPlanParseRetry(bool, n)` |
 | Hallucination retry | 1 | `TRUVAG3_HALLUCINATION_MAX_RETRIES` | `WithHallucinationRetry(bool, n)` |
 | Semantic retry (Layer 4) | 2 | `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS` | — |
-| Step execution retry | 2 | — | — |
+| Analyzer / legacy parameter-correction budget | 2 | None | `ExecutionOptions.MaxValidationRetries`; direct `SetValidationFeedback(enabled, n)`. Analyzer and Layer 4 share the step's `validationRetries` counter, with their respective ceilings; these are not independent additive retry allowances. |
+| Step execution attempts | 3 total (1 initial + 2 retries) | `TRUVAG3_STEP_RETRY_MAX_ATTEMPTS` | `ExecutionOptions.RetryAttempts`; direct `SmartExecutor.SetMaxAttempts(n)` |
 | AI provider retry (`NewClient` / `NewRequestClient`) | 3 | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithMaxRetries(n)`; explicit 0 disables |
 | AI provider retry (legacy `NewChainClient`) | 0 per provider (avoids multiplying provider retries and ordered failover attempts) | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithChainMaxRetries(n)`; explicit 0 disables |
 | AI provider retry (heterogeneous `NewChain` `ProviderEntry`) | 3 per independently constructed entry | `TRUVAG3_AI_RETRY_ATTEMPTS` (only positive values apply) | `ai.WithMaxRetries(n)` on each entry; explicit 0 disables |
 | AI provider retry (heterogeneous `NewChain` `ClientEntry`) | Caller-owned client behavior | Caller-owned | Configure the injected client |
-| AI provider initial retry delay | 1s, then exponential backoff | `TRUVAG3_AI_RETRY_DELAY` (positive Go duration) | `AIConfig.RetryDelay`; HTTP 429/503, or eligible decoded semantic 429/503 in OpenAI-compatible clients, may increase it with `Retry-After`. One shared budget covers HTTP and decoded retries in adopting adapters. Each wait ends at the earlier caller deadline or absolute wait cap (positive HTTP-client timeout, otherwise the 180s framework fallback); this cap does not cancel a successful streaming response's transport context |
+| AI provider initial retry delay | 1s, then exponential backoff | `TRUVAG3_AI_RETRY_DELAY` (positive Go duration) | `AIConfig.RetryDelay`; HTTP 429/503, or eligible decoded semantic 429/503 in `ai/providers/openai` and its registered aliases, may increase it with `Retry-After`. One shared budget covers HTTP and decoded retries in adopting adapters; direct Azure remains transport-only. Each wait ends at the earlier caller deadline or absolute wait cap (positive HTTP-client timeout, otherwise the 180s framework fallback); this cap does not cancel a successful streaming response's transport context |
+
+Tool-step refusal wins over budgets: explicit `retryable:false` stops every
+same-step resend. Transport/408/429/5xx retry unchanged; only eligible
+non-transient 4xx reaches parameter correction, with no unchanged 4xx resend.
+HITL/exact-bound inputs remain protected from correction. Ordinary approved
+steps can still be resent unchanged on eligible transient failures; approval
+does not guarantee exactly-once side effects. Delegated orchestrator capabilities
+remain one physical dispatch regardless of the ordinary step budget. Read
+`DispatchCount`/`Dispatches` for physical calls, not the legacy `Attempts` counter.
+
+Malformed replacements within initial unknown-agent recovery share the **hallucination
+retry** budget above. Their next correction reuses the selected catalog and
+receives the latest parse/intent error; it does not start the plan-parse budget
+or a new tier selection. The existing phase-level fallback regeneration can
+still follow a generation failure. These per-layer limits are not a single
+whole-request model-call cap. Continuation unknown-agent recovery makes one
+regeneration attempt; failure returns the original unknown-agent error. Outer
+phase fallback regeneration may still follow, subject to context and preparation
+gates. Parse
+or intent failures inside validation regeneration consume validation rounds,
+not a separate parse-retry allowance.
 
 ## Circuit Breaker
+
+These are `core.Config` declaration defaults. The env names below are **struct
+tags only**, not runtime overrides read by core or the standalone resilience
+module. They do not configure an orchestration executor or an AI chain breaker;
+use the owning component's programmatic configuration.
 
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
@@ -347,6 +432,9 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | Half-open requests | 3 | `TRUVAG3_CB_HALF_OPEN` | — |
 
 ## Resilience
+
+Likewise, these core-config env declarations are not parsed runtime controls.
+They are distinct from the implemented [retry budgets](#retry-budgets) above.
 
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
@@ -397,30 +485,60 @@ Sweep interval for the in-process eviction sweeper used by `Framework.AutoRegist
 |------|---------|---------|----------------|
 | Domain stream max length | 100000 | `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN` | — |
 | Investigation claim TTL | 30m | `TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL` | — |
+| Event lookback window | 24h | None | `WithMemoryLookback(d)` (builder) / `WithEnrichmentLookback(d)` (direct); positive duration |
 | Enrichment view budget (4 encoded bytes/token) | 2000 (8000 bytes) | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` | `WithEnrichmentMaxTokens(n)` (direct hook) |
 | Recent events limit | 20 | `TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT` | `WithEnrichmentRecentEventsLimit(n)` |
 | Summarizer model override | — | `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `WithSummarizerModel(m)` |
 | Event summary output tokens per call | Calculated: max(300, 150 × batch size) | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` | `WithSummarizerMaxTokens(n)` |
-| Compaction digest max tokens | 500 | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `WithCompactionMaxTokens(n)` |
+| Event summary tokens per admitted step | 150, with 300-token call floor | None | `WithSummarizerTokensPerStep(n)`; positive; a fixed max-tokens override wins |
+| Event summary admitted steps per call | 20 | None | `WithSummarizerMaxStepsPerBatch(n)`; positive; excess steps use heuristic fallback, not extra batches |
+| Event summary invocation timeout | 2m | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` | `WithSummarizerTimeout(d)`; positive; earlier parent deadline wins |
+| Event summary input payload per step (encoded failure facts + response) | 4000 bytes | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_RESPONSE_BYTES` | `WithSummarizerMaxResponseChars(n)` (legacy name; bytes) |
+| Stored heuristic failure cause (code or error text; UTF-8 safe) | 256 bytes, plus framing and explicit shortening marker | `TRUVAG3_SHARED_MEMORY_RECORD_FAILURE_CAUSE_MAX_BYTES` | `WithRecordFailureCauseMaxBytes(n)`; positive only; source errors and model/custom summaries unchanged |
+| Compaction digest requested output length | 500 tokens | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `WithCompactionMaxTokens(n)` |
+| Built-in compactor generation allowance (`AIOptions.MaxTokens`) | 2500 tokens (5 × digest target) | Derived from the preceding setting | No independent control |
 | Compaction raw event limit | 200 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` | `WithCompactionRawLimit(n)` |
 | Compaction recent detail | 15 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` | `WithCompactionRecentDetail(n)` |
 | Digest cache TTL | 5m | `TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL` | `WithDigestCacheTTL(d)` |
 | Digest incremental threshold | 20 | `TRUVAG3_SHARED_MEMORY_DIGEST_INCREMENTAL_THRESHOLD` | `WithIncrementalThreshold(n)` |
+
+The digest target is a prompt instruction, not a tokenizer-enforced length.
+Both full and incremental built-in compaction request five times that target as
+their generation allowance; provider reasoning-budget translation may further
+change the wire value. The final enrichment view has its own encoded byte budget.
+
+Episodic Redis retrieval uses internal batches of 256 references/GETs. This is
+transport chunking, not an event-count cap: all retained candidates are examined
+before selecting the newest visible `EventFilter.Limit` events. Retention remains
+controlled by `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN`; changing the batch size
+does not change query eligibility or ordering.
 
 Digest reuse covers the bounded returned window, not unlimited history. The raw
 event limit also bounds stored event fingerprints. Lookback, raw limit and digest
 output-token target invalidate incompatible cached windows. An unchanged limited
 window needs zero compaction calls; edits, expiry or displacement rebaseline it.
 The digest TTL alone does not extend the event lookback. Observed-read failures
-leave the cache untouched; legacy readers without read-health observation bypass
-reuse. No new cursor-size or query scan cap is introduced.
+leave the cache untouched; readers without read-health observation and external
+custom compactors without the built-in private fingerprint contract bypass
+reuse. There is no public custom-compactor fingerprint option. No new cursor-size
+or query scan cap is introduced.
 
 At the `core.Config` boundary, numeric shared-memory/activity settings now fail
 startup on invalid explicit values, even with the optional feature disabled.
 Absent settings retain documented defaults; compaction recent detail permits
 zero. File/typed configuration is validated too. The hook builder also validates
 all hook-owned numeric environment settings before checking optional dependencies.
-Backend wiring and deployment preflight remain separate N4-R work.
+Backend wiring and deployment preflight remain separate from configuration
+validation. Convenience construction validates backend-owned settings before
+I/O; direct constructors use their explicit options instead of reading env.
+
+Investigation TTL is advisory expiry, not a requirement to cover HITL waiting:
+managed requests release claims on suspension and resume acquires fresh claims.
+A zero per-acquisition TTL selects the provider default; negative is invalid.
+Lookback, stream retention, digest TTL, claim TTL and activity TTL are independent.
+Finite knowledge-retrieval weights may be signed or zero and need not sum to 1;
+non-finite values fail validation. These weights have programmatic options, not
+new environment variables.
 
 The enrichment-view setting is read at startup by `BuildMemoryHooks`, with or
 without an AI client. Unset uses 2000; invalid, empty, non-positive or overflowing
@@ -483,7 +601,7 @@ This setting is separate from synthesis and enrichment/compaction budgets.
 | Enabled | true | `TRUVAG3_ACTIVITY_COORDINATION_ENABLED` | — |
 | Signal TTL | 5m | `TRUVAG3_ACTIVITY_SIGNAL_TTL` | `WithAnnouncementSignalTTL(d)` |
 | Max signals in prompt | 10 | `TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT` | — |
-| Query max length | 200 | `TRUVAG3_ACTIVITY_SIGNAL_QUERY_MAX_LEN` | `WithAnnouncementQueryMaxLen(n)` |
+| Query prefix length | 200 bytes, plus `...` if shortened | `TRUVAG3_ACTIVITY_SIGNAL_QUERY_MAX_LEN` | `WithAnnouncementQueryMaxLen(n)`; legacy byte slicing, not a rune count |
 
 Managed requests renew activity at one-third of the effective signal TTL.
 Each submission is bounded by `min(TTL/3, execution cleanup timeout)`;

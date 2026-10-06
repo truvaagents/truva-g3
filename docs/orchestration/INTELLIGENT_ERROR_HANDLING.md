@@ -86,7 +86,7 @@ type ToolError struct {
     Code      string            `json:"code"`      // Machine-readable: "LOCATION_NOT_FOUND"
     Message   string            `json:"message"`   // Human-readable: "City 'NYC' not found"
     Category  ErrorCategory     `json:"category"`  // Classification for routing
-    Retryable bool              `json:"retryable"` // Can agent retry with different input?
+    Retryable bool              `json:"retryable"` // Permission for eligible same-step retries
     Details   map[string]string `json:"details"`   // Context for AI analysis
 }
 ```
@@ -231,10 +231,10 @@ func (w *WeatherTool) handleCurrentWeather(rw http.ResponseWriter, r *http.Reque
 
 > **Recommended for upstream API calls:** Use `core.ClassifyUpstreamError(err)` instead of writing per-tool classification logic. It extracts HTTP status codes from error messages (formats like `"error 400"`, `"status 429"`, `"code: 502"`) and returns the correct `(HTTPStatus, Category, Retryable)` tuple.
 >
-> - Upstream 400/404/409/422 → Tool returns 400 → LLM error analyzer (parameter correction)
+> - Upstream 400/404/409/422 → Tool returns 400 with `Retryable:false` → stop. A tool-owned explicit opt-in for a known correctable condition can permit parameter correction.
 > - Upstream 401/403 → Tool returns 401/403 → Fail immediately
-> - Upstream 429 → Tool returns 429 → Resilience retry with exponential backoff
-> - Upstream 5xx / unknown → Tool returns 502 → Resilience retry with exponential backoff
+> - Upstream 429 → Tool returns retryable 429 → executor's unchanged-input backoff
+> - Upstream 5xx / unknown → Tool returns retryable 502 → executor's unchanged-input backoff
 >
 > See: [API Reference — ClassifyUpstreamError](../reference/API_REFERENCE.md#classifyupstreamerror) and [Tool Development Guide — Upstream Error Handling](../building/TOOL_DEVELOPMENT_GUIDE.md#upstream-error-handling)
 
@@ -246,7 +246,7 @@ When an external API fails, your tool needs to translate that failure into a str
 
 Here's the decision process:
 
-1. **Check for "not found" errors** → User might have misspelled something → Retryable with corrected input
+1. **Check a known, safely correctable lookup condition** → A spelling correction is permitted by this capability → Explicitly opt in; a generic 404 is not sufficient
 2. **Check for authentication errors** → API key is wrong → NOT retryable (agent can't fix credentials)
 3. **Check for rate limit errors** → Too many requests → Retryable after waiting
 4. **Default to service error** → Something unexpected → Retryable (might be transient)
@@ -256,7 +256,7 @@ func (w *WeatherTool) classifyAPIError(err error, location string) *core.ToolErr
     errStr := err.Error()
 
     // Check 1: Location not found (agent can retry with different spelling)
-    if strings.Contains(errStr, "city not found") || strings.Contains(errStr, "404") {
+    if strings.Contains(errStr, "city not found") {
         return &core.ToolError{
             Code:      "LOCATION_NOT_FOUND",
             Message:   fmt.Sprintf("Location '%s' not found in weather database", location),
@@ -395,12 +395,24 @@ When a tool returns an error, the agent needs to answer two questions:
 
 Here's the decision tree:
 
+For the framework executor, explicit `retryable:false` stops all same-step
+retries before this status routing. Its Go zero value is sent on the wire.
+The wire parser recognizes it only inside an object-valued `error` when the
+envelope also supplies `success:false`. Missing, null, non-boolean or misplaced
+flags mean unspecified permission, not false. See
+[Component Retry Policy on the Wire](ERROR_HANDLING_GUIDE.md#component-retry-policy-on-the-wire)
+for non-Go tool integration.
+Transient 408/429/5xx preserve admitted parameters; non-transient 4xx correction
+requires eligibility and budget. 401/403/405 stop immediately. HITL-approved and
+exact-bound values are protected, and delegated orchestrator calls are single
+dispatch. See [the executor routing contract](ERROR_HANDLING_GUIDE.md#12-quick-reference).
+
 ```
 HTTP Status Code Decision:
 ┌─────────────────────────────────────────────────────────────────────┐
 │ 2xx (Success)     → No retry needed                                 │
-│ 401/403 (Auth)    → NOT retryable (agent can't fix credentials)     │
-│ 429 (Rate Limit)  → Retry after backoff (check retry_after)         │
+│ 401/403/405       → NOT retryable                                 │
+│ 408/429           → Retry unchanged after bounded backoff          │
 │ 5xx (Server)      → Retry with SAME payload (transient error)       │
 │ 4xx (Client)      → Check ToolError.Retryable for AI correction     │
 └─────────────────────────────────────────────────────────────────────┘
@@ -415,6 +427,12 @@ Retry Strategy:
 ### Agent Retry Configuration
 
 Before implementing retry logic, define these configuration types. They live in your agent code, not in core:
+
+The manual loop below is a teaching example for agents that do not use the
+orchestration executor, not its current implementation or a second retry layer
+to wrap around it. It omits the executor's policy-presence, immutable-binding,
+HITL and dispatch-evidence protections. Framework-based orchestrator agents
+configure the existing executor instead of copying this simplified loop.
 
 ```go
 // RetryConfig controls how the agent handles failed tool calls
@@ -812,19 +830,19 @@ export TRUVAG3_AGENT_RETRY_BACKOFF_MS=1000
 
 4. **Set Retryable correctly**
    ```go
-   // Retryable: true → Agent CAN fix with different input
+   // Retryable: true → Permit policy-eligible retries, including correction
    // Example: "City not found" - maybe different spelling works
 
-   // Retryable: false → Agent CANNOT fix
+   // Retryable: false → Stop all same-step retries, including transient resends
    // Example: "Invalid API key" - needs configuration change
    ```
 
 ### For Agent Developers
 
-1. **Check HTTP status first, then ToolError**
+1. **Respect explicit refusal before status-based retry**
    ```go
-   // HTTP status gives quick routing decision
-   // ToolError.Retryable gives fine-grained control
+   // An explicit retryable:false stops same-step retries.
+   // Otherwise HTTP status distinguishes transient retries from correction.
    ```
 
 2. **Don't retry auth errors**
@@ -865,13 +883,16 @@ export TRUVAG3_AGENT_RETRY_BACKOFF_MS=1000
 
 ### Retry Decision Matrix
 
+Subject to budgets and the protection rules above; explicit false overrides
+every retry row, and missing policy does not allow unchanged non-transient 4xx.
+
 | HTTP Status | Same Payload? | AI Correction? |
 |-------------|--------------|----------------|
 | 2xx | N/A (success) | N/A |
-| 401/403 | Don't retry | Don't retry |
-| 429 | Yes (after backoff) | No |
+| 401/403/405 | Don't retry | Don't retry |
+| 408/429 | Yes (after backoff) | No |
 | 5xx | Yes (after backoff) | No |
-| 4xx + Retryable | No | Yes |
+| Other non-transient 4xx + permitted correction | No | If eligible |
 | 4xx + Not Retryable | Don't retry | Don't retry |
 
 ### Complete Tool Error Example
@@ -952,7 +973,11 @@ This layer is:
 - **Safe**: If coercion fails, the original value is preserved
 
 #### Layer 3: Validation Feedback Retry
-For edge cases that slip through Layers 1 and 2, if a tool returns a validation error (e.g., "Amount must be greater than 0"), the orchestrator:
+For eligible, correction-permitted errors that slip through Layers 1 and 2,
+the orchestrator can follow the sequence below. The shipped `currency-tool`'s
+"Amount must be greater than 0" response has `retryable:false` and stops instead;
+using it in this walkthrough requires an explicit, condition-specific
+`retryable:true` opt-in plus the usual executor correction gates.
 
 1. Detects the type-related or validation error
 2. Sends the error context back to the LLM
@@ -1029,7 +1054,9 @@ When the multi-layer type safety system exhausts its options—when Layer 3 (Val
 
 ### The Problem Semantic Retry Solves
 
-Consider this multi-step workflow:
+Consider this hypothetical opt-in workflow. The shipped `currency-tool` refuses
+retries for amount validation, so this successful recovery requires a tool that
+explicitly permits correction for that condition and satisfies executor gates:
 ```
 User: "Sell 100 Tesla shares and convert the proceeds to EUR"
 
@@ -1067,10 +1094,15 @@ Semantic Retry (Layer 4) uses the **full execution trajectory** to compute corre
 
 ### When Semantic Retry Activates
 
+All positive cases below require an eligible non-transient 4xx, no explicit
+retry refusal, mutable inputs, a non-orchestrator capability, configured
+analyzer/resolver and remaining correction budget. Transport and transient
+failures do not enter parameter correction. Exact-bound values remain protected.
+
 | Condition | Semantic Retry? |
 |-----------|-----------------|
 | Tool returns 400/404/409/422 + Layer 3 says "cannot fix" | ✅ Yes |
-| Tool returns 500 (server error) | ❌ No (handled by resilience module) |
+| Tool returns 500 (server error) | ❌ No (executor's unchanged-input backoff, subject to permission and budget) |
 | Tool returns 401/403 (auth error) | ❌ No (not retryable) |
 | Layer 3 successfully corrects parameters | ❌ No (already fixed) |
 | Independent step (no dependencies) with error | ✅ Yes (uses user query + error context) |
@@ -1078,17 +1110,19 @@ Semantic Retry (Layer 4) uses the **full execution trajectory** to compute corre
 
 **Note on Independent Steps:** Steps without dependencies (first steps, parallel steps) now trigger Semantic Retry by default. The LLM receives the user's original query and error context to suggest corrections, even without source data from dependent steps.
 
-### Transient Error Handling (503 Timeouts)
+### Transient Error Handling (Transport Failures and HTTP 408/429/5xx)
 
-A special case arises with **503 errors** containing structured tool responses. Unlike pure infrastructure errors (500, 502, 504), tools sometimes return 503 with semantic error information (e.g., "location not found" wrapped in a timeout error).
+Transport failures and HTTP 408/429/5xx are classified before every semantic
+correction path. The executor retries the same admitted payload using its
+existing budget and backoff. The error analyzer makes no model call for them.
 
 **How the Orchestrator Handles This:**
 
-1. **LLM analyzes the error** - The ErrorAnalyzer examines the response body, not just the HTTP status
-2. **LLM may return `should_retry=true`** - With or without parameter changes:
-   - With changes: "Change 'Tokio' to 'Tokyo'" → Retry with corrected params
-   - Without changes: "Timeout, service may recover" → Retry with same params
-3. **`IsTransientError` flag** - LLM sets this for infrastructure issues (timeouts, service unavailable)
+1. **Classify the failure** — temporary availability errors retain exact inputs.
+2. **Use semantic correction for input failures** — a non-transient 4xx can
+   receive authorized changed inputs, subject to existing binding/HITL guards.
+3. **Tools express the right status** — a fixable input typo uses 400/422, not
+   503. This deliberately retires the previous 503 semantic-correction exception.
 4. **Explicit retry policy is authoritative** - `retryable:false` stops same-step
    retries before analysis. Omission is distinct from false; non-transient 4xx
    requests are not resent unchanged when correction cannot proceed. A later
@@ -1096,11 +1130,16 @@ A special case arises with **503 errors** containing structured tool responses. 
 
 **Decision Matrix:**
 
-| LLM Result | Action |
+This matrix applies only after the executor's retry-permission and terminal-status
+guards. Explicit `retryable:false` stops before the analyzer on any HTTP status;
+non-transient 4xx requests require corrected inputs before resend. A later planner
+operation has its own authorization and is not a same-step retry.
+
+| Failure / LLM Result | Action |
 |------------|--------|
+| Transport / HTTP 408, 429, 5xx | Bounded retry with unchanged input, no LLM |
 | `should_retry=true`, `suggested_changes` non-empty | Retry with new parameters |
-| `should_retry=true`, `suggested_changes` empty | Retry with same parameters (transient) |
-| `should_retry=false`, `is_transient_error=true` | Resilience retry (backoff) |
+| Non-transient 4xx, empty changes / `is_transient_error=true` | Stop unchanged resend; later planning may recover |
 | `should_retry=false`, `is_transient_error=false` | Don't retry |
 
 This ensures that transient infrastructure errors don't fail permanently when a simple retry might succeed.

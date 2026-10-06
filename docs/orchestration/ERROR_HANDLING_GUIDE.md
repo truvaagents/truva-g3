@@ -24,10 +24,10 @@ How errors flow through TruvaG3 — from upstream API failure to intelligent rec
 Think of TruvaG3's error handling like an air traffic control system. When a pilot (tool) encounters trouble mid-flight — bad weather, engine warning, communication failure — they transmit a distress code over radio. The control tower (the executor in the `orchestration` module) reads the code and routes to the appropriate recovery procedure:
 
 - **Squawk 7600** (communication failure) — land immediately, no second chances. In TruvaG3, this is a 401/403 auth error: fail immediately.
-- **Squawk 7700** (general emergency) — enter a holding pattern, try again when conditions improve. In TruvaG3, this is a 429/5xx error: the executor retries with the same payload after exponential backoff.
-- **Approach correction** — the pilot is on the wrong heading; ATC gives them a new vector. In TruvaG3, this is a 400 input error: the LLM Error Analyzer suggests corrected parameters.
+- **Squawk 7700** (general emergency) — enter a holding pattern. For an eligible 429/5xx error without explicit retry refusal, the executor may retry the same payload after backoff.
+- **Approach correction** — the pilot is on the wrong heading. An eligible 400 input error can reach parameter correction only when the tool permits it and the executor's correction gates pass.
 
-The key insight: **tools don't decide recovery strategy** — they classify the error and report it. The executor in the `orchestration` module decides what to do based on the classification.
+Tools classify failures and can refuse retries. The executor chooses an eligible recovery path within that permission, its budgets and binding protections. `ClassifyUpstreamError` returns `Retryable:false` for recognized input 4xx errors; it does not automatically opt a tool into correction.
 
 ### Go Modules Involved
 
@@ -58,18 +58,20 @@ Four Go modules participate in error handling. Each has a distinct role:
  ORCHESTRATION MODULE: executor.go                   ← orchestration module
  extractHTTPStatusFromError()
        │
+       ├── Structured retryable:false ──► STOP (before correction or resend)
+       │
        ├── 401 / 403 / 405 ──► FAIL IMMEDIATELY
        │                        (auth / permission issue)
        │
-       ├── 408 / 429 / 500 / 502 / 504 ──► STEP RETRY
+       ├── 408 / 429 / 5xx ──► STEP RETRY
        │                                    (same payload + exponential backoff)
        │
-       └── 400 / 404 / 409 / 422 ──► LLM ERROR ANALYZER (Layer 3)
+       └── Eligible mutable 4xx ──► LLM ERROR ANALYZER (Layer 3)
                                         │          ← error_analyzer.go
                                         │
                                         ├── Fixable ──► Retry with corrected params
                                         │
-                                        ├── Transient ──► STEP RETRY
+                                        ├── No valid correction ──► No unchanged 4xx resend
                                         │
                                         └── Not fixable ──► LAYER 4: Re-Resolution
                                                              │
@@ -142,17 +144,24 @@ This is the authoritative mapping. The first two columns show what the tool does
 
 | Upstream Status | Tool HTTP | Category | Retryable | Executor Action (`orchestration/executor.go`) | Example |
 |:---:|:---:|:---|:---:|:---|:---|
-| 400 | 400 | `INPUT_ERROR` | false | LLM Error Analyzer (`error_analyzer.go`) | Invalid date format |
+| 400 | 400 | `INPUT_ERROR` | false | Stop before analyzer | Invalid date format |
 | 401 | 401 | `AUTH_ERROR` | false | Fail immediately | Expired API key |
 | 403 | 403 | `AUTH_ERROR` | false | Fail immediately | Insufficient permissions |
-| 404 | 400 | `INPUT_ERROR` | false | LLM Error Analyzer (`error_analyzer.go`) | City not found |
-| 409 | 400 | `INPUT_ERROR` | false | LLM Error Analyzer (`error_analyzer.go`) | Booking conflict |
-| 422 | 400 | `INPUT_ERROR` | false | LLM Error Analyzer (`error_analyzer.go`) | Unprocessable entity |
+| 404 | 400 | `INPUT_ERROR` | false | Stop before analyzer | City not found |
+| 409 | 400 | `INPUT_ERROR` | false | Stop before analyzer | Booking conflict |
+| 422 | 400 | `INPUT_ERROR` | false | Stop before analyzer | Unprocessable entity |
 | 429 | 429 | `RATE_LIMIT` | true | Step retry (same payload + backoff) | Rate limited |
 | 500+ | 502 | `SERVICE_ERROR` | true | Step retry (same payload + backoff) | Server error |
 | No match | 502 | `SERVICE_ERROR` | true | Step retry (same payload + backoff) | Timeout, unknown error |
 
-> **Note on 503:** The `ErrorAnalyzer.shouldDelegateToResilience()` method in `orchestration/error_analyzer.go:184-193` intentionally excludes 503. Tool responses with 503 often contain semantic errors (e.g., "location not found") that the LLM Error Analyzer can fix by suggesting corrected parameters. True service outages are identified by the LLM as transient and retried with the same payload.
+> **Retry permission precedes status routing:** an explicit `retryable:false`
+> stops before analysis and resend on every status, including HTTP 500/503.
+> Transport errors and HTTP 408/429/5xx bypass parameter correction and use the
+> executor's existing bounded same-payload backoff. Correctable input failures
+> use non-transient 4xx statuses; a tool returning 503 for a typo must correct
+> its status contract rather than rely on the analyzer to rewrite outage inputs.
+> Omitted policy is distinct from false. Non-transient 4xx requests are not resent
+> unchanged when correction is unavailable or exhausted.
 
 ### Non-Retryable Tool Errors
 
@@ -167,7 +176,7 @@ dispatch guards in `executor.go` for the current policy.
 
 ## 4. Executor Error Routing (Multi-Layer)
 
-The `executeStep()` function in `orchestration/executor.go` runs a step retry loop with multiple error handling layers. The routing decisions are made by `ErrorAnalyzer` (defined in `orchestration/error_analyzer.go`), which the executor calls when it receives an error from a tool or agent.
+The `executeStep()` function in `orchestration/executor.go` classifies failures before entering any parameter-correction path. Transport failures and transient HTTP statuses use its existing same-payload backoff. Only eligible non-transient 4xx failures can reach `ErrorAnalyzer` or legacy correction, subject to configuration, correction budgets, and binding protection.
 
 ```
 orchestration/executor.go — executeStep() retry loop
@@ -177,34 +186,25 @@ orchestration/executor.go — executeStep() retry loop
     │
     ├── Success → return result
     │
-    ├── Error + ErrorAnalyzer enabled?        ← error_analyzer.go
-    │     │
-    │     ├── routeByHTTPStatus()             ← error_analyzer.go:158
-    │     │     401/403/405 → fail immediately
-    │     │
-    │     ├── shouldDelegateToResilience()     ← error_analyzer.go:184
-    │     │     408/429/500/502/504 → continue loop (same payload)
-    │     │     (NOTE: this is a method name, NOT the resilience Go module)
-    │     │
-    │     └── analyzeWithLLM()                ← error_analyzer.go:195
-    │           ├── ShouldRetry + SuggestedChanges → apply, attempt--, continue
-    │           ├── ShouldRetry + no changes → attempt--, continue (same params)
-    │           └── !ShouldRetry →
-    │                 ├── Layer 4: Re-Resolution (if configured)
-    │                 │     ├── Corrected → apply, attempt--, continue
-    │                 │     └── Failed → check transient flag
-    │                 ├── IsTransientError → continue loop
-    │                 └── else → break (fail)
+    ├── Explicit retryable:false → stop before analyzer/resend
     │
-    ├── Legacy Layer 3 (if ErrorAnalyzer NOT configured)
-    │     └── Pattern-match type errors or check Retryable flag → LLM correction
+    ├── HTTP 401/403/405 → stop
     │
-    ├── isNonRetryableToolError? → break (fail)    ← executor.go:2473
+    ├── Transport failure (status 0), HTTP 408/429/500–599
+    │     └── Same admitted payload → existing backoff/retry budget
+    │         (no ErrorAnalyzer, contextual re-resolution, or legacy correction)
     │
-    └── backoff(attempt) → wait → next attempt     ← uses core.BackoffConfig
+    ├── Other 4xx → correction eligibility
+    │     ├── HITL-approved values → stop; preserve approved inputs
+    │     ├── Eligible analyzer/contextual or legacy correction
+    │     │     └── Changed, valid, binding-preserving parameters
+    │     │           → apply, consume correction budget, attempt--, continue
+    │     └── No accepted correction → stop; no unchanged 4xx resend
+    │
+    └── Remaining retry eligibility/backoff → existing bounded loop
 ```
 
-> **Naming clarification:** The method `shouldDelegateToResilience()` in `error_analyzer.go` is a **method name in the code**, not a reference to the `resilience` Go module. The `orchestration` module does not import the `resilience` module. When this method returns true, the executor simply continues its own step retry loop with exponential backoff (calculated via `core.BackoffConfig`).
+> **Naming clarification:** `ErrorAnalyzer.shouldDelegateToResilience()` also protects direct analyzer callers; it is not a call to the `resilience` Go module. The executor classifies transient failures before invoking the analyzer and uses `core.BackoffConfig` for its own backoff. Orchestrator capabilities retain their single-dispatch limit; this diagram does not grant them additional attempts.
 
 ### The `attempt--` Trick
 
@@ -246,10 +246,13 @@ result := &ErrorAnalysisResult{
 
 ### When It's Skipped
 
+- A recognized error envelope declares `retryable:false` (including a Go bool's zero value)
+- Inputs were approved through HITL, or the capability is a delegated orchestrator
+- HTTP status is 401/403/405, or the failure is not an eligible non-transient 4xx
 - `ErrorAnalyzer` is nil (not configured in factory)
 - `IsEnabled()` returns false (disabled at runtime)
 - `validationRetries >= maxValidationRetries` (correction budget exhausted)
-- HTTP status is 408/429/500/502/504 (`shouldDelegateToResilience()` in `error_analyzer.go` returns true — the executor continues its step retry loop without calling the LLM)
+- HTTP status is 408/429/5xx (the executor classifies it as transient before correction, then uses unchanged-input retry when permission and budgets allow)
 
 > For the full LLM prompt, parsing logic, and configuration options, see [Intelligent Error Handling — Part 3: Agent Implementation](INTELLIGENT_ERROR_HANDLING.md#part-3-agent-implementation).
 
@@ -274,7 +277,10 @@ A currency conversion step fails with "invalid currency code 'France'":
 
 ### Transient Error Handling
 
-If neither Layer 3 nor Layer 4 can fix the error, the LLM's `IsTransientError` flag is checked (set during Layer 3 analysis in `error_analyzer.go`). If true (e.g., "request canceled", "connection refused", 503 timeout), the executor continues its step retry loop with the same payload instead of failing.
+The HTTP classification is authoritative: transport failures and 408/429/5xx
+use unchanged retry without an LLM call. A model's `IsTransientError` claim
+does not authorize an unchanged resend of a non-transient 4xx. Explicit false
+and orchestrator single-dispatch protections still take precedence.
 
 > For configuration and observability details, see [Intelligent Error Handling — Layer 4 Semantic Retry](INTELLIGENT_ERROR_HANDLING.md#orchestration-module-layer-4-semantic-retry).
 
@@ -282,7 +288,8 @@ If neither Layer 3 nor Layer 4 can fix the error, the LLM's `IsTransientError` f
 
 ## 7. Step Retry and Backoff
 
-When an error reaches the step retry path (429, 5xx, or LLM-identified transient), the executor in `orchestration/executor.go` waits before the next attempt using exponential backoff with deterministic jitter.
+When a transport failure or HTTP 408/429/5xx reaches the step retry path, the
+executor waits using its existing exponential backoff with deterministic jitter.
 
 ### How the Executor Calculates Backoff
 
@@ -348,18 +355,19 @@ The `resilience` Go module (`resilience/retry.go`) is a **standalone retry utili
 
 ## 8. Common Scenarios
 
-### Scenario A: Parameter Correction (Upstream 400)
+### Scenario A: Explicitly Permitted Parameter Correction (Upstream 400)
 
-A travel agent asks: "Find hotels in Paris for April 1-3."
+A hypothetical travel tool recognizes an invalid city code as safely correctable. This example requires an explicit tool decision; the generic classifier alone refuses correction for this error.
 
 ```
 1. orchestration/executor.go resolves parameters: {city_code: "Paris", ...}
 2. Executor calls hotel-tool via HTTP
 3. hotel-tool calls Amadeus API
 4. Amadeus returns: "error 400: INVALID CITY CODE: PARIS"
-5. hotel-tool: core.ClassifyUpstreamError → {HTTPStatus: 400, Category: INPUT_ERROR}
-6. hotel-tool returns HTTP 400 with ToolError to executor
-7. executor.go: 400 → routes to ErrorAnalyzer (error_analyzer.go)
+5. ClassifyUpstreamError returns HTTP 400 and Retryable:false
+6. The tool recognizes this specific city-code validation error and deliberately
+   returns HTTP 400, success:false, error.retryable:true, and an actionable hint
+7. Executor checks permission, mutable inputs and correction budget → ErrorAnalyzer
 8. ErrorAnalyzer calls LLM: "PARIS is not a valid IATA code. Correct code is PAR."
    → SuggestedChanges: {city_code: "PAR"}
 9. executor.go: attempt--, applies {city_code: "PAR"}, retries
@@ -375,7 +383,7 @@ Multiple parallel steps hit the same API simultaneously.
 2. API returns: "error 429: rate limit exceeded"
 3. stock-market-tool: core.ClassifyUpstreamError → {HTTPStatus: 429, Category: RATE_LIMIT}
 4. stock-market-tool returns HTTP 429 to executor
-5. executor.go → ErrorAnalyzer.shouldDelegateToResilience(429) → true
+5. executor.go → transientHTTPStatus(429) → true (unless retryable:false already stopped the attempt)
 6. executor.go continues step retry loop: waits ~542ms (core.BackoffConfig), retries same payload
 7. API returns success on attempt 2
 ```
@@ -389,25 +397,28 @@ An API key has expired.
 2. Amadeus returns: "error 401: invalid API key"
 3. flight-tool: core.ClassifyUpstreamError → {HTTPStatus: 401, Category: AUTH_ERROR}
 4. flight-tool returns HTTP 401 to executor
-5. executor.go → ErrorAnalyzer.routeByHTTPStatus(401) → fail immediately
-6. Step fails with reason: "Authentication failed (401 Unauthorized)"
+5. executor.go → terminalHTTPStatus(401) → stop the step before error analysis
+6. Step retains the component's HTTP 401 failure
 7. No retry — requires configuration fix
 ```
 
-### Scenario D: Semantic Error via 503
+### Scenario D: Misclassified Input Error via 503
 
-A tool returns 503 but the error message contains a fixable parameter issue.
+A tool returns 503 even though its message describes invalid input. The executor
+respects the transport classification; it does not infer a new parameter from
+that transient response.
 
 ```
-1. geocoding-tool returns HTTP 503 with body: "location not found: Flower Mound"
-2. executor.go → ErrorAnalyzer.shouldDelegateToResilience(503) → false
-3. executor.go → ErrorAnalyzer.analyzeWithLLM() → routes to LLM
-4. LLM: "The location format is incorrect. Try 'Flower Mound, TX, US'."
-   → SuggestedChanges: {location: "Flower Mound, TX, US"}
-5. executor.go: applies correction, retries → success
+1. A hypothetical tool returns HTTP 503 with body: "location not found: Flower Mound"
+2. explicit retryable:false → stop; otherwise transientHTTPStatus(503) → true
+3. executor retries the same admitted location under its retry/deadline budget
+4. persistent failure remains a failed step; no same-step LLM parameter correction
 ```
 
-> This is why 503 is intentionally excluded from `shouldDelegateToResilience()` in `error_analyzer.go:188` — the error message often contains actionable information that the LLM can use to suggest corrections.
+The tool should return a suitable non-transient 4xx for a correctable input
+error, with explicit retry permission and an actionable hint. A later planner
+may choose recovery, but that is separate from executor-local correction and is
+not guaranteed when planning budgets are exhausted.
 
 ---
 
@@ -420,7 +431,7 @@ A tool returns 503 but the error message contains a fixable parameter issue.
 | `TRUVAG3_STEP_RETRY_INITIAL_DELAY` | `500ms` | Initial backoff delay for step retries |
 | `TRUVAG3_STEP_RETRY_MAX_DELAY` | `10s` | Maximum backoff delay cap |
 | `TRUVAG3_STEP_RETRY_MAX_ATTEMPTS` | `3` | Max step attempts (initial + retries). Values `<1` are rejected and the default is kept. |
-| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `600s` | Overall orchestration timeout |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `600s` | Base HTTP-call timeout; delegation may enlarge it, while phase/parent deadlines may end calls sooner. See [execution limits](../reference/LIMITS_CHEATSHEET.md#execution-limits). |
 
 ### Programmatic Configuration
 
@@ -485,13 +496,13 @@ executor.SetMaxSemanticRetries(2)            // Max Layer 4 attempts
 
 ### For Orchestration Developers
 
-1. **Enable the LLM Error Analyzer for production workflows.** Without it, the executor in `orchestration/executor.go` falls back to legacy pattern matching (type-related errors only), which misses most fixable parameter errors.
+1. **Enable the LLM Error Analyzer for production workflows.** Without it, a configured legacy correction callback identifies candidates through type-error patterns or structured `retryable:true` errors. Both paths remain subject to HTTP status, input mutability and correction-budget gates; neither overrides explicit `retryable:false`.
 
 2. **Monitor error handling metrics:**
    - `orchestration.error_analysis.retry` — LLM corrections applied
    - `orchestration.semantic_retry.applied` — Layer 4 corrections applied
    - `orchestration.non_retryable_errors` — errors that stopped retries
-   - `orchestration.transient_error.resilience_retry` — transient errors sent to step retry
+   - Physical `dispatch_count` / `dispatches` and step-attempt evidence — distinguish unchanged resends from correction attempts. The legacy `orchestration.transient_error.resilience_retry` counter is unreachable behind current status gates and is not a usable operational signal.
 
 3. **Don't set `maxAttempts` too high.** Each retry incurs latency and potentially LLM cost (for Layer 3/4 analysis).
 
@@ -509,6 +520,11 @@ executor.SetMaxSemanticRetries(2)            // Max Layer 4 attempts
 **Cause:** `ErrorAnalyzer` is nil (not set on the executor in `orchestration/executor.go`) or `validationRetries >= maxValidationRetries`.
 **Fix:** Check factory setup in `orchestration/factory.go` — `EnableErrorAnalyzer` must be true and `AIClient` must be non-nil.
 
+It is also intentionally skipped for transport/408/429/5xx failures, explicit
+`retryable:false`, immutable HITL inputs and delegated orchestrator capabilities.
+Those boundaries take precedence over analyzer enablement; increasing the
+correction budget does not bypass them.
+
 ### Tool errors treated as success
 
 **Cause:** `WriteHeader()` not called before `json.Encode` in the tool's handler. Go defaults to HTTP 200, so the executor in `orchestration/executor.go` treats the response as successful.
@@ -517,12 +533,15 @@ executor.SetMaxSemanticRetries(2)            // Max Layer 4 attempts
 ### Retries happen for auth errors
 
 **Cause:** Tool returns HTTP 502 instead of 401/403 for auth failures.
-**Fix:** Use `core.ClassifyUpstreamError` (from `core/tool_error.go`) — it maps upstream 401 → tool 401 and 403 → tool 403, which the executor's `ErrorAnalyzer.routeByHTTPStatus()` recognizes as immediate failures.
+**Fix:** Use `core.ClassifyUpstreamError` (from `core/tool_error.go`) — it maps upstream 401 → tool 401 and 403 → tool 403. The executor rejects these statuses before parameter correction.
 
 ### 503 errors not retried
 
-**Cause:** By design — `shouldDelegateToResilience()` in `orchestration/error_analyzer.go:188` intentionally excludes 503, so it goes to the LLM Error Analyzer instead of the step retry path.
-**Explanation:** If the error is genuinely transient, the LLM sets `IsTransientError: true` and the executor retries with the same payload. This design catches 503 responses that contain fixable parameter errors.
+**Check:** A structured `retryable:false` stops all same-step retries, including
+503. A Go `ToolError` with an unset bool emits that explicit false. Otherwise,
+503 is classified as transient before any parameter-correction call and retried
+with unchanged admitted inputs, subject to retry and deadline budgets. It is
+not sent to an LLM to determine whether parameters should change.
 
 ---
 
@@ -530,13 +549,45 @@ executor.SetMaxSemanticRetries(2)            // Max Layer 4 attempts
 
 ### Error Routing Summary
 
-Routing decisions are made in `orchestration/error_analyzer.go`, executed by `orchestration/executor.go`:
+The executor applies `orchestration/dispatch_policy.go` before entering error
+analysis. Explicit `retryable:false` takes precedence over every row below.
+Delegated orchestrator capabilities retain a single physical dispatch.
 
 | Tool HTTP Status | Route | What Happens |
 |:---:|:---|:---|
-| 400, 404, 409, 422 | LLM Error Analyzer | `analyzeWithLLM()` — AI suggests parameter corrections |
-| 401, 403, 405 | Fail immediately | `routeByHTTPStatus()` — no retry |
-| 408, 429, 500, 502, 504 | Step retry | `shouldDelegateToResilience()` — same payload + exponential backoff via `core.BackoffConfig` |
+| Non-transient 4xx, except 401/403/405 | Eligible parameter correction | Requires remaining budget and mutable inputs. Uses enabled analysis, or the configured legacy correction callback when the analyzer is nil and validation feedback is enabled; never resent unchanged. |
+| 401, 403, 405 | Fail immediately | Executor's `terminalHTTPStatus()` guard — no retry or error-analysis call |
+| 408, 429, all 5xx | Step retry | Same admitted payload + bounded backoff; no model-based parameter correction |
+
+HITL-approved inputs and exact template bindings are protected from correction.
+Missing retry policy is not permission to resend a non-transient 4xx unchanged.
+Transport failures follow the existing retry budget without parameter rewriting.
+
+### Component Retry Policy on the Wire
+
+The executor reads `error.retryable` only when the response envelope has
+`success:false` and an object-valued `error`. The value must be JSON `true` or
+`false`; omitted, null or incorrectly typed values are unspecified. This applies
+equally to Go and non-Go tools:
+
+```json
+{
+  "success": false,
+  "error": {"code": "INVALID_INPUT", "message": "Provide a valid input", "retryable": false}
+}
+```
+
+A top-level `retryable`, an error object without `success:false`, or a string
+error does not declare policy. Explicit false stops all same-step retries;
+explicit true remains subject to terminal HTTP status, delegation, binding and
+deadline guards. These flags do not change the HTTP status or make a later
+planner-selected operation a same-step retry.
+
+Before every actual dispatch, the executor checks unresolved reserved references,
+required-key presence, declared enums and known container-shape mismatches.
+The guard preserves scalar coercion, explicit null and custom schema behavior;
+it is not a full JSON Schema validator. A rejected guard produces a failed step
+without making that HTTP call.
 
 ### Minimal Error Handling Pattern
 
@@ -557,7 +608,8 @@ h.sendError(rw, "city_code is required", http.StatusBadRequest, "MISSING_FIELDS"
 | `core` | `core/tool_error.go` | `ClassifyUpstreamError`, `UpstreamErrorInfo`, `ErrorCategory`, `ToolError`, `ToolResponse` — shared types used by tools and the `orchestration` module |
 | `core` | `core/backoff.go` | `BackoffConfig`, `Delay()` — backoff calculation used by the executor's step retry loop |
 | `orchestration` | `orchestration/executor.go` | `executeStep()` step retry loop, `StepRetryBackoff`, env var parsing |
-| `orchestration` | `orchestration/error_analyzer.go` | `ErrorAnalyzer`, `AnalyzeError()`, `routeByHTTPStatus()`, `shouldDelegateToResilience()` |
+| `orchestration` | `orchestration/dispatch_policy.go` | `terminalHTTPStatus()`, `transientHTTPStatus()`, `componentRetryPolicy()` and `validateDispatchParameters()` |
+| `orchestration` | `orchestration/error_analyzer.go` | `ErrorAnalyzer`, `AnalyzeError()`, `routeByHTTPStatus()` for direct analyzer callers, `shouldDelegateToResilience()` |
 | `resilience` | `resilience/retry.go` | `RetryExecutor`, `Execute()`, `CircuitBreaker` — standalone retry + circuit breaking. Used by agents (e.g., `agent-with-resilience`), not by the `orchestration` module's executor. See [Section 7](#the-resilience-module-separate-from-step-retry). |
 
 ### See Also

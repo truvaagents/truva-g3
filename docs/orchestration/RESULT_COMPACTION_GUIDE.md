@@ -133,7 +133,7 @@ Defaults that matter most (full tables in the [Limits Cheatsheet](../reference/L
 | Map-reduce trigger (tokens) | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` |
 | Map-reduce trigger (bytes) | `0` (disabled) | `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` |
 | Continuation aggregate budget | 32 KB | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` |
-| Continuation non-JSON floor | 10000 chars | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` |
+| Continuation non-JSON floor | 10000 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` |
 
 > All byte budgets are integers in bytes (16 KB = `16384`). All values are env-tunable without a code change.
 
@@ -272,14 +272,14 @@ Because failed steps and the newest successful step are force-kept — and per-s
 
 ### 6.4 Non-JSON results and the escalation path
 
-Not every result is JSON (logs, markdown, CSV). A non-JSON result can't be digested, so it gets a **floor preview** sized by `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` (10000 chars). A capped number of the newest non-JSON steps (`TRUVAG3_CONTINUATION_MAX_ESCALATIONS`, default 8; `0` disables) may **escalate** to the continuation distiller for a fast-model summary that *replaces* the floor preview. This rarely triggers on all-JSON workloads, and is always fail-open (an empty summary leaves the floor in place).
+Not every result is JSON (logs, markdown, CSV). A non-JSON result can't be digested, so it gets a **floor preview** sized by `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` (10000 bytes; the setting retains its legacy name). A capped number of the newest non-JSON steps (`TRUVAG3_CONTINUATION_MAX_ESCALATIONS`, default 8; `0` disables) may **escalate** to the continuation distiller for a fast-model summary that *replaces* the floor preview. This rarely triggers on all-JSON workloads, and is always fail-open (an empty summary leaves the floor in place).
 
 ### 6.5 Every continuation-digest knob
 
 | Knob | Default | Env Var | What it controls |
 |---|---|---|---|
-| Aggregate budget | 32 KB | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | **target** chars for the `<completed_steps>` section — drives N-of-M eviction (a soft target, not a hard cap: failed steps and the newest successful step are always kept) |
-| Non-JSON floor | 10000 chars | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | floor-preview size for a non-JSON step (JSON steps are digested, not floored) |
+| Aggregate budget | 32768 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | Soft byte target before enclosing prompt encoding; failed steps and the newest successful step are retained, with markers allowed beyond the target |
+| Non-JSON floor | 10000 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | floor-preview size for a non-JSON step (JSON steps are digested, not floored) |
 | Max escalations | 8 (`0` disables) | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | newest non-JSON steps that may escalate to the distiller per phase |
 | Array sample | 3 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | head-sample size for arrays in a digest |
 | Scalar elision cap | 200 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | max inline string length before it's elided to a `…(N chars)` descriptor |

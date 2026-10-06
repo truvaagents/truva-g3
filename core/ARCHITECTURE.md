@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.18
+**Version**: 1.20
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -36,6 +36,13 @@ failures rather than reporting a successful empty read. The existing
 `EpisodicMemory` interface and its legacy fail-open behavior remain unchanged.
 Nil error describes the returned bounded retained window, not an atomic snapshot
 or full historical coverage. Optional-memory fallback remains consumer-owned.
+
+`StepSummaryInput` carries optional `Error` text and `ToolError` (`json.RawMessage`)
+alongside the existing response. These are additive, untrusted recorded facts,
+not a domain diagnosis or a new `EventSummarizer` method. Orchestration copies
+structured error bytes before handing them to custom summarizers and owns the
+built-in bounded prompt projection. `AgentEvent.Metadata` carries summary/time
+provenance without adding backend-specific or application-specific core types.
 
 ### 1. **Interface-First Architecture**
 
@@ -96,6 +103,19 @@ import "github.com/truvaagents/truva-g3/ai" // NEVER in core
 ```
 
 #### Portable AI request semantics
+
+`AIResponse` carries optional `ReasoningContent`, the exact provider
+`FinishReason`, and `ContentSource` (`final`, `reasoning_fallback`, or `mixed`).
+Empty provenance/finish fields mean unreported by the adapter, not successful
+completion. These are foundational response facts, not an application outcome
+or a retry policy. `StreamChunk.ReasoningContent` is a separate channel;
+`ContentSource` describes its answer `Content`. Canonical dispatchers preserve
+these facts on returned responses. Request-aware buffered and streaming
+dispatch forward the implementation's result/error pair; legacy streaming
+dispatch preserves an available response alongside an error. Legacy buffered
+`GenerateAI` returns only the error when `GenerateResponse` fails, discarding
+any accompanying response. Partial-result preservation therefore depends on
+the dispatch path and the result supplied by the adapter.
 
 `AIOptions.ResponseFormat` is deliberately narrow: `""` means unspecified and
 `"json"` is the only non-empty portable value. Provider adapters translate that
@@ -1201,6 +1221,8 @@ for composition, panic behavior, and the approved-checkpoint resume boundary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.20 | 2026-10-04 | Optional AI response finish/source/reasoning facts and separate stream reasoning channel; legacy dispatchers preserve supplied facts |
+| 1.19 | 2026-10-02 | Additive optional error facts on StepSummaryInput; unchanged summarizer interface and opaque event provenance |
 | 1.18 | 2026-09-30 | Additive observed episodic read-health contract; no provider dependency or change to legacy fail-open API |
 | 1.17 | 2026-09-29 | Additive acquisition-safe investigation contract with private handles and observed release outcomes; legacy coordinator remains source-compatible |
 | 1.16 | 2026-09-29 | Added fail-fast core-owned shared-memory/activity numeric validation across env/file/typed construction, presence-aware null/empty handling and complete documented defaults; preserved optional runtime fail-open and relative retrieval weights |

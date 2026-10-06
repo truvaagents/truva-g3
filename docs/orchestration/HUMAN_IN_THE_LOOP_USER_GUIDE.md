@@ -138,6 +138,15 @@ TRUVAG3_HITL_DEFAULT_TIMEOUT=5m              # 5 minute approval window
 
 ### Adding HITL to Your Agent
 
+**Approval is not exactly-once execution.** The executor preserves approved
+parameters and skips parameter correction. An ordinary approved step can still
+be resent unchanged after an eligible transport/408/429/5xx failure, subject to
+its attempt/deadline budget (three total attempts by default). An explicit
+structured `retryable:false` stops resends; delegated orchestrator capabilities
+have a separate single-dispatch restriction. Use application idempotency for
+side-effecting operations and inspect `DispatchCount`/`Dispatches` to see physical
+calls. A lost response can leave the external effect uncertain even if a step fails.
+
 Use this startup order:
 
 ```text

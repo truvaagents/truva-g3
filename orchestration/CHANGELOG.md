@@ -1,5 +1,133 @@
 # Changelog
 
+## Unreleased — compatibility and adoption clarification
+
+- Explicit structured `retryable:false` stops all same-step resends and
+  correction. Eligible non-transient 4xx may be corrected but are no longer
+  resent unchanged; transport/408/429/5xx retry admitted inputs unchanged.
+  Legacy correction callbacks are restricted to eligible 4xx, with no analyzer
+  installed. Approved HITL inputs cannot be corrected, but ordinary approved
+  steps can still be resent on eligible transient failures; use idempotency.
+- Validate parameters before dispatch, including required fields, unresolved
+  reserved references, enum membership and container/scalar mismatches. The
+  lifecycle finalizer treats partial-content delivery as failed, not successful.
+- Generated-plan normalization is model-only; shared dependency validation also
+  applies to hook-mutated plans. Same-phase/surplus `implicit_deps` are rejected.
+  Preserve resolved defaults when customizing `IterativePlanning`; its validated
+  regeneration-round and feedback-byte fields must remain positive.
+- Initial unknown-agent replacement parsing shares that recovery budget;
+  continuation unknown-agent recovery has one regeneration attempt. Parse/intent
+  failures during validation regeneration consume validation rounds.
+- Auto-wiring preserves source identity, declines conflicting matches and uses
+  source-qualified `SourceKey` in the multi-source path. Application string bytes
+  retain Markdown; only reserved numeric-index references are canonicalized.
+- Compact planner return fields render `name:type` hints, not descriptions or
+  examples. Authors must put essential invocation semantics in descriptions or
+  guidance that reaches the planner. `WithFailedOperationView` replaces the
+  entire environment-resolved configuration; it is not a per-field merge.
+- Current memory views are `event-detail/v2-record-facts` and
+  `historical-origin/v5-record-facts`; earlier v1/v3 entries below are historical.
+  Invalid builder options now return construction errors. Negative activity
+  prompt limits are rejected; documented zero sentinels remain valid.
+
+## Unreleased — planning and payload integrity baseline
+
+- Normalize numeric bracket references and derive prior-phase `implicit_deps`
+  for fresh generated plans before existing validation. Keep same-phase
+  dependencies planner-owned. Typed/direct and hook plans do not receive this
+  normalization; hook results still face the stricter shared dependency checks.
+- Reuse the phase catalog/skill projection during regeneration; supply bounded
+  accumulated feedback and rejected-candidate evidence. Expose the 16-KiB
+  `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` default. Malformed
+  regenerated JSON consumes the existing correction budget.
+- Preserve application strings through outer-wrapper and string-aware JSON
+  repairs; reject valid JSON with incompatible field types without repair.
+  Bind explicit references to their own source output, retain native types and
+  provenance, and restrict missing-path inference to that source. Null is not
+  converted into an invented empty value.
+- Distinguish dependency skips from executed failures and refinement-satisfied
+  work. Stop repeated dependency-only non-terminal phases with unchanged failed
+  ancestors; actual dispatched work, including polling, resets that guard.
+  Dependency skips no longer create duplicate failed-step memory events.
+
+## Unreleased — generic retry/completion hardening (2026-10-04)
+
+- Classify transport and HTTP 408/429/5xx before every parameter-correction
+  path; retry admitted inputs unchanged under existing budgets. Restrict 4xx
+  correction to eligible mutable inputs; enforce explicit retry refusal and
+  delegated single calls. These gates narrow previously broader correction paths.
+- Preserve provider completion facts and separate reasoning in debug interactions.
+- Complete recording coverage includes orchestration-owned planning, continuation,
+  regeneration, correction, buffered/native-stream synthesis and tier-selection
+  records when generic recording is deferred. Preserve per-attempt attribution,
+  existing success/failure semantics and unknown facts for legacy responses.
+
+## Unreleased — truthful memory recording (2026-10-02)
+
+- Bound heuristic failure causes with a configurable 256-byte default and
+  explicit shortening; preserve original execution errors and custom summaries.
+- Attribute excluded summary steps to `batch_limit` and report excluded counts.
+- Replace the ambiguous combined backend-assignment hook-effect flag with
+  independent ID/timestamp flags; existing historical effects remain unchanged.
+- Include copied error facts in event summary inputs; bound failure/response
+  projection with a configurable shared byte allowance and explicit omissions.
+- Record summary source/fallback provenance and step occurrence time separately
+  from recording time; project quality/time basis in versioned historical views.
+- Add opt-in request entity extraction for recording without changing enrichment
+  defaults or investigation ownership/cleanup. Count entity-less submitted events.
+- Preserve raw execution payloads, public summarizer methods, query ordering,
+  provider retention and executor behavior.
+
+## Unreleased — rejected-attempt diagnostic evidence (2026-10-02)
+
+- Record each unavailable-agent rejection with the effective prompt, system
+  prompt, raw response and catalog of that attempt. Later rejections previously
+  attached the first attempt's payloads and catalog.
+- Preserve planner feedback, recovery budgets, execution validation and diagnostic
+  record types. No additional provider call or duplicated token usage is recorded.
+
+## Unreleased — latest planning-retry failure (2026-10-02)
+
+- Remove the redundant zero-work sentence from active iterative instructions;
+  retain the concrete terminal example, initial/retry guidance and legacy text.
+- Correct malformed initial-planning replacements within the existing unknown-agent recovery
+  budget using the latest parsing/intent error, selected catalog and system
+  prompt. Preserve typed errors on exhaustion and keep ordinary agent recovery,
+  phase fallback regeneration, validation and executor behavior.
+- Emit correlated parsing/correction/exhaustion diagnostics without counting a
+  parsing failure as another hallucination or inventing a model call.
+
+## Unreleased — no-work prompt consistency (2026-10-02)
+
+- Show explicit `{"terminal": true, "steps": []}` in the default initial builder,
+  fallback/continuation planning rules and
+  agent-name retry guidance. Limit omitted-terminal guidance to nonempty model
+  plans in both active and legacy iterative instructions. Preserve decoder,
+  typed/direct-plan defaults, executor behavior and existing retry budgets.
+
+## Unreleased — model clarification intent (2026-10-02)
+
+- Reject missing or whitespace-only questions in fresh model clarification
+  objects through existing bounded parse correction, including objects supplied
+  alongside steps or terminal intent. Preserve valid question strings and typed,
+  direct, refinement and resumed-plan behavior. Emit the bounded reason
+  `invalid_clarification_request` on existing parse-error events.
+
+## Unreleased — trace-event request correlation (2026-10-01)
+
+- Add the current request ID as the first attribute of template source inclusion
+  and legacy investigation ownership events. Preserve their existing names,
+  attributes, metric labels, binding behavior and claim ownership contracts.
+
+## Unreleased — explicit model plan intent (2026-10-01)
+
+- Reject unknown-only envelopes, null roots and ambiguous zero-work model plans
+  before normalization. Recognize nonempty legacy plans, explicit terminal intent
+  and clarification; preserve typed/direct/refinement/HITL plan contracts.
+- Feed bounded, encoded envelope-key diagnostics into existing parse correction
+  attempts. Reuse the phase catalog and correction budget; record generic reason
+  codes on existing parse-error events without changing executor/retry policy.
+
 ## Unreleased — typed bindings and failed-operation evidence (2026-09-30)
 
 - Preserve exact whole-value container bindings and JSON-looking string inputs;
@@ -32,9 +160,11 @@
   legacy custom-coordinator/direct-hook path. Add configurable 5s cleanup timeout
   with fail-fast explicit values; preserve original failure/panic and raw payloads.
 
-- Return construction errors from `BuildMemoryHooks`; validate all hook-owned
+- **Breaking construction contract:** return errors from `BuildMemoryHooks`; validate all hook-owned
   numeric environment values even without AI/dependencies. Keep absent defaults,
-  zero-detail/zero-announcement sentinels and runtime fail-open. Update in-repo
+  the zero-detail sentinel and runtime fail-open. Announcement environment values
+  must be positive; only the direct announcement-hook constructor treats zero as
+  its default of 10. Update in-repo
   callers to validate synchronously before orchestrator startup. Reject non-finite
   weights/temperatures and overflowing calculated summary allowances.
 - Classify declared prior-phase template inclusions as Debug rather than missing

@@ -1,45 +1,18 @@
 # API Reference
 
-### Failed-operation view configuration
-
-```go
-resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
-    Base: orchestration.NewDefaultOrchestratorConfig(),
-    Environment: orchestration.EnvironmentStrict,
-    Options: []orchestration.OrchestratorOption{
-        orchestration.WithFailedOperationView(orchestration.FailedOperationViewConfig{
-            MaxValueBytes: 4096, MaxStepBytes: 16384, MaxPromptBytes: 32768,
-            // Disabled: true restores legacy prompt rendering.
-            // InputPolicy: applicationOwnedRestriction,
-        }),
-    },
-})
-```
-
-Check `err` before construction. `FailedOperationInputPolicy` implements
-`AllowFailedOperationInput(context.Context, FailedOperationIdentity, string, interface{}) (bool, error)`.
-It may restrict disclosure but cannot replace values. Policy errors omit inputs;
-implementations must be concurrency-safe and immutable. An injected policy makes
-semantic config cache identity ineligible. Limits apply to derived views, not raw
-execution retention. `ProjectFailedOperationEvidence(ctx, steps, config)` is an
-explicit application seam for authorized delegation; it returns JSON keyed by
-failed step ID, with a null value for a budget-omitted view. It does not authorize
-recipients or change result status. Custom synthesizers opt in separately.
-
-Exact whole-value step templates retain native JSON types. Object/array values
-cannot silently become string identifiers under a known scalar schema. Select
-the scalar path explicitly. Semantic auto-wire nested extraction remains supported.
-
 A comprehensive guide to TruvaG3's APIs with practical examples and best practices.
 
-Execution debug records and list summaries expose optional
-`ExecutionLifecycleObservation` (`state`, request-local `revision`, `observed_at`)
-and `record_revision`. Managed requests transition running → completed / failed /
-cancelled / suspended after delivery. These fields are independent of step
-success and domain outcome; omitted lifecycle on legacy/direct-plan records means
-unknown. Late hook effects advance the record revision without reverting phases.
 
 ## Quick Navigation
+
+**Changed framework contracts:**
+
+- [Failed-operation views](#failed-operation-view-configuration)
+- [Shared memory interfaces and construction](#shared-memory-interfaces)
+- [Model capabilities and provider adaptation](#model-capability-lookup-and-adaptation)
+- [Iterative planning configuration](#iterativeplanconfig)
+- [Dispatch evidence and request lifecycle](#step-dispatch-evidence-and-request-lifecycle)
+- [Completion/debug records](#llminteraction-type)
 
 **Getting Started:**
 - [NewFramework](#newframework) - Bootstrap your component with the framework
@@ -132,13 +105,16 @@ agent.Start(ctx, 8080)
 **Example - Production Agent:**
 ```go
 // Full configuration for production
-config := core.NewConfig(
+config, err := core.NewConfig(
     core.WithName("orchestrator"),
     core.WithPort(8080),
     core.WithRedisURL("redis://redis:6379"),      // Enable discovery
     core.WithLogLevel("info"),
     core.WithEnableMetrics(true),
 )
+if err != nil {
+    log.Fatal("Failed to configure:", err)
+}
 
 agent := core.NewBaseAgentWithConfig(config)
 
@@ -316,11 +292,21 @@ type FieldHint struct {
 
 | Type | Timeout | Retry | Use When |
 |------|---------|-------|----------|
-| `""` or `"tool"` | `TRUVAG3_EXECUTION_STEP_TIMEOUT` (default 120s) | Yes | Standard tool/API calls |
-| `"reasoning"` | `TRUVAG3_EXECUTION_STEP_TIMEOUT` (default 120s) | Yes | LLM analysis only, no side effects |
-| `"orchestrator"` | `TRUVAG3_HITL_DEFAULT_TIMEOUT` + `TRUVAG3_EXECUTION_STEP_TIMEOUT` | No | Nested delegation to another orchestrator agent |
+| `""` or `"tool"` | Shared HTTP-client timeout and enclosing context deadlines | Policy-eligible retries | Standard tool/API calls |
+| `"reasoning"` | Shared HTTP-client timeout and enclosing context deadlines | Policy-eligible retries | LLM analysis only, no side effects |
+| `"orchestrator"` | Additional per-call context deadline: `HITL.DefaultTimeout + ExecutionOptions.StepTimeout` | Single dispatch | Nested delegation to another orchestrator agent |
 
-The `"orchestrator"` type exists because cross-agent delegation steps may block while the child agent waits for HITL approval. The extended timeout (`TRUVAG3_HITL_DEFAULT_TIMEOUT + TRUVAG3_EXECUTION_STEP_TIMEOUT`) is applied as a per-request context deadline for that step only — other steps in the same plan use the standard timeout. The iterative phase timeout is also auto-extended to accommodate the longer step.
+The `"orchestrator"` type accommodates child-agent HITL waits. With resolved
+positive settings, the orchestrator sets its shared HTTP-client timeout to
+`max(ExecutionOptions.TotalTimeout, HITL.DefaultTimeout + ExecutionOptions.StepTimeout)`.
+That shared timeout also applies to ordinary tools. Only orchestrator capabilities
+get the additional per-call context deadline above. The phase loop similarly
+raises its configured phase timeout to at least that delegation allowance;
+this adjustment does not depend on the current plan containing a delegation.
+Earlier parent deadlines and the target server's timeouts can still end a call.
+`StepTimeout` is not a separate deadline for ordinary tools, and `TotalTimeout`
+does not bound the whole multi-phase request. See the
+[execution limits](LIMITS_CHEATSHEET.md#execution-limits).
 
 Most capabilities should leave `Type` empty — the default `"tool"` behavior is correct. Set `Type: core.CapabilityOrchestrator` on capabilities that delegate to another orchestrator agent (e.g., `devops-chat-agent`'s `/query` endpoint exposed to `travel-chat-agent`).
 
@@ -669,6 +655,10 @@ func DefaultConfig() *Config
 **Configuration application order:** defaults, environment, then code options in
 the order supplied. `WithConfigFile` is itself an option: its file overlays the
 values resolved so far, and later options can override valid file values.
+`DefaultConfig()` installs defaults and detects the execution environment; it
+does not load the general deployment-variable overrides. Use `NewConfig()` for
+validated environment loading. Configuration files currently support JSON;
+`.yaml` and `.yml` files are rejected by `LoadFromFile`.
 
 Core-owned numeric shared-memory/activity values fail validation when explicitly
 empty, malformed, out of range or overflowing. This also applies when memory is
@@ -683,23 +673,35 @@ backend constructors have their own validation contracts.
 **Example - Different Configuration Styles:**
 ```go
 // 1. Code-based (explicit, testable)
-config := core.NewConfig(
+config, err := core.NewConfig(
     core.WithName("weather-service"),
     core.WithPort(8080),
     core.WithRedisDiscovery("redis://localhost:6379"),
 )
+if err != nil {
+    log.Fatal(err)
+}
+```
 
+```go
 // 2. Environment-based (12-factor app)
 // Set: TRUVAG3_AGENT_NAME=weather-service
 // Set: TRUVAG3_PORT=8080
 // Set: REDIS_URL=redis://localhost:6379
-// Set: TRUVAG3_ORCHESTRATION_TIMEOUT=5m  // For long-running AI workflows
-config := core.DefaultConfig() // Reads from env
+config, err := core.NewConfig() // Loads and validates core environment settings
+if err != nil {
+    log.Fatal(err)
+}
+```
 
+```go
 // 3. File-based (complex configs)
-config := core.NewConfig(
-    core.WithConfigFile("/etc/truvag3/config.yaml"),
+config, err := core.NewConfig(
+    core.WithConfigFile("/etc/truvag3/config.json"),
 )
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 #### Key Configuration Options
@@ -1009,11 +1011,14 @@ TruvaG3 provides an intelligent background retry mechanism for handling Redis co
 
 // Or via code configuration (background retry stays env-var-driven —
 // set TRUVAG3_DISCOVERY_RETRY=true alongside this code).
-config := core.NewConfig(
+config, err := core.NewConfig(
     core.WithRedisURL("redis://redis:6379"),
     core.WithDiscoveryTTL(60 * time.Second),
     core.WithHeartbeatInterval(20 * time.Second),
 )
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 **How it works:**
@@ -1113,6 +1118,11 @@ type InvestigationCoordinator interface {
     GetActiveInvestigations(ctx context.Context) (map[string]string, error)
 }
 
+// Optional extension: report read health instead of hiding backend failure.
+type ObservedEpisodicReader interface {
+    QueryEventsObserved(ctx context.Context, callerDomain string, filter EventFilter) ([]AgentEvent, error)
+}
+
 // ActivityCompactor compresses raw events into a fixed-size LLM digest.
 type ActivityCompactor interface {
     CompactEvents(ctx context.Context, events []AgentEvent, maxTokens int) (string, error)
@@ -1142,8 +1152,24 @@ type StepSummary struct {
     Entities []EntityRef `json:"entities,omitempty"`
 }
 
+// Exact input contract for built-in and custom summarizers.
+type StepSummaryInput struct {
+    StepID      string                 `json:"step_id"`
+    AgentName   string                 `json:"agent_name"`
+    Capability  string                 `json:"capability"`
+    Instruction string                 `json:"instruction"`
+    Parameters  map[string]interface{} `json:"parameters,omitempty"`
+    Response    string                 `json:"response"`
+    Success     bool                   `json:"success"`
+    Error       string                 `json:"error,omitempty"`
+    ToolError   json.RawMessage        `json:"tool_error,omitempty"`
+}
+
 // EventSummarizer generates actionable summaries for execution steps.
 // Returns a map of stepID -> StepSummary. Implementations must be fail-open.
+// StepSummaryInput also carries optional Error string and ToolError
+// json.RawMessage. These are untrusted recorded facts, not inferred diagnoses.
+// The recording hook copies ToolError bytes before calling custom summarizers.
 type EventSummarizer interface {
     SummarizeSteps(ctx context.Context, steps []StepSummaryInput) (map[string]StepSummary, error)
 }
@@ -1165,7 +1191,7 @@ type MemoryReflector interface {
 | Interface | Redis/Vector (shared) | In-Memory (testing) | NoOp (disabled) |
 |-----------|----------------------|-------------------|-----------------|
 | `EpisodicMemory` | `memory.StreamEpisodicMemory` | `memory.InMemoryEpisodicMemory` | — |
-| `InvestigationCoordinator` | `memory.AtomicLockCoordinator` | — | — |
+| `InvestigationCoordinator` | `memory.AtomicLockCoordinator` | `memory.InMemoryInvestigationCoordinator` | — |
 | `SharedKnowledge` | `memory.VectorSharedKnowledge` (Qdrant) | — | — |
 | `MemoryReflector` | `memory.LLMMemoryReflector` | — | — |
 | `ActivityCompactor` | — | — | `core.NoOpActivityCompactor` |
@@ -1185,22 +1211,67 @@ backends, err := memory.NewSharedBackends(redisClient, logger,
     memory.WithDomain("infrastructure"),
     memory.WithEmbeddingClient(embedder),  // optional — enables Phase 2
 )
+if err != nil {
+    return fmt.Errorf("configure memory backends: %w", err)
+}
 defer backends.Close()
 ```
 
 Options: `WithDomain(string)`, `WithAgentName(string)`, `WithKnowledgeDisabled()`, `WithEmbeddingClient(core.EmbeddingClient)`.
 
-**`orchestration.BuildMemoryHooks`** — creates pipeline hooks from backends:
+**Investigation lease contracts** — ownership used by the memory hooks:
 
 Built-in investigation providers also implement `core.InvestigationLeaseCoordinator`:
 `AcquireInvestigation(ctx, core.InvestigationLeaseRequest)` returns an exact
 handle (or contention holder); `ReleaseInvestigationLease(ctx, handle)` reports
-`released`, `absent`, `not_owned`, or `unknown` with an error. Each request segment
+the typed `core.InvestigationReleaseOutcome`: `released`, `absent`, `not_owned`,
+or `unknown` (the last requires an error). Each request segment
 uses a fresh private acquisition ID. Managed `ProcessRequest*` cleans these
 handles on every exit, bounded by `WithExecutionCleanupTimeout` / the matching
 environment variable (5s default). Direct hooks/`ExecutePlan*` retain caller-owned
 lifecycle; legacy custom coordinators retain name-only semantics. Claims expire
 without renewal and remain advisory. Ownership handles are excluded from JSON.
+
+```go
+// core: acquisition identity is private request-segment state.
+type InvestigationLeaseRequest struct {
+    AgentName     string
+    EntityID      string
+    AcquisitionID string `json:"-"`
+    TTL           time.Duration
+}
+
+type InvestigationLease struct {
+    AgentName     string
+    EntityID      string
+    AcquisitionID string `json:"-"`
+    ExpiresAt     time.Time
+}
+
+type InvestigationReleaseOutcome string
+
+const (
+    InvestigationReleased InvestigationReleaseOutcome = "released"
+    InvestigationAbsent   InvestigationReleaseOutcome = "absent"
+    InvestigationNotOwned InvestigationReleaseOutcome = "not_owned"
+    InvestigationUnknown  InvestigationReleaseOutcome = "unknown"
+)
+
+type InvestigationLeaseCoordinator interface {
+    AcquireInvestigation(context.Context, InvestigationLeaseRequest) (*InvestigationLease, string, error)
+    ReleaseInvestigationLease(context.Context, InvestigationLease) (InvestigationReleaseOutcome, error)
+}
+```
+
+`TTL == 0` selects the provider default; negative TTL or empty identities are
+invalid. Repeating the same live acquisition is idempotent without extending
+expiry. Contention returns a nil lease and the current holder. Backend state,
+not `ExpiresAt` or agent-name equality, decides whether release is owned.
+`ObservedEpisodicReader` likewise exposes read health without changing legacy
+fail-open methods: a nil error is not an atomic snapshot or unlimited-history
+guarantee. These optional contracts are discovered by interface assertion.
+
+**`orchestration.BuildMemoryHooks`** — creates pipeline hooks from backends:
 
 ```go
 hooks, activityCoord, err := orchestration.BuildMemoryHooks(
@@ -1220,10 +1291,46 @@ Returns `([]core.PipelineHook, core.ActivityCoordinator, error)`. Check the erro
 Behavioural options:
 - `WithMemoryEntityExtractor(EntityExtractor)` — overrides BOTH hooks (shorthand)
 - `WithBuilderRecordEntityExtractor(EntityExtractor)` — overrides record hook only
+- `WithBuilderRecordRequestEntityExtractor(EntityExtractor)` — opt-in additional request-context entities for recording; request entities precede distinct step entities. Direct hooks use `WithRecordRequestEntityExtractor`. Enrichment and claim ownership are unchanged.
 - `WithBuilderEnrichmentEntityExtractor(EntityExtractor)` — overrides enrichment hook only
 - `WithMemoryImportanceFunc(func)`, `WithMemoryRetrievalWeights(RetrievalWeights)`, `WithMemoryLookback(time.Duration)`, `WithMemoryActivityFilter(ActivityFilter)`
 
 Numeric tuning uses `TRUVAG3_SHARED_MEMORY_*` env vars.
+
+`TRUVAG3_SHARED_MEMORY_RECORD_FAILURE_CAUSE_MAX_BYTES` limits the cause in
+heuristic failure summaries (default 256 bytes; positive integer). Direct hooks
+use `WithRecordFailureCauseMaxBytes(n)`. UTF-8-safe shortening adds
+` [shortened]` outside the cause allowance and `summary_cause_shortened=true`
+metadata. Operation/entity framing, model/custom summaries and source execution
+errors are unchanged. Invalid explicit builder values fail even without optional
+dependencies. Built-in batch exclusions record `summary_fallback_reason=batch_limit`
+and a separate `batch_excluded` count. Record hook effects use independent
+`backend_assigns_event_id`/`backend_assigns_timestamp` flags; the former combined
+diagnostic field is no longer emitted (historical records stay unchanged).
+
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_RESPONSE_BYTES` sets the positive
+per-step encoded failure/response payload allowance (default 4000 bytes).
+Direct callers use `WithSummarizerMaxResponseChars` (legacy name, byte units).
+Failure facts have priority; omissions/shortening are labelled in the derived
+prompt, leaving raw execution evidence unchanged. Output-token budgets are
+independent. Event metadata records `summary_source`, optional fallback reason,
+`recorded_at` and `event_time_basis`; event timestamps prefer valid end/start
+times over the unknown-occurrence recording fallback. Provider retention remains
+ingestion-based. Historical records retain unknown provenance in derived views.
+
+The built-in summarizer keeps complete, individually valid entries before a
+truncated array suffix, marking partial coverage; excluded or missing entries
+receive recording-hook fallback once. This does not make the incomplete array
+complete evidence or change custom summarizers' contract. Fallback preserves
+bounded failure causes; request-entity extraction is opt-in and independent of
+LLM summary success. Digest reuse requires an observed matching bounded event
+window and configuration/AI identity. Legacy episodic implementations without
+`ObservedEpisodicReader` remain usable but do not provide safe digest reuse.
+Independently implemented external compactors also bypass reuse: the stable
+behavior-fingerprint method is package-private, not a custom-provider extension.
+Observed read errors preserve the cache instead of treating failure as empty
+history. Event queries use newest-first occurrence timestamps with domain/ID
+tie breaks and filtering before limit; entity-history order is unchanged.
 
 **Available `EntityExtractor` implementations** (in `orchestration` package):
 - `NoOpEntityExtractor` — honors explicit `metadata["entity_type"]`/`metadata["entity_id"]` or multi-entity `metadata["entities"]`. Performs no extraction of its own — the framework refuses to guess. Domain-agnostic.
@@ -1466,7 +1573,7 @@ worker, _ := NewWorker(ExecutorDeps{
     Catalog:         catalog,
     WorkerCount:     10,               // overrides TRUVAG3_EXECUTOR_WORKER_COUNT
     MaxRetries:      5,                // overrides TRUVAG3_EXECUTOR_MAX_RETRIES
-    DispatchTimeout: 15 * time.Minute, // overrides TRUVAG3_EXECUTOR_DISPATCH_TIMEOUT (must be >= agent's TRUVAG3_ORCHESTRATION_TIMEOUT)
+    DispatchTimeout: 15 * time.Minute, // Size for the target agent's entire synchronous request
 })
 ```
 
@@ -1551,7 +1658,7 @@ func RunDistributedLockConformance(t *testing.T, factory LockFactory)
 
 ### Upstream Error Classification
 
-Utilities for tools that call upstream/external APIs. Extracts HTTP status codes from error messages and maps them to the correct `(HTTPStatus, ErrorCategory, Retryable)` tuple, ensuring the orchestrator routes errors correctly (e.g., upstream 400 → LLM error analyzer, not resilience retry).
+Utilities for tools that call upstream APIs. Extracts status codes from error messages and maps them to `(HTTPStatus, ErrorCategory, Retryable)`. Recognized input 400/404/409/422 errors become HTTP 400 with `Retryable:false`, stopping executor retries and correction. Tools can explicitly opt a known safely correctable condition into correction; the generic classifier does not grant that permission.
 
 #### UpstreamErrorInfo
 
@@ -2271,13 +2378,95 @@ overrides the constructor-specific default for single clients,
 `ProviderEntry`, and legacy `NewChainClient`; it never reconfigures an injected
 `ClientEntry`.
 
-OpenAI-compatible entries use `providers.BaseClient.ExecuteWithRetryDecoded` to
+Entries using `ai/providers/openai` and its registered aliases use `providers.BaseClient.ExecuteWithRetryDecoded` to
 share this same budget across HTTP/transport and eligible decoded API failures.
 The provider-owned `ResponseAttemptDecoder` returns a `DecodedAttempt` containing
 result/error, same-provider `Retryable`, semantic status and optional sanitized
 response identity. The helper closes decoded bodies and retains terminal partial
 results. Stream output prevents replay. `ExecuteWithRetry` / `ExecuteWithRetryPrepared`
-remain HTTP-only; other providers and injected clients retain their existing policy.
+remain HTTP-only; direct Azure classic/v1, other providers and injected clients
+retain their existing policy.
+
+```go
+// ai/providers: adapter-owned decision for one decoded HTTP response.
+type DecodedAttempt struct {
+    Result            *core.AIResult
+    Err               error
+    Retryable         bool
+    SemanticStatus    int
+    ProviderRequestID string
+}
+
+type ResponseAttemptDecoder func(context.Context, *http.Response) DecodedAttempt
+
+func (b *BaseClient) ExecuteWithRetryDecoded(
+    ctx context.Context, req *http.Request,
+    prepare RequestAttemptPreparer, decode ResponseAttemptDecoder,
+) (*core.AIResult, error)
+```
+
+`decode` is required; `prepare` is optional and runs once per wire attempt.
+The decoder owns retry permission for real HTTP errors (including 429/5xx) as
+well as in-body errors under HTTP 200. There is no second status-based retry
+fallback when it returns false. Transport failures and the HTML-error guard
+remain base-owned. The returned result belongs only to the terminal attempt;
+earlier partial results are not merged. `SemanticStatus` is not the real HTTP
+status or proof the provider supplied it; only 429/503 enable Retry-After
+handling on an otherwise eligible retry. `ProviderRequestID` must be bounded
+and sanitized by the adapter (base observation allows at most 128 bytes).
+`Retryable` here controls same-provider recovery, unlike
+`core.ProviderError.IsRetryable`, which permits chain failover.
+
+For OpenRouter, recognized transient types can retry; unknown nonempty types
+are conservative, and untyped status-only retries allow 429/500/502/503/504,
+not 501/505. Actual 401/402/403 stop same-provider recovery even if an error body
+claims otherwise. Other compatible HTTP routes retain their existing policy.
+
+#### Model capability lookup and adaptation
+
+```go
+// ai/providers: static adapter contract, not a live model catalog.
+type ModelCapabilities struct {
+    ProviderAlias             string
+    ModelPrefix               string
+    ExactModel                bool
+    MatchFamilyBoundary       bool
+    ReasoningStyle            string
+    SupportsJSONMode          bool
+    SupportsJSONSchema        bool
+    SupportsHeaderPassthrough bool
+}
+
+func LookupModelCapabilities(providerAlias, model string) ModelCapabilities
+func LogInheritedEffortOmitted(context.Context, core.Logger, string, string)
+```
+
+Lookup chooses the most specific matching row for the provider alias. Model
+matching is case-insensitive: `ExactModel` takes precedence; a family-boundary
+row matches the name or a hyphen suffix (not `gpt-60` for `gpt-6`); other rows
+retain prefix matching. Unknown capabilities are conservative. Applications
+customize requests through the existing request-policy APIs, not by mutating
+this built-in table. `LogInheritedEffortOmitted(ctx, logger, providerAlias, model)`
+is an adapter-authoring Debug diagnostic; the adapter separately records the
+adjustment. It emits no degraded-translation event or warning metric.
+
+Native OpenAI's GPT-6 family uses `low`, `medium`, `high`, `xhigh` or `max`;
+Sol/Luna also allow `none`, Astra does not. Omitting effort leaves the model's
+default only when no client/chain effort is inherited. An inherited active effort
+also activates reasoning-token scaling on profiles that enable it.
+Active/default reasoning rejects sampling/logprob controls and native
+Chat Completions tools after application policy; Sol/Luna with `none` can use
+the non-reasoning Chat Completions tool path. These restrictions are native-route
+contracts, not rules automatically applied to every compatible endpoint.
+
+Exact OpenRouter `deepseek/deepseek-v4.1-flash` and `z-ai/glm-5.3-flash` rows
+declare JSON object support. Exact `openai/gpt-5.6-luna` and `openai/gpt-6-luna`
+add JSON schema and OpenAI-style reasoning. GPT-6 Luna has a scoped built-in
+temperature-removal rule: Compatible mode reports adaptation; Strict mode
+requires application acknowledgement for a change to an explicit value.
+Protected privacy/required-parameter routing remains in effect. Unrelated
+models and alias defaults are unchanged; capability metadata is not a live
+availability guarantee.
 
 #### Provider factory extension contracts
 
@@ -2327,7 +2516,46 @@ untouched. The reusable
 encode, decode, and stream-decode contract without owning credentials, routing,
 retries, provider identity, or telemetry.
 
-The provider-authoring codec surface is:
+#### Compatible response and codec contracts
+
+Responses expose `ReasoningContent`, exact `FinishReason` and `ContentSource`
+(`final`, `reasoning_fallback`, `mixed`; empty means unknown).
+`StreamChunk.ReasoningContent` is separate from answer `Content`. The default
+compatible decoder keeps final text intact, including an empty final answer.
+It can deliver reasoning-only callbacks with empty `Content` and nonempty
+`ReasoningContent`; these count as delivered output for no-replay rules.
+`ai.WithReasoningContentFallback(true)` / `ai.WithChainReasoningContentFallback(true)`
+or direct `openaiwire.Config.ReasoningContentFallback` explicitly restores the
+legacy substitution/concatenation; both policies retain truthful provenance and
+have distinct cache fingerprints. Token/retry/time limits are unchanged.
+
+The core response/provenance types and provider-authoring codec surface are:
+
+```go
+type AIResponse struct {
+    Content          string
+    ReasoningContent string          `json:"reasoning_content,omitempty"`
+    FinishReason     string          `json:"finish_reason,omitempty"`
+    ContentSource    AIContentSource `json:"content_source,omitempty"`
+    Model            string
+    Provider         string
+    Usage            TokenUsage
+}
+
+type AIContentSource string
+
+const (
+    AIContentSourceFinal             AIContentSource = "final"
+    AIContentSourceReasoningFallback AIContentSource = "reasoning_fallback"
+    AIContentSourceMixed             AIContentSource = "mixed"
+)
+```
+
+These facts describe provider completion, not application success. A `length`
+finish reason is preserved rather than silently relabelled; empty final text is
+not automatically replaced or retried. Opt-in LLM debug records preserve exact
+available facts, including orchestration-owned planning and synthesis records;
+normal traces carry bounded classifications/presence flags, not reasoning text.
 
 ```go
 type Codec interface {
@@ -2352,6 +2580,7 @@ type RequestProfile struct {
     WireModel       string
     ModelField      ModelFieldMode
     TokenLimit      TokenLimitField
+    TokenBudget     TokenBudgetPolicy
     ReasoningEffort ReasoningEffortStyle
     Sampling        SamplingPolicy
 }
@@ -2361,9 +2590,11 @@ type Config struct {
     ReasoningTokenMultiplier int
     DefaultReasoningEffort   string
     ForceReasoningObject     bool
+    MaxSSEEventBytes          int
+    ReasoningContentFallback bool
 }
 
-const DefaultSurfaceVersion = "openai-chat-completions-v1"
+const DefaultSurfaceVersion = "openai-chat-completions-v2"
 const DefaultReasoningTokenMultiplier = 5
 
 type ModelFieldMode uint8
@@ -2374,6 +2605,13 @@ const (
 )
 
 type TokenLimitField uint8
+
+type TokenBudgetPolicy uint8
+
+const (
+    TokenBudgetExact TokenBudgetPolicy = iota + 1
+    TokenBudgetScaleForReasoning
+)
 
 const (
     TokenLimitMaxTokens TokenLimitField = iota + 1
@@ -2431,6 +2669,11 @@ values, and call `Validate` before relying on a profile constructed outside the
 codec. `BuildRequestBody` is a compatibility bridge for providers that adopted
 the earlier OpenAI reasoning helper; new provider integrations should use a
 `Codec`.
+
+`IsReasoningModel`, `BuildDraft` and `BuildRequestBody` recognize GPT-6 family
+names. The compatibility helpers select reasoning token/budget and sampling wire
+handling; they do not independently provide every native adapter model-contract
+check. Azure consumers of the shared classifier are affected as well.
 
 The side-effect-free OpenAI-compatible semantic catalog is also public:
 
@@ -2887,14 +3130,23 @@ chainClient, _ := ai.NewChainClient(
 
 #### WithReasoningTokenMultiplier
 
-Configure the token multiplier for OpenAI reasoning models (GPT-5, o1, o3, o4). These models count internal chain-of-thought tokens against `max_completion_tokens` but don't return them, which can cause empty responses without adequate token allocation.
+Configure the token multiplier for OpenAI reasoning profiles (including GPT-5,
+GPT-6, o1, o3 and o4). Reasoning consumes the completion budget even when it is
+not returned as visible answer text. The multiplier applies when a scaling
+wire profile has an effective nonempty effort other than `none`. This includes
+effort inherited from `WithReasoningEffort` or `WithChainReasoningEffort`, even
+when the call supplies no effort. An empty effective effort or `none` leaves
+the configured budget unmultiplied.
 
 ```go
 func WithReasoningTokenMultiplier(multiplier int) AIOption
 func WithChainReasoningTokenMultiplier(multiplier int) ChainOption  // For chain clients
 ```
 
-**Default:** 5x multiplier (e.g., 2000 requested tokens → 10000 allocated)
+**Default:** 5x when applicable (e.g., 2000 requested tokens with effective
+`high` effort, explicit or inherited → 10000 allocated). There is no per-model
+output-token ceiling clamp; configure a budget/multiplier supported by the selected model. This is
+independent of whether reasoning is exposed through the response channel.
 
 **Example:**
 ```go
@@ -2936,6 +3188,8 @@ chainClient, _ := ai.NewChainClient(
 | `WithMaxTokens(n)` | `int` | 1000 | Default max tokens (per `ai/providers/base.go`) |
 | `WithTimeout(d)` | `time.Duration` | 180s; explicit standalone Bedrock 60m | Provider request timeout |
 | `WithMaxRetries(n)` | `int` | 3 | In-provider retries; explicit 0 disables |
+| `WithReasoningContentFallback(enabled)` | `bool` | false | Compatible-codec legacy reasoning-as-answer opt-in; separate reasoning and provenance retained |
+| `WithChainReasoningContentFallback(enabled)` | `bool` | false | Same opt-in for compatible entries constructed by legacy `NewChainClient`; a `ChainOption`, not an `AIOption` |
 | `WithCircuitBreaker(breaker)` | `core.CircuitBreaker` | none | Protect each logical provider call; configure it with `ShouldCountAICircuitBreakerFailure` semantics |
 | `WithReasoningTokenMultiplier(n)` | `int` | 5 | Token multiplier for reasoning models |
 | `WithReasoningEffort(effort)` | `string` | model default | OpenAI-compatible reasoning effort, model dependent |
@@ -2983,19 +3237,23 @@ type StreamCallback func(chunk StreamChunk) error
 
 // StreamChunk represents a single chunk of streaming output
 type StreamChunk struct {
-    Content      string                 // The text content of this chunk
-    Delta        bool                   // True for incremental delta chunks; false on the final chunk
-    Index        int                    // Zero-based chunk index within the stream
-    FinishReason string                 // Why generation stopped (set on the final chunk: "stop", "length", ...)
-    Model        string                 // Model identifier
-    Usage        *core.TokenUsage       // Token usage (set on the final chunk)
-    Metadata     map[string]interface{} // Provider-specific metadata
+    Content          string                 `json:"content,omitempty"`
+    ReasoningContent string                 `json:"reasoning_content,omitempty"`
+    ContentSource    core.AIContentSource    `json:"content_source,omitempty"`
+    Delta            bool                   `json:"delta"`
+    Index            int                    `json:"index"`
+    FinishReason     string                 `json:"finish_reason,omitempty"`
+    Model            string                 `json:"model,omitempty"`
+    Usage            *core.TokenUsage       `json:"usage,omitempty"`
+    Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 ```
 
 Streaming errors are surfaced via the `error` returned from `StreamResponse`,
 not through a field on `StreamChunk`. The end of the stream is signalled by a
-final chunk with `Delta: false` and a populated `FinishReason` (and `Usage`).
+final chunk with `Delta: false`; `FinishReason` and `Usage` are populated when
+reported by the provider. Empty completion facts remain unknown. Delivery of
+either answer or reasoning content prevents transparent stream replay.
 
 **Example - Basic Streaming:**
 ```go
@@ -3943,26 +4201,35 @@ type LLMCallRecorder interface {
 
 ```go
 type LLMCallRecord struct {
-    CallType        string    // e.g., "agent_llm_call", "plan_generation"
-    SourceComponent string    // e.g., "research-assistant"
-    Description     string    // Human-readable: "Tool selection for research"
-    StepID          string    // Orchestration step ID
-    Timestamp       time.Time
-    DurationMs      int64
-    Prompt          string
-    SystemPrompt    string
-    Temperature     float64
-    MaxTokens       int
-    Model           string    // concrete model reported by the provider
-    Provider        string    // e.g., "openai", "anthropic"
-    Response        string
-    PromptTokens    int
-    CompletionTokens int
-    TotalTokens     int
-    Success         bool
-    Error           string
+    CallType         string               `json:"call_type"`
+    SourceComponent  string               `json:"source_component,omitempty"`
+    Description      string               `json:"description,omitempty"`
+    StepID           string               `json:"step_id,omitempty"`
+    PhaseNumber      int                  `json:"phase_number,omitempty"`
+    Timestamp        time.Time            `json:"timestamp"`
+    DurationMs       int64                `json:"duration_ms"`
+    Prompt           string               `json:"prompt"`
+    SystemPrompt     string               `json:"system_prompt,omitempty"`
+    Temperature      float64              `json:"temperature"`
+    MaxTokens        int                  `json:"max_tokens"`
+    Model            string               `json:"model,omitempty"`
+    Provider         string               `json:"provider,omitempty"`
+    Response         string               `json:"response"`
+    ReasoningContent string               `json:"reasoning_content,omitempty"`
+    FinishReason     string               `json:"finish_reason,omitempty"`
+    ContentSource    core.AIContentSource `json:"content_source,omitempty"`
+    PromptTokens     int                  `json:"prompt_tokens"`
+    CompletionTokens int                  `json:"completion_tokens"`
+    TotalTokens      int                  `json:"total_tokens"`
+    Success          bool                 `json:"success"`
+    Error            string               `json:"error,omitempty"`
 }
 ```
+
+`PhaseNumber` identifies the producing phase when supplied; zero is omitted.
+The three completion facts describe that call's provider response, not domain
+success. Empty finish/provenance fields mean unreported. `Error` is an
+observation string sanitized by the producer; the recorder stores it verbatim.
 
 #### NoOpLLMCallRecorder
 
@@ -4371,6 +4638,16 @@ strict and compatible modes. Parent cancellation is terminal and optional
 selection omission is visible in diagnostics and operation outcome.
 Applications that require a provider-specific protocol use a custom resolver.
 
+The additive runtime field is
+`ResourceSelectionAttemptTimeout time.Duration` with JSON tag
+`resource_selection_attempt_timeout,omitempty` on `SkillRuntimeLimits`.
+Omitting zero preserves the previous budget identity. The two-attempt allowance
+is shared by malformed-output and child-timeout correction, not two retries per
+failure category. A successfully returned answer is parsed even if the child
+deadline expires at the same boundary. Each timed-out attempt is diagnosed;
+the final optional omission is counted once. This setting does not add an
+activation-selector deadline or change activation's correction rule.
+
 Trusted host code can request an `explicit` activation or named resource using
 `WithTrustedSkillActivations` and `WithTrustedSkillResourceRequests`. Ordinary
 request metadata and user text cannot populate these carriers. Each carrier is
@@ -4590,8 +4867,8 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 - `WithResultDistill(enabled, distillThreshold)` - Enable/configure LLM result distillation (Layer 2)
 - `WithResultDistillModel(model)` - Model or portable alias for distillation calls; aliases are portable only across catalog-backed entries, so leave it empty for a chain containing Bedrock
 - `WithMaxConcurrency(n)` - Max parallel step executions in DAG (default: 25)
-- `WithStepTimeout(d)` - Per-step execution timeout (default: 120s)
-- `WithTotalTimeout(d)` - Total HTTP client timeout for tool/agent calls (default: 600s)
+- `WithStepTimeout(d)` - Execution allowance added to the HITL timeout for delegated orchestrator calls (default: 120s); not a direct deadline on ordinary tool calls
+- `WithTotalTimeout(d)` - Base HTTP client timeout per tool/agent call (default: 600s); delegation allowance may enlarge it. Not an end-to-end request deadline.
 - `WithStepRetryBackoff(initial, max)` - Code-owned retry timing; canonical validation rejects non-positive or inverted values
 - `WithExecutionStoreWriteTimeout(d)` - Per-write deadline for execution-debug snapshots (default: 5s)
 
@@ -5005,19 +5282,27 @@ Configure execution behavior for the orchestrator, including retry logic and typ
 ```go
 type ExecutionOptions struct {
     MaxConcurrency           int           // Default: 25 | Env: TRUVAG3_EXECUTION_MAX_CONCURRENCY
-    StepTimeout              time.Duration // Default: 120s | Env: TRUVAG3_EXECUTION_STEP_TIMEOUT
-    TotalTimeout             time.Duration // Default: 600s | Env: TRUVAG3_ORCHESTRATION_TIMEOUT
+    StepTimeout              time.Duration // Delegation execution allowance: 120s | Env: TRUVAG3_EXECUTION_STEP_TIMEOUT
+    TotalTimeout             time.Duration // Base HTTP-client timeout: 600s | Env: TRUVAG3_ORCHESTRATION_TIMEOUT
     RetryAttempts            int           // Total attempts per step (default: 3 = 1 initial + 2 retries; overridable via TRUVAG3_STEP_RETRY_MAX_ATTEMPTS)
-    RetryDelay               time.Duration // Delay between retries (default: 2s)
-    CircuitBreaker           bool          // Enable circuit breaker (default: true)
-    FailureThreshold         int           // Circuit breaker threshold (default: 5)
-    RecoveryTimeout          time.Duration // Circuit breaker recovery (default: 30s)
+    RetryDelay               time.Duration // Legacy field; not consumed by SmartExecutor
+    CircuitBreaker           bool          // Legacy field; does not enable a SmartExecutor breaker
+    FailureThreshold         int           // Legacy field; not consumed by SmartExecutor
+    RecoveryTimeout          time.Duration // Legacy field; not consumed by SmartExecutor
 
     // Type Safety (Layer 3 - Validation Feedback)
     ValidationFeedbackEnabled bool         // Enable LLM-based parameter correction (default: true)
     MaxValidationRetries      int          // Max correction attempts (default: 2)
 }
 ```
+
+The four legacy fields above retain stored defaults of `2s`, `true`, `5` and
+`30s`, respectively, but changing them does not configure the built-in executor.
+Use `WithStepRetryBackoff(initial, max)` with canonical orchestrator construction,
+or `SmartExecutor.SetStepRetryBackoff` for a directly constructed executor.
+Effective backoff defaults are 500 ms initially and a 10 s maximum, with a 2×
+factor and jitter. The `CapabilityService.CircuitBreaker` dependency is a
+separate capability-discovery concern, not a breaker on tool execution.
 
 **Type Safety Configuration:**
 
@@ -5163,6 +5448,16 @@ Callers can classify these preparation failures with
 
 Configures multi-phase DAG planning behavior. When enabled, the LLM planner can signal that a plan is partial (`terminal: false`), causing the orchestrator to execute the known phase, feed results back to the planner, and generate continuation plans until the planner produces a terminal plan.
 
+Fresh model responses need nonempty steps, explicit `terminal:true` for no work,
+or `needs_user_input` with a nonblank question. Zero-step ambiguity is corrected
+within the calling generation/recovery path's budget; direct/typed and resumed plans retain their
+contracts. Generated-plan normalization rewrites numeric bracket references and
+derives prior-phase `implicit_deps`, but does not repair missing same-phase
+`depends_on`. Regeneration reuses the selected phase catalog/skill projection
+with bounded rejected-attempt feedback. Repeated non-terminal dependency-only
+phases with unchanged failed ancestors stop after an opportunity to adapt;
+actual dispatched work, including polling, resets that structural guard.
+
 This enables "discovery → action" queries where later steps depend on the semantic content of earlier results — e.g., "find famous tourist destinations in Germany and get their weather."
 
 ```go
@@ -5183,12 +5478,41 @@ type IterativePlanConfig struct {
     // Default: 200 | Env: TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS
     MaxTotalSteps int `json:"max_total_steps"`
 
-    // PhaseTimeout is the maximum duration for a single phase (plan generation + execution).
+    // PhaseTimeout is the configured phase budget (plan generation + execution).
+    // The phase loop raises it to the delegation allowance when that is larger;
+    // earlier parent deadlines still apply.
     // Prevents a single continuation phase from hanging indefinitely.
     // Default: 180s | Env: TRUVAG3_ITERATIVE_PHASE_TIMEOUT
     PhaseTimeout time.Duration `json:"phase_timeout"`
+
+    // Regeneration attempts after the first validation failure. Malformed JSON
+    // consumes an attempt; only parsed candidates reach validation.
+    // Default: 4 | Env: TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS
+    MaxValidationRounds int `json:"max_validation_rounds"`
+
+    // Encoded additional correction context, not the whole prompt/token budget.
+    // The effective value must be greater than zero when validated.
+    // Default: 16384 | Env: TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES
+    RegenerationFeedbackMaxBytes int `json:"regeneration_feedback_max_bytes"`
 }
 ```
+
+Fresh model JSON is decoded against the plan-intent contract before validation.
+An empty plan supplies explicit `terminal:true` or a clarification with a
+nonempty question. Initial/continuation generation uses its configured plan-parse
+retry path; initial unavailable-agent replacements share the hallucination
+recovery budget. During validation regeneration, a parse/intent failure consumes
+`MaxValidationRounds` instead. Continuation unknown-agent recovery makes one
+regeneration attempt and returns the original unknown-agent error if it fails;
+it does not use the initial generation's replacement-parse loop. The outer phase
+loop may subsequently attempt fallback regeneration, subject to its existing
+context and preparation gates; the inner attempt is not a whole-request cap.
+Direct/typed plans and approved HITL checkpoints retain their existing contract.
+
+`MaxValidationRounds` is a ceiling, not a guarantee of that many model calls.
+Continuation regeneration checks for conflicts with already executed step IDs
+before returning its candidate. A remaining conflict returns an error immediately
+and can stop before the outer validation budget is exhausted.
 
 **Example - Default (enabled, suitable for most queries):**
 ```go
@@ -5200,12 +5524,10 @@ config := orchestration.DefaultConfig()
 **Example - Complex research queries:**
 ```go
 config := orchestration.DefaultConfig()
-config.IterativePlanning = orchestration.IterativePlanConfig{
-    Enabled:       true,
-    MaxPhases:     5,              // Allow more discovery rounds
-    MaxTotalSteps: 30,             // Allow more total steps for fan-out queries
-    PhaseTimeout:  60 * time.Second, // Longer timeout for slow external APIs
-}
+config.IterativePlanning.MaxPhases = 8
+config.IterativePlanning.MaxTotalSteps = 300
+config.IterativePlanning.PhaseTimeout = 5 * time.Minute
+// Keep the default MaxValidationRounds and RegenerationFeedbackMaxBytes.
 ```
 
 **Example - Cost-sensitive (disable multi-phase):**
@@ -5289,6 +5611,76 @@ type OrchestratorConfig struct {
 ```
 
 **Observability:** Emission is observable via the `orchestrator.remediation.triggered` span event (attribute `has_failure_pattern`) and the `remediation_failure_pattern` DEBUG log (fields `emitted`, `reject_reason`). See [DISTRIBUTED_TRACING_GUIDE](../observability/DISTRIBUTED_TRACING_GUIDE.md) and [LOGGING_IMPLEMENTATION_GUIDE](../observability/LOGGING_IMPLEMENTATION_GUIDE.md) §11.
+
+### Failed-operation view configuration
+
+```go
+type FailedOperationViewConfig struct {
+    Disabled       bool                       `json:"disabled,omitempty"`
+    MaxValueBytes  int                        `json:"max_value_bytes,omitempty"`
+    MaxStepBytes   int                        `json:"max_step_bytes,omitempty"`
+    MaxPromptBytes int                        `json:"max_prompt_bytes,omitempty"`
+    InputPolicy    FailedOperationInputPolicy `json:"-"`
+}
+
+type FailedOperationIdentity struct {
+    StepID     string
+    AgentName  string
+    Capability string
+    Attempt    int
+}
+
+type FailedOperationInputPolicy interface {
+    AllowFailedOperationInput(context.Context, FailedOperationIdentity, string, interface{}) (bool, error)
+}
+
+func WithFailedOperationView(FailedOperationViewConfig) OrchestratorOption
+func ProjectFailedOperationEvidence(context.Context, []StepResult, FailedOperationViewConfig) (map[string]json.RawMessage, error)
+```
+
+`WithFailedOperationView` replaces the **entire** view configuration after the
+environment layer; it does not merge individual fields. Zero numeric fields
+then resolve to defaults, and an omitted `Disabled` is false. For example, a
+code option setting only `InputPolicy` resets environment-set limits and
+disabled state. Supply the other desired fields explicitly to retain them.
+
+Example configuration (the types above belong to `orchestration`):
+
+```go
+resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
+    Base: orchestration.NewDefaultOrchestratorConfig(),
+    Environment: orchestration.EnvironmentStrict,
+    Options: []orchestration.OrchestratorOption{
+        orchestration.WithFailedOperationView(orchestration.FailedOperationViewConfig{
+            MaxValueBytes: 4096, MaxStepBytes: 16384, MaxPromptBytes: 32768,
+            // Disabled: true restores legacy prompt rendering.
+            // InputPolicy: applicationOwnedRestriction,
+        }),
+    },
+})
+```
+
+Check `err` before construction. `FailedOperationInputPolicy` implements
+`AllowFailedOperationInput(context.Context, FailedOperationIdentity, string, interface{}) (bool, error)`.
+It may restrict disclosure but cannot replace values. Policy errors omit inputs;
+implementations must be concurrency-safe and immutable. An injected policy makes
+semantic config cache identity ineligible. Limits apply to derived views, not raw
+execution retention. `ProjectFailedOperationEvidence(ctx, steps, config)` is an
+explicit application seam for authorized delegation; it returns JSON keyed by
+failed step ID, with a null value for a budget-omitted view. It does not authorize
+recipients or change result status. Custom synthesizers opt in separately.
+
+For a directly constructed built-in synthesizer, call
+`(*AISynthesizer).SetFailedOperationView(FailedOperationViewConfig) error` and
+check the returned configuration error. Factory-built orchestrators wire their
+resolved configuration automatically. Defaults are 4,096 bytes per value,
+16,384 per failed step and 32,768 per prompt; a tighter enclosing continuation
+allocation still wins. These are encoded derived-view budgets, not new raw
+record limits. See [result compaction](../orchestration/RESULT_COMPACTION_GUIDE.md).
+
+Exact whole-value step templates retain native JSON types. Object/array values
+cannot silently become string identifiers under a known scalar schema. Select
+the scalar path explicitly. Semantic auto-wire nested extraction remains supported.
 
 ### ResultTrimConfig
 
@@ -5822,39 +6214,47 @@ do not implement the optional capability continue through `ExtendTTL`.
 
 ```go
 type LLMInteraction struct {
-    // Identity
-    Type            string    // Recording site (plan_generation, synthesis, agent_llm_call, etc.)
-    SourceComponent string    // Component that made this call (e.g., "research-assistant"); empty for orchestrator calls
-    CallDescription string    // Human-readable label (e.g., "Tool selection for research")
-    StepID          string    // Orchestration step ID (for step-specific calls)
-    Timestamp       time.Time // When the interaction started
-    DurationMs      int64     // Call duration in milliseconds
-
-    // Request fields
-    Prompt            string  // Complete prompt sent to LLM
-    SystemPrompt      string  // System prompt if used
-    Temperature       float64 // Temperature setting
-    MaxTokens         int     // Max tokens setting
-    Model             string  // Model identifier (e.g., "gpt-4o")
-    Provider          string  // Provider (openai, anthropic, gemini, bedrock)
-    RequestedModel    string
-    EffectiveModel    string
-    Adjustments       []core.AIRequestAdjustment
-    PolicyFingerprint string
-    PolicyStable      bool
-
-    // Response fields
-    Response         string // Complete response from LLM
-    PromptTokens     int    // Prompt token count
-    CompletionTokens int    // Completion token count
-    TotalTokens      int    // Total token count
-
-    // Status fields
-    Success bool   // Whether the call succeeded
-    Error   string // Error message if failed
-    Attempt int    // Attempt number (for retries)
+    Type              string                     `json:"type"`
+    HookPhase         string                     `json:"hook_phase,omitempty"`
+    Timestamp         time.Time                  `json:"timestamp"`
+    DurationMs        int64                      `json:"duration_ms"`
+    Prompt            string                     `json:"prompt"`
+    SystemPrompt      string                     `json:"system_prompt,omitempty"`
+    Temperature       float64                    `json:"temperature"`
+    MaxTokens         int                        `json:"max_tokens"`
+    Model             string                     `json:"model,omitempty"`
+    Provider          string                     `json:"provider,omitempty"`
+    RequestedModel    string                     `json:"requested_model,omitempty"`
+    EffectiveModel    string                     `json:"effective_model,omitempty"`
+    Adjustments       []core.AIRequestAdjustment `json:"adjustments,omitempty"`
+    PolicyFingerprint string                     `json:"policy_fingerprint,omitempty"`
+    PolicyStable      bool                       `json:"policy_stable"`
+    Response          string                     `json:"response"`
+    ReasoningContent  string                     `json:"reasoning_content,omitempty"`
+    FinishReason      string                     `json:"finish_reason,omitempty"`
+    ContentSource     core.AIContentSource        `json:"content_source,omitempty"`
+    PromptTokens      int                        `json:"prompt_tokens"`
+    CompletionTokens  int                        `json:"completion_tokens"`
+    TotalTokens       int                        `json:"total_tokens"`
+    Success           bool                       `json:"success"`
+    Error             string                     `json:"error,omitempty"`
+    Attempt           int                        `json:"attempt"`
+    StepID            string                     `json:"step_id,omitempty"`
+    SourceComponent   string                     `json:"source_component,omitempty"`
+    CallDescription   string                     `json:"call_description,omitempty"`
+    PhaseNumber       int                        `json:"phase_number,omitempty"`
+    Category          string                     `json:"category,omitempty"`
+    PrecedenceAudit   *PrecedenceAudit           `json:"precedence_audit,omitempty"`
 }
 ```
+
+`PhaseNumber` is the producing phase when provided; zero is omitted.
+`HookPhase` classifies hook-local interactions (`pre`/`post`), and `Category`
+distinguishes model calls from embedding, vector-database, storage or logic
+observations. Empty category retains the legacy model-call rendering default.
+Completion facts describe provider output, not application success; unavailable
+facts remain empty. `PrecedenceAudit` is optional prompt-enrichment audit data,
+not a provider completion verdict.
 
 #### Factory Options and Direct Redis Constructors
 
@@ -5970,6 +6370,122 @@ type LLMDebugRecordSummary struct {
 
 ### Execution Debug Store
 
+Execution debug records and list summaries expose optional
+`ExecutionLifecycleObservation` (`state`, request-local `revision`, `observed_at`)
+and `record_revision`. Managed requests transition running → completed / failed /
+cancelled / suspended after delivery. These fields are independent of step
+success and domain outcome; omitted lifecycle on legacy/direct-plan records means
+unknown. Late hook effects advance the record revision without reverting phases.
+
+#### Step dispatch evidence and request lifecycle
+
+`orchestration.StepResult` distinguishes retry-budget attempts from physical
+component invocations. Relevant fields (other existing fields omitted):
+
+```go
+type StepResult struct {
+    Success       bool                   `json:"success"`
+    Error         string                 `json:"error,omitempty"`
+    Attempts      int                    `json:"attempts"`
+    DispatchCount int                    `json:"dispatch_count"`
+    Dispatches    []StepDispatch         `json:"dispatches,omitempty"`
+    ToolError     json.RawMessage        `json:"tool_error,omitempty"`
+    Parameters    map[string]interface{} `json:"parameters,omitempty"`
+    StartTime     time.Time              `json:"start_time"`
+    EndTime       time.Time              `json:"end_time"`
+    Skipped       bool                   `json:"skipped,omitempty"`
+    SkipReason    string                 `json:"skip_reason,omitempty"`
+    Metadata      map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type StepDispatch struct {
+    Number     int                    `json:"number"`
+    Parameters map[string]interface{} `json:"parameters"`
+    Response   string                 `json:"response"`
+    Error      string                 `json:"error,omitempty"`
+    Success    bool                   `json:"success"`
+}
+
+type ExecutionLifecycleObservation struct {
+    State      string    `json:"state"`
+    Revision   uint64    `json:"revision"`
+    ObservedAt time.Time `json:"observed_at"`
+}
+
+const (
+    RequestLifecycleRunning   = "running"
+    RequestLifecycleCompleted = "completed"
+    RequestLifecycleFailed    = "failed"
+    RequestLifecycleCancelled = "cancelled"
+    RequestLifecycleSuspended = "suspended"
+)
+```
+
+`DispatchCount` includes corrected-input dispatches that the historical
+`Attempts` counter does not count separately. `Dispatches` retains actual inputs
+and original response/error per invocation; it does not infer sanitization.
+`ToolError` retains the structured terminal component error, including whether
+retry permission was absent. Terminal success clears earlier terminal error
+fields, while dispatch history remains. Existing `StepResult.Error` keeps its
+legacy text transformation; it is not an exact copy of every raw response.
+Protect raw records with the configured store's access/retention policies.
+
+Structured `retryable:false` stops all same-step retries on every HTTP status.
+Omission is distinct from false (the Go `ToolError` bool always serializes).
+Transport/408/429/5xx failures use unchanged admitted parameters; only eligible
+non-transient 4xx can reach correction. A non-transient 4xx is not resent
+unchanged, and exact-bound/HITL-approved values stay protected. Ordinary retry
+settings do not give delegated orchestrator calls more than one dispatch.
+
+Dependency skips have `Skipped=true`, `Success=false`, no dispatch, and planned
+inputs in `Metadata.planned_parameters`. Refinement-satisfied skips have
+`Success=true`. Neither represents a new action for episodic recording.
+`RoutingStep.ImplicitDeps` represents referenced prior-phase IDs, participates
+in failure propagation, and does not schedule same-phase work. Fresh generated
+plans derive this field; same-phase `depends_on` remains validated planner input.
+
+Managed request segments observe running revision 1 and terminal revision 2.
+Caller cancellation is cancelled; a deadline/error is failed; HITL interruption
+is suspended. A completed pipeline does not prove a positive domain outcome or
+that every step succeeded. `StoredExecution` and `ExecutionSummary` expose
+`Lifecycle` and `RecordRevision`; record revision also advances on late effects
+without reverting the latest snapshot. Legacy/direct-plan omissions and zero
+record revision mean unknown, not failure. Resume uses a new linked request ID.
+`MetadataKeyExecutionRequestID` (`execution_request_id`) identifies the owning
+segment on terminal execution results; legacy records may omit it.
+
+Before **each** HTTP dispatch, including retries and corrected inputs,
+`validateDispatchParameters` rejects unresolved reserved references, absent
+required keys, declared enum violations and known object/array/scalar container
+mismatches. This is not full JSON Schema validation: explicit nulls remain
+application data, scalar coercion retains its existing behavior, and unknown
+custom types are not rejected solely by this guard. Exact bindings have an
+additional integrity check before the dispatch loop.
+
+Component retry permission is read from the structured wire envelope only when
+top-level `success` is JSON `false` and `error` is an object containing boolean
+`retryable`. Omitted, null, misplaced or non-boolean declarations mean
+unspecified, not false. For example:
+
+```json
+{"success": false, "error": {"code": "INVALID_INPUT", "retryable": false}}
+```
+
+A non-Go tool returning only `{"error":{"retryable":false}}`, or a top-level
+`retryable` field, does not declare retry permission to this parser. HTTP
+classification and immutable-input guards still apply when policy is unspecified;
+a true flag does not authorize a retry that those guards forbid.
+
+`ExecutionResult.Metadata["termination_reason"]` records a phase-loop reason
+when available, such as `repeated_failed_dependencies` or
+`plan_validation_exhausted`. It is not a `StepResult` field or a domain-success
+verdict. Request-completion spans/logs also use `termination_reason`, but their
+values describe the request boundary (`completed`, `clarification`,
+`forced_terminal`, `partial`, or a failure/interruption cause) and can differ
+from the more specific result-metadata reason. Legacy records can omit both.
+
+#### Persistence contract
+
 `ExecutionStore` remains the required request-oriented persistence contract.
 Conversation lookup is additive capability discovery:
 
@@ -5981,6 +6497,11 @@ type StoredExecution struct {
     // PipelineHooks is the ordered, request-local hook invocation record.
     // It is provider-neutral and does not require a tracing backend.
     PipelineHooks []PipelineHookExecution `json:"pipeline_hooks,omitempty"`
+
+    // Request outcome is independent of step outcomes. Legacy records may
+    // omit it; absence is unknown, not inferred success/failure.
+    Lifecycle *ExecutionLifecycleObservation `json:"lifecycle,omitempty"`
+    RecordRevision uint64 `json:"record_revision,omitempty"`
 
     // FinalResponse is the terminal application response captured after
     // AfterSynthesis hooks or an accepted BeforePlanning short-circuit.
@@ -6183,6 +6704,10 @@ cleanup. `NewExecutionStoreWithProvider` and `WithExecutionStoreProvider`
 require `ExecutionStorageProvider`, making atomic lineage promotion and
 TTL-preserving content rewrites compile-time provider requirements.
 
+An execution result with `Success=false` **or** a request lifecycle of `failed`/`cancelled` selects
+error retention, even if every stored step succeeded or no result is available.
+The request lifecycle can fail after successful tools, for example during
+synthesis. An existing longer or persistent lifetime is preserved.
 Interrupted executions receive at least the maximum of normal retention, error
 retention, and the checkpoint's remaining approval lifetime. Within the
 execution store, storing a related execution promotes its existing root
@@ -7282,13 +7807,15 @@ TruvaG3 supports configuration through environment variables:
 - `TRUVAG3_SHARED_MEMORY_PROVIDER` - Storage provider: `redis` or `noop` (default: `"noop"`)
 - `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN` - Max events in domain stream (default: `100000`)
 - `TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL` - Investigation claim auto-expiry (default: `30m`)
-- `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` - Max tokens of memory context in planning prompt (default: `2000`)
+- `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` - Memory view allowance at four encoded bytes/token (default: `2000`, or 8000 bytes); not an exact tokenizer count
+- `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_RESPONSE_BYTES` - Positive per-step summary-input payload allowance shared by encoded failure facts and response (default: `4000` bytes)
+- `TRUVAG3_SHARED_MEMORY_RECORD_FAILURE_CAUSE_MAX_BYTES` - Positive heuristic failure cause allowance (default: `256` bytes; framing/shortening marker additional); direct option `WithRecordFailureCauseMaxBytes`.
 - `TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT` - Recent domain events for baseline awareness (default: `20`)
 
 **Activity Compaction (LLM-powered digest):**
 - `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` - Model for summarization/compaction LLM calls. Accepts aliases such as `fast` and `smart` only when the selected provider defines them, or a concrete model ID (default: agent's model)
 - `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` - Positive fixed output-token allowance per event-summary call, read by `BuildMemoryHooks` at startup. Unset retains max(300, 150 × batch size); invalid explicit values fail construction, including without an AI client. Direct construction uses `WithSummarizerMaxTokens(n)`, which rejects non-positive values and overrides `WithSummarizerTokensPerStep(n)` regardless of option order. Independent of synthesis and compaction budgets.
-- `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` - Max tokens for compacted digest output (default: `500`)
+- `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` - Requested digest length (default: `500` tokens). The built-in full/incremental compactor sends `AIOptions.MaxTokens = 5 × target` (default: `2500`); provider reasoning scaling may further alter the wire budget. The target is a prompt instruction, not a tokenizer-enforced output cap. The final enrichment view has its own byte budget.
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` - Max events fetched before compaction (default: `200`)
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` - Raw events appended after digest for detail (default: `15`)
 

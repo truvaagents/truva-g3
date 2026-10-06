@@ -1480,23 +1480,51 @@ not an independent backend-durability attestation.
 
 For chat agents and real-time AI applications, the core module provides streaming types that enable token-by-token delivery of AI responses.
 
-#### Core Streaming Types
+#### AI Response and Streaming Types
 
 ```go
+// AIResponse preserves available provider completion facts.
+type AIResponse struct {
+    Content          string
+    ReasoningContent string          `json:"reasoning_content,omitempty"`
+    FinishReason     string          `json:"finish_reason,omitempty"`
+    ContentSource    AIContentSource `json:"content_source,omitempty"`
+    Model            string
+    Provider         string
+    Usage            TokenUsage
+}
+
+type AIContentSource string
+
+const (
+    AIContentSourceFinal             AIContentSource = "final"
+    AIContentSourceReasoningFallback AIContentSource = "reasoning_fallback"
+    AIContentSourceMixed             AIContentSource = "mixed"
+)
+
 // StreamChunk represents a single chunk of streaming output
 type StreamChunk struct {
-    Content      string                 // The text content of this chunk
-    Delta        bool                   // True for incremental chunks; false on the final chunk
-    Index        int                    // Zero-based chunk index
-    FinishReason string                 // Why generation stopped (e.g., "stop", "length")
-    Model        string                 // Resolved provider model
-    Usage        *TokenUsage            // Token usage (normally on the final chunk)
-    Metadata     map[string]interface{} // Provider-specific metadata
+    Content          string                 `json:"content,omitempty"`
+    ReasoningContent string                 `json:"reasoning_content,omitempty"`
+    ContentSource    AIContentSource        `json:"content_source,omitempty"`
+    Delta            bool                   `json:"delta"`
+    Index            int                    `json:"index"`
+    FinishReason     string                 `json:"finish_reason,omitempty"`
+    Model            string                 `json:"model,omitempty"`
+    Usage            *TokenUsage            `json:"usage,omitempty"`
+    Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // StreamCallback is a function that receives streaming chunks
 type StreamCallback func(chunk StreamChunk) error
 ```
+
+`Content` is answer text; `ReasoningContent` is a separate provider channel.
+Empty `ContentSource` or `FinishReason` means unreported, not successful
+completion. `Delta` marks incremental chunks, and `Usage` normally appears on
+the final chunk. A chunk's finish reason can be available even when an adapter
+does not populate the aggregate response's finish field. These facts are
+independent of the application's task result.
 
 #### Using Streaming in Handlers
 
@@ -1696,6 +1724,13 @@ When tools and agents communicate, they need a standardized way to report errors
 
 **Why This Matters:** A tool might fail because of bad input (don't retry with same data) or a rate limit (wait and retry). Without structured error information, agents can't make smart decisions.
 
+For orchestration callers, `Retryable:false` is an explicit refusal of all
+same-step retries, including transient HTTP retries. Its JSON field is not
+omitted for a Go zero value. True permits policy-eligible retries under the
+executor's remaining budgets; it does not guarantee a retry. Transient retries
+preserve inputs; eligible non-transient input errors may receive correction.
+See the [error handling guide](../docs/orchestration/ERROR_HANDLING_GUIDE.md).
+
 ```go
 // ToolResponse wraps all tool responses with success/error information
 type ToolResponse struct {
@@ -1748,7 +1783,7 @@ return core.ToolResponse{
 
 **Classifying Upstream API Errors:**
 
-Tools that call external APIs (Amadeus, OpenWeatherMap, etc.) should use `ClassifyUpstreamError` to map upstream HTTP status codes to the correct tool response status. This ensures the orchestrator routes errors correctly — e.g., an upstream 400 goes to the LLM error analyzer (not resilience retry).
+Tools that call external APIs can use `ClassifyUpstreamError` to map upstream status codes. Recognized input 400/404/409/422 errors become HTTP 400 with `Retryable:false`, so the executor stops before correction. A tool may deliberately grant permission for a specific safely correctable condition; status alone does not authorize the analyzer. See the tool guide's explicit opt-in example.
 
 ```go
 // In your tool's handler:

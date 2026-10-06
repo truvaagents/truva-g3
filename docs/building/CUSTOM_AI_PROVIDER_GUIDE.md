@@ -2356,6 +2356,14 @@ If the provider uses an OpenAI-compatible chat-completions wire format, reuse
 - sync and streaming response decoding
 - normalized usage extraction
 
+The stock codec keeps final `Content` and `ReasoningContent` separate and
+preserves the exact `FinishReason` and `ContentSource` in `AIResponse`. Forward
+the entire result through wrappers and recorders; leave unavailable provenance
+empty (unknown). For deliberate legacy substitution, construct with
+`Config.ReasoningContentFallback: true`; its policy varies the cache identity.
+Either delivered stream channel makes an error partially completed, preventing
+automatic replay/failover. A finish reason is not an application-success verdict.
+
 It deliberately does **not** own provider identity, endpoint routing,
 credentials, retries, telemetry, or lifecycle.
 
@@ -2380,8 +2388,9 @@ Create the codec and policy engine once when constructing the client:
 
 ```go
 codec, err := openaiwire.NewProfiledCodec(openaiwire.Config{
-    SurfaceVersion:   "acme-chat-completions-v1",
-    MaxSSEEventBytes: config.SSEEventMaxBytes,
+    SurfaceVersion:           "acme-chat-completions-v1",
+    MaxSSEEventBytes:          config.SSEEventMaxBytes,
+    ReasoningContentFallback: config.ReasoningContentFallback,
 })
 if err != nil {
     return nil, fmt.Errorf("create Acme wire codec: %w", err)
@@ -2406,6 +2415,11 @@ wire request after an adapter change.
 server-sent event. Pass the resolved `AIConfig.SSEEventMaxBytes`; a
 non-positive codec value uses the shared 1 MiB default. Do not implement
 streaming with a separate unbounded scanner.
+
+Forward `AIConfig.ReasoningContentFallback` as well so the public client option
+reaches this adapter. Its default is false; opting in restores reasoning-as-answer
+substitution while keeping the separate channel and provenance. The codec
+includes this behavior in its fingerprint even with a custom surface version.
 
 Then use one preparation function for sync, stream, and fingerprint preflight:
 
@@ -2547,6 +2561,12 @@ prepare, decode)`. `prepare` may be nil or acquire attempt-local credentials;
 `decode` returns `providers.DecodedAttempt` with `Result`, `Err`, `Retryable`
 (same-provider permission), and `SemanticStatus`. The base consumes one common
 budget, closes every decoded response body, and returns the terminal result/error.
+Opting in transfers the same-provider retry decision for decoded responses to
+the adapter, including actual HTTP 429/5xx responses, not only in-body errors
+under HTTP 200. The base loop does not fall back to its transport-only HTTP
+status classifier when `decode` returns `Retryable:false`. The shared HTML
+response guard still applies before decoding. Cover both real HTTP errors and
+in-body errors in adapter contract tests; transport errors remain base-owned.
 Decode streaming responses within the callback; after any delivered callback,
 return `Retryable:false`. Never wrap a full HTTP retry loop inside the decoder.
 Classify structured provider errors at the adapter boundary, preserving public

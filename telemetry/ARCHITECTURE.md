@@ -1,6 +1,6 @@
 # TruvaG3 Telemetry Module Architecture
 
-**Version**: 1.12
+**Version**: 1.13
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
 **Purpose**: Production-grade observability with OpenTelemetry integration
 **Audience**: Framework developers, application developers, operations teams
@@ -402,6 +402,12 @@ created by those factories are wrapped normally.
    `orchestration.RedisLLMDebugStore.GetRecord()` via the registry-viewer.
 
 2. **Format-compatible**: The JSON structure written by `RedisLLMCallRecorder` matches `orchestration.LLMInteraction` exactly. Both writers produce records that the registry-viewer can read seamlessly.
+
+   Additive `reasoning_content`, `finish_reason` and `content_source` fields retain
+   supplied completion facts verbatim in opt-in debug records. Missing fields
+   remain unknown for legacy adapters/records. Telemetry neither interprets
+   reasoning as an answer nor decides whether a provider finish is task success;
+   it preserves the producer's record, without new metric labels or exporters.
 
 3. **Request-local atomicity and advisory projection**: One Redis Lua operation
    appends the interaction, performs first-valid metadata backfill with
@@ -1704,6 +1710,7 @@ skills does not add a telemetry initialization requirement.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.13 | 2026-10-04 | Format-compatible optional completion provenance and separate reasoning in opt-in debug records; exporter/metric/lifecycle behavior unchanged |
 | 1.12 | 2026-09-29 | Fix nil registry clearing with a typed atomic pointer; serialize public shutdown and verify post-shutdown no-ops without changing initialization or exporter-error behavior |
 | 1.11 | 2026-09-08 | Removed recorder numbered-DB options and deprecation-only resolution notices; owning construction uses Core's canonical DB-0 factory while injected-client lifetime and request diagnostics remain unchanged |
 | 1.10 | 2026-09-08 | Enforced injected-recorder startup deadlines independently of client context-timeout settings without changing borrowed-client options or ownership |

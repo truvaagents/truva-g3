@@ -1,6 +1,6 @@
 # TruvaG3 Memory Module Architecture
 
-**Version**: 1.8
+**Version**: 1.9
 **Module**: `github.com/truvaagents/truva-g3/memory`
 **Purpose**: Pluggable storage backend implementations for cross-agent shared memory
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
@@ -156,6 +156,13 @@ User Request
 - **Pre-planning entity-keyed lookup accepts explicit request metadata** (steps 2-3 in the diagram above). The default `NoOpEntityExtractor` preserves supplied `entity_type`/`entity_id`; it does not infer entities from prose. Without explicit entities, entity history and entity investigation claims are absent. Domain-wide recent-event recall is time-indexed, not embedding-based; shared-knowledge search is a separate path when its backend is configured. Applications needing additional extraction can use `WithBuilderEnrichmentEntityExtractor`. Entity investigation claims and domain-wide activity coordination are distinct mechanisms: broadening an extractor also broadens claim acquisition. Recording-side entity identity and claim release must agree with the identities actually acquired; changing an extractor alone does not establish that lifecycle contract.
 
 ### 1.4 Memory Across an Agent's Lifetime
+
+**Event time and retention:** producers may supply a step occurrence timestamp
+and separate `recorded_at`/time-basis metadata. Episodic query windows and index
+scores use `AgentEvent.Timestamp`; an absent timestamp still receives the
+backend's recording-time default. Retention/expiry remains ingestion-based.
+Orchestration's recording-quality changes do not rewrite historical records or
+change the memory provider's ordering, cache or storage algorithm.
 
 ```
 Agent Starts (Day 1)
@@ -1302,6 +1309,7 @@ Backend implementations must:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.9 | 2026-10-02 | Clarify producer occurrence time versus ingestion-based retention and opaque recording provenance; no provider algorithm change |
 | 1.8 | 2026-09-30 | Newest-first episodic retrieval across visible retained sources; exact event-time bounds, stable ties, post-filter limits, batching and explicit performance/completeness limitations |
 | 1.7 | 2026-09-29 | Token-safe optional investigation providers, same-key legacy contention, observed release/error outcomes and no provider-owned lifecycle |
 | 1.6 | 2026-09-29 | Validate and wire Layer-1 stream length and investigation TTL before Redis I/O; preserve environment-free direct constructors and runtime fail-open |

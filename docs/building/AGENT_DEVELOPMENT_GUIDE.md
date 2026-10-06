@@ -792,7 +792,16 @@ a.RegisterCapability(core.Capability{
 })
 ```
 
-Set `Type: core.CapabilityOrchestrator` on capabilities that perform nested orchestration (their own planning → execution → synthesis cycle). The executor uses this to apply an extended per-step timeout (`TRUVAG3_HITL_DEFAULT_TIMEOUT + TRUVAG3_EXECUTION_STEP_TIMEOUT`) so the parent agent does not kill the connection while the child agent waits for HITL approval. Plain tool capabilities should leave `Type` empty — the default `"tool"` behavior applies the standard step timeout.
+Set `Type: core.CapabilityOrchestrator` on capabilities that perform nested
+orchestration (their own planning → execution → synthesis cycle). Such calls
+receive a context deadline of `HITL.DefaultTimeout + ExecutionOptions.StepTimeout`
+to accommodate a child's approval wait. Plain tools should leave `Type` empty;
+they use the shared HTTP-client timeout and enclosing context deadlines, without
+a separate `StepTimeout` deadline. Orchestrator construction raises that shared
+client timeout, and the phase loop raises its phase budget, when the delegation
+allowance is larger. Earlier parent deadlines and the child's server timeout
+still apply. See [Execution Limits](../reference/LIMITS_CHEATSHEET.md#execution-limits)
+when sizing a complete synchronous request.
 
 Capabilities with `Internal: false` enter the orchestrator's tiered tool selection, where only lightweight summaries (not full descriptions) are sent to the LLM. Front-load your `Description` or set an explicit `Summary` field — see [TOOL_DEVELOPMENT_GUIDE.md — Tiered Selection and the Summary Field](TOOL_DEVELOPMENT_GUIDE.md#tiered-selection-and-the-summary-field).
 
