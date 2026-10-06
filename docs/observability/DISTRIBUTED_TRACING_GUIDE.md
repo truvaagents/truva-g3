@@ -1868,18 +1868,19 @@ The orchestration module emits span events for every LLM interaction:
 | `result_distill.llm_failed` | A distill call failed and fell open to the structural floor | `request_id`, `step_id`, `error`, `duration_ms` |
 | `llm.event_summarization.request` | Batched LLM call for step summaries | `request_id`, `step_count`, `prompt_length`, `model`¹ |
 | `llm.event_summarization.response` | Summarization result | `request_id`, `response_length`, `model`¹ |
-| `memory.event_summarization.outcome` | Built-in batch semantic coverage, distinct from provider completion | `request_id`, `outcome` (`complete`/`partial`/`fallback`), `expected`, `accepted`, `rejected_entries`, `rejected_entities`, `complete_array`, `truncated`, additive `entity_fields.*` counts |
-| `orchestration.template.dependency_inclusion` | Successful template-source load outside `depends_on` | `reason` (`declared_prior_phase` or `undeclared_reference`), `step_id`, `referenced_step`; not a scheduler mutation or AI call |
+| `memory.event_summarization.outcome` | Built-in batch semantic coverage, distinct from provider completion | `request_id`, `outcome` (`complete`/`partial`/`fallback`/`llm_unavailable`/`parent_cancelled`/`summary_timeout`), `expected`, `accepted`, `batch_excluded`, `rejected_entries`, `rejected_entities`, `complete_array`, `truncated`, additive `entity_fields.*` counts |
+| `orchestration.template.dependency_inclusion` | Successful template-source load outside `depends_on` | `request_id`, `reason` (`declared_prior_phase` or `undeclared_reference`), `step_id`, `referenced_step`; not a scheduler mutation or AI call |
 | `memory.activity_compaction.outcome` | Non-empty digest usability after provider completion | `request_id`, `outcome` (`usable`/`fallback`), `digest_bytes` |
+| `memory.episodic.read` | Read observation for the bounded recent-event window; legacy readers do not expose read health | `request_id`, `status` (`read_succeeded`/`read_failed`/`legacy_unobserved`), `returned_events`, `limit` |
 | `memory.record.summary_coverage` | Recorder summary coverage, not durable-write confirmation | `request_id`, `source` (`builtin`/`custom`/`heuristic`), `eligible`, `summarized`, `fallback`; `entity_fields.*` only for observed built-in batches |
 | `llm.activity_compaction.request` | Full activity compaction LLM call | `request_id`, `event_count`, `prompt_length` |
 | `llm.activity_compaction.response` | Compaction result | `request_id`, `response_length` |
 | `llm.activity_compaction.incremental_request` | Incremental digest update LLM call | `request_id`, `new_event_count`, `prompt_length` |
 | `llm.activity_compaction.incremental_response` | Incremental update result | `request_id`, `response_length` |
-| `activity.compaction.cache_decision` | Digest cache path taken | `request_id`, `cache_hit`, `path`², `duration_ms` |
+| `activity.compaction.cache_decision` | Digest path for the bounded returned event window; finding an entry does not mean it was reused | `request_id`, `cache_hit`, `path`², `coverage` (`returned_window`/`limited_window`/`unknown`), `duration_ms` |
 | `memory.enrichment.injected` | Memory context injected into planning prompt | `request_id`, `entities_found`, `context_chars` |
 | `memory.record.events_written` | Events recorded after execution | `request_id`, `agent_name`, `events_recorded` |
-| `memory.entity_extraction.completed` | Entity extraction outcome — emitted at both `MemoryEnrichmentHook.BeforePlanning` and `MemoryRecordHook.AfterExecution` (once per step at the record hook). Use this to verify which extractor is in use, whether the LLM produced entities, and whether entity-less events are being recorded. | `request_id`, `step_id`³, `hook` (`enrichment`/`record`), `extractor_type` (`noop`/`llm`/`custom`/`none`), `source` (`llm_entities`/`explicit_metadata`/`none`), `entities_found` |
+| `memory.entity_extraction.completed` | Entity extraction outcome — emitted at both `MemoryEnrichmentHook.BeforePlanning` and `MemoryRecordHook.AfterExecution` (once per step at the record hook). Request metadata can supply or augment record entities independently of model summaries. | `request_id`, `step_id`³, `hook` (`enrichment`/`record`), `extractor_type` (`noop`/`llm`/`custom`/`none`), `source` (`llm_entities`/`explicit_metadata`/`request_metadata`/`request_and_step`/`none`), `entities_found` |
 | `memory.reflection.entity_processed` | Reflection job successfully extracted ≥1 fragment for an entity. Added to the `memory.reflection_pass` parent span (see "Reflection Job Spans" below). | `pass_id`, `entity_type`, `entity_id`, `fragments` |
 | `memory.reflection.llm_response` | Reflector LLM call completed for one entity. Added to the `memory.reflection` child span. | `request_id`, `response_length` |
 | `user_memory.recall.identity` | Recall identity facts for user | `request_id`, `user_id`, `namespace` |
@@ -1889,7 +1890,8 @@ The orchestration module emits span events for every LLM interaction:
 | `user_memory.summary.llm_request` | Session summary LLM generation | `request_id`, `user_id` |
 | `user_memory.summary.stored` | Session summary fact stored | `request_id`, `user_id` |
 | `activity.coordination.complete` | Activity signals discovered and formatted | `request_id`, `signals_discovered`, `signals_shown` |
-| `activity.cleanup.complete` | Activity signal cleaned up after synthesis | `request_id` |
+| `activity.cleanup.complete` | Direct `ActivityCleanupHook` submitted removal after synthesis; managed requests use the request owner's `activity.cleanup.submitted` event instead | `request_id` |
+| `activity.renewal.submitted` / `activity.cleanup.submitted` | Managed request owner submitted a TTL renewal or removal; a nil provider error is not independent backend-health confirmation | `request_id`, `provider_error_observed` |
 | `pipeline.short_circuit.decision` | A before-planning hook proposed a short-circuit and the framework accepted or rejected it | `request_id` first, hook name, bounded provenance kind, bounded reason, and status. Accepted decisions also mark the parent request span with `pipeline.short_circuit=true` |
 | `orchestrator.streaming.fallback` | A caller requested streaming but the configured AI client lacked native streaming capability | `request_id` first and bounded `reason=client_streaming_unsupported` |
 | `orchestrator.construction.rejected` | A public operation was rejected because a source-compatible convenience constructor produced a poisoned orchestrator | `request_id` first when available, bounded operation, and `reason=invalid_configuration`; paired with a sanitized span error and counter |
@@ -1898,14 +1900,47 @@ The orchestration module emits span events for every LLM interaction:
 | `orchestrator.synthesis.clarification_mode` | Synthesizer entered clarification mode and used the augmented system prompt to weave the planner's question into a conversational reply. Conditional — only on clarification turns. | `request_id`, `question`, `missing_field_count`, `has_partial_progress` |
 | `orchestrator.terminal_synthesis.normalized` | Acceptance-time normalizer stripped a terminal synthesis pseudo-step and collapsed the plan toward a zero-step terminal plan (the framework synthesizes the final answer). NOT an error — no `RecordSpanError`. Paired counter: `orchestration.plan.terminal_synthesis_normalized`. | `request_id`, `plan_id`, `dropped_agent`, `dropped_capability`, `remaining_steps` |
 | `orchestrator.plan_validation.exhausted` | Plan still failed validation after `MaxValidationRounds` regenerations; the phase fails explicitly rather than dispatching a known-bad plan. Paired with `RecordSpanError` and counter `orchestration.plan.validation_exhausted` (`error_type=plan_validation_exhausted`). | `request_id`, `phase_number`, `rounds` |
+| `orchestrator.plan.normalized` | Generated-plan reserved numeric-index references and prior-phase dependencies were normalized before validation; application payloads are not semantically repaired | `request_id`, `phase_number`, `changes` |
+| `orchestrator.plan_regeneration.selection` | Regeneration reused the captured selection/prompt, or built a new selection when reuse was unavailable or invalidated | `request_id`, `selection_reused` |
+| `llm.continuation_plan_regeneration.request` | Continuation regeneration is about to call the model; `selection_reused` records whether its selected prompt/catalog was reused | `request_id`, `prompt_length` (bytes), `phase_number`, `selection_reused`, bounded `validation_error`, optional `model` |
+| `semantic_template_resolution` | Scoped semantic fallback inferred a non-null value from the referenced step's own output. This is inference, not exact binding; the inferred value itself is not an event attribute. | `request_id`, `step_id`, `param_name`, `source_step`, `original_template`, `binding_method=inferred` |
+| `llm.hallucination_detected` | A generated plan named an unavailable agent. Initial planning and continuation emit different attribute sets. | Both: `request_id`, `hallucinated_agent`. Initial: `allowed_agent_count`, `hall_retry`, `max_hall_retries`, `attempt`. Continuation: `phase_number`. |
+| `llm.hallucination_enhanced_retry_fallback` | Rebuilding enhanced tiered selection for an unavailable-agent retry failed; recovery uses the original prompt result. | `request_id`, `error`, `hallucinated_agent`, `hall_retry`, `fallback_reason=enhanced_tiered_selection_failed` |
+| `llm.plan_generation.parse_error` | Initial/replacement plan decoding failed, including missing empty-plan intent | `request_id`, `error`, bounded `reason`, `attempt`, `will_retry`; unavailable-agent replacements also carry `hall_retry` and `retry_context=hallucination_recovery` |
+| `llm.continuation_plan_generation.parse_error` | Continuation plan decoding failed before validation or dispatch | `request_id`, `error`, bounded `reason`, `attempt`, `will_retry`, `phase_number` |
+| `llm.plan_generation.retry_parse_correction` | Replacement after an unavailable agent is about to receive the latest parse/intent feedback | `request_id`, bounded `reason`, `hall_retry` |
+| `llm.plan_generation.retry_parse_exhausted` | Replacement parse/intent correction exhausted the unavailable-agent retry budget; paired counter `plan_generation.retry_parse_exhausted` | `request_id`, `reason`, `error`, `retries_exhausted` |
+| `orchestrator.plan_validation.regeneration_parse_error` | Malformed regeneration spent a validation round; no malformed plan was dispatched | `request_id`, `phase_number`, `round`, `will_retry`, `error` |
+| `parameter.binding.rejected` | Pre-dispatch binding rejected a parameter shape; paired counter `orchestration.parameter.binding_rejected` and `parameter_binding` error log | `request_id`, `step_id`, `reason=shape_mismatch`, `dispatch_count=0` |
+| `failure_evidence.projected` | Failed-operation view was projected under its effective encoded byte budget; omitted views retain the existing failure markers | `request_id`, `step_id`, `effective_limit_bytes`, `raw_bytes`, `rendered_bytes`, `omitted` |
+| `failure_evidence.policy_omitted` | Application input policy returned an error, so inputs for that attempt were omitted; ordinary policy denials do not emit this event | `request_id`, `step_id`, `attempt` |
 | `hitl.notification.failed` | A framework-owned authoritative checkpoint was saved, but the application notification handler failed. The checkpoint remains durable and the request is not failed; this diagnostic intentionally does not record the raw handler error | `request_id` first, `checkpoint_id`, `original_request_id`, `error_type=notification` |
 | `llm.tiered_selection.empty_recovered` | Tiered selector returned `[]`; defensive recovery used `prior_tool_ids` from phase context instead of the all-agents fallback, preserving tiered selection's token-saving purpose. Rare — only fires when the selector returns empty in a continuation phase. | `request_id`, `prior_count`, `attempt` |
 | `llm.tiered_selection.semantic_empty_phase1` | Phase 1 (or continuation without prior tools) saw a semantic-empty `[]` selector response; retries are short-circuited and the sentinel error is returned so `selectTools` falls back to all-agents after exactly one LLM call. Common for memory-recall and conversational queries. | `request_id`, `attempt` |
 
 \* Conditionally present — only included when > 0 or non-empty.
 ¹ `model` attribute is only present when a model override is configured (via `With*Model()` or `TRUVAG3_*_MODEL` env var).
-² `path` values: `full` (cache miss), `cached` (hit, 0 new events), `incremental` (hit, few new events), `full_recompact` (hit, burst of new events).
+² `path` values: `full` (no reusable entry), `cached` (unchanged window),
+`incremental` (all previous events remain unchanged and additions fit the
+threshold), `full_recompact` (a compatible entry exists but events changed,
+expired from the window, were displaced, the window policy changed, or additions
+exceed the threshold),
+and `raw_fallback` (failed/empty compaction; bounded current raw events are shown).
+An incompatible view/AI fingerprint or cache TTL expiry yields `full`.
+`cache_hit` records presence of a compatible decoded entry with window metadata, not reuse or mere
+key existence. `coverage=limited_window` means the query bound was reached;
+no coverage value certifies the whole retained history. Reuse requires a
+successful observed read and a stable semantic fingerprint from the built-in
+compactor. Independently implemented external compactors cannot opt into the
+package-private fingerprint method and bypass reuse.
 ³ `step_id` is only present when emitted from the record hook (one event per step). The enrichment hook emits one event per request without `step_id` because enrichment runs once per request.
+
+Entity `source` describes indexing provenance, not application success or
+independently verified truth. At the record hook, `request_metadata` means the
+configured request extractor supplied entities without step entities;
+`request_and_step` means both sources contributed. These sources do not require
+model summarization to succeed. Read/digest/renewal/cleanup effect IDs are listed
+in the [pipeline hooks guide](../orchestration/PIPELINE_HOOKS_GUIDE.md#10-built-in-hooks-reference).
 
 ### Dependency-Only Termination
 
@@ -1980,7 +2015,10 @@ When you click on an orchestration span in Jaeger and expand the **Logs** tab, y
   duration_ms: 2341
 ```
 
-For error recovery scenarios, you'll see the full diagnostic chain:
+The following illustrative diagnostic chain requires a correction-permitted
+error and the executor's correction gates. The shipped `country-info-tool`
+returns `retryable:false` for not-found responses and therefore stops instead;
+this is not a trace promised for that shipped response.
 
 ```
 ▼ error_analyzer.llm_error_analysis_start
@@ -2002,7 +2040,10 @@ For error recovery scenarios, you'll see the full diagnostic chain:
   retry_count: 1
 ```
 
-For **semantic retry scenarios** (Layer 4), where computation is needed to fix parameters:
+For **semantic retry scenarios** (Layer 4), where computation is needed to fix
+parameters, the same permission/gates apply. In particular, the shipped
+`currency-tool`'s amount-validation error refuses retries; the trace below assumes
+an explicit opt-in for that safely correctable error:
 
 ```
 ▼ error_analyzer.analysis_complete
@@ -2057,7 +2098,7 @@ For **result trimming scenarios**, where large step results are reduced before s
 For **shared memory scenarios**, you'll see pipeline hooks and LLM compaction as dedicated child spans:
 
 Historical-view budgeting emits `memory.enrichment.view_bounded` with
-`request_id`, `view_version` (`event-detail/v1`), `event_format` (`named|tuple`),
+`request_id`, `view_version` (`event-detail/v2-record-facts`), `event_format` (`named|tuple`),
 `budget_bytes`, `context_bytes` and a bounded
 `outcome=empty|complete|partial|budget_too_small`. Each nonempty section emits
 `memory.enrichment.section_bounded` with `request_id`, closed `section` kind
@@ -2541,6 +2582,37 @@ If you create the AI client before telemetry is initialized, `telemetry.GetTelem
 
 ### AI Spans Captured
 
+When a response is available, logical `ai.generate` / `ai.stream` spans emit
+the following bounded completion facts:
+
+| Attribute | Meaning |
+|---|---|
+| `ai.response.content_source` | `final`, `reasoning_fallback`, or `mixed` when reported; otherwise `unknown` |
+| `ai.response.finish_reported` | Whether the aggregate response has a nonempty `FinishReason` |
+| `ai.response.token_limit_reached` | True only for an aggregate finish reason exactly equal to `length` or `max_tokens` |
+| `ai.response.content_bytes` | Byte length of `AIResponse.Content`, not characters or tokens |
+| `ai.response.reasoning_bytes` | Byte length of the separate `AIResponse.ReasoningContent` channel |
+
+The current stock OpenAI-wire adapters populate aggregate completion facts.
+Native Anthropic, Gemini and Bedrock adapters currently leave those aggregate
+fields unset, although their terminal streaming chunks can carry a finish
+reason. Custom adapters can populate the core fields too. An unreported finish
+reason therefore yields `finish_reported=false` and `token_limit_reached=false`;
+that is missing evidence, not proof that output was complete. If there is no
+response, these response attributes are not emitted.
+
+Exact finish text and separate reasoning are preserved in opt-in LLM debug
+records. The logical AI spans above use bounded flags, not raw reasoning or
+finish text. Separately, orchestration's native synthesis span can emit exact
+`synthesis.finish_reason`. These values do not belong in baggage or metric labels.
+Truncation evidence does not itself declare application failure.
+
+When orchestration defers the generic AI recorder, its typed debug interaction
+is authoritative: it copies these completion facts from that exact call's
+response, including an available partial response on error. This does not emit
+an additional logical call or token count. Validation-only audit interactions
+are not additional provider completions.
+
 When properly configured, the AI module emits these spans:
 
 | Span Name | Description | Key Attributes |
@@ -2578,11 +2650,15 @@ bytes may be recorded as `ai.response.model`, and an `X-Generation-Id` matching
 `gen-[A-Za-z0-9_-]+` and bounded to 128 bytes may be recorded as
 `ai.provider_request_id`. Invalid values are omitted.
 
-Within traces, those attributes exist only on the OpenRouter provider-local
-span, with the same validated generation ID additionally on each owned
-`ai.http_attempt` so retry responses remain attributable. Response model remains
-on the provider span. HTTP 200 with a decoded provider failure is
-`ai.attempt_status=decoded_error`, not HTTP failure or successful generation.
+Within traces, validated generation IDs can appear on owned `ai.http_attempt`
+spans. The provider-local span receives response identity only when a response
+object is available; it is not guaranteed on terminal errors with no response.
+Response model remains on that provider span. Adapters opting into `ExecuteWithRetryDecoded` report
+non-HTML decoded failures as `ai.attempt_status=decoded_error`, including real
+HTTP errors as well as provider failures carried by HTTP 200. The original
+`http.status_code` is preserved alongside the semantic status and retry
+classification. Transport errors, HTML proxy errors and adapters using the
+transport-only loop retain their other attempt-status classifications.
 The same validated values may appear as `response_model` and
 `provider_request_id` in structured successful-response logs. Framework code
 does not add them to baggage or metric labels, the reference Loki configuration

@@ -4,6 +4,8 @@ Welcome to the observability powerhouse of TruvaG3! Think of this guide as your 
 
 ## Table of Contents
 
+- [Shutdown contract](#shutdown-contract)
+
 1. [What Is Telemetry and Why Should You Care?](#1-what-is-telemetry-and-why-should-you-care)
 2. [The Simplest Thing That Works](#2-the-simplest-thing-that-works)
 3. [The Three Types of Metrics](#3-the-three-types-of-metrics-and-when-to-use-each)
@@ -27,6 +29,20 @@ Welcome to the observability powerhouse of TruvaG3! Think of this guide as your 
 20. [AI Module Distributed Tracing](#20-ai-module-distributed-tracing)
 21. [Push-Based Telemetry Limitations](#21-push-based-telemetry-limitations)
 22. [Summary](#22-summary)
+
+## Shutdown contract
+
+`telemetry.Shutdown(ctx)` serializes singleton shutdown calls. With no registry
+it returns nil. It stops limiter cleanup, then shuts down the provider using the
+supplied context. On provider error it returns that error without clearing the
+registry, allowing a later shutdown attempt. On success it clears the core
+metrics integration and global registry; subsequent emissions are no-ops and
+repeated shutdown returns nil. Use a bounded context; the serialization mutex
+itself is not context-cancellable. This is lifecycle coordination, not a promise
+that every exporter delivers every queued event. `Initialize` is guarded by
+process-wide `sync.Once`, which shutdown does not reset. Calling `Initialize`
+again after successful shutdown does not recreate the registry; initialize once
+per process and shut down at the end of that lifecycle.
 
 ## 1. What Is Telemetry and Why Should You Care?
 
@@ -1803,6 +1819,15 @@ See the **[Distributed Tracing and Log Correlation Guide](../docs/observability/
 The TruvaG3 AI module supports distributed tracing. Provider-neutral logical
 operations (`ai.generate`, `ai.stream`), provider execution, request-policy
 preparation, and HTTP attempts appear in the same request trace in Jaeger.
+
+Completion facts are separate from task outcomes. Opt-in LLM debug records
+retain available `reasoning_content`, exact `finish_reason` and `content_source`
+alongside answer text. Orchestration-owned planning, regeneration, selection
+and synthesis recording carries these facts even when generic client recording
+is deferred to avoid duplicates. Missing facts on legacy/custom responses mean
+unknown. Normal spans carry bounded classifications and presence flags, not
+reasoning or response bodies. See the [completion contract](../docs/reference/API_REFERENCE.md#request-aware-ai-api)
+and [tracing guide](../docs/observability/DISTRIBUTED_TRACING_GUIDE.md).
 
 ### Critical: Initialization Order
 

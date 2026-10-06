@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — singleton teardown
+
+- Use a typed atomic registry pointer and serialize public shutdown, including
+  core unregistration. Successful shutdown exposes a real nil registry/provider
+  and no-op emission; preserve initialization ownership and exporter-error
+  behavior. This does not introduce reinitialization support.
+
+## Unreleased — AI completion records (2026-10-04)
+
+- Extend format-compatible LLM debug records with optional separate reasoning,
+  exact finish reason and content provenance, without interpreting task outcomes.
+
 ## v0.5.0
 
 See the [root changelog](../CHANGELOG.md)

@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.37
+**Version**: 1.45
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -394,14 +394,17 @@ Dependency Results → Layer 1 (Auto-Wire) → Layer 2 (Micro-Resolution) → Re
 
 #### Layer 0: Plan-Time Template Validation (No LLM Cost)
 
-Runs once per plan, before the DAG executes, and rejects plans whose template references cannot succeed at runtime. A rejection feeds back into the planner for regeneration instead of letting a doomed step reach the tool.
+Runs once per plan, before the DAG executes, and rejects invalid template references.
+Model-plan rejection feeds back into bounded regeneration. Hook-modified plans
+instead follow hook validation/failure policy; their rejection does not trigger
+model regeneration.
 
 | Check | Purpose |
 |---|---|
 | Template shape | Framework-form `{{step-…}}` macros must match `{{stepId.fieldPath}}`; unrelated tool-owned templates are left alone |
 | Cross-phase awareness | A template reference is valid if the step exists in the current plan **or** in a completed prior phase |
 | Template declaration consistency | Every step ID referenced by a template must appear in `depends_on` (same-phase) or `implicit_deps` (prior-phase) |
-| Exact prior-phase declarations | `implicit_deps` contains only prior-phase step IDs actually referenced by parameter templates, not historical planning context; surplus declarations trigger regeneration |
+| Exact prior-phase declarations | `implicit_deps` contains only prior-phase step IDs actually referenced by parameter templates, not historical planning context; surplus declarations reject the plan (model plans may regenerate) |
 
 Freshly generated plans first normalize numeric bracket aliases (such as `items[0]` to `items.0`) and derive their exact prior-phase `implicit_deps` from parameter templates. This is a syntax/declaration correction, not a path-existence waiver: all normal validators still run, surplus declarations still fail, and hook-mutated, caller-supplied, and approved HITL plans are not normalized. The canonical array form remains `{{step-1.response.data.items.0.id}}`; keyed and expression brackets remain invalid.
 
@@ -475,7 +478,8 @@ When the HTTP call to a tool returns a 4xx error, the `ErrorAnalyzer` uses an LL
 - Analyzes error message semantics (e.g., "invalid currency code")
 - Determines if the error is fixable (bad params) vs. permanent (resource not found)
 - Can suggest corrected parameter values
-- Identifies transient errors (503, timeouts) for simple retry
+- Transport failures and HTTP 408/429/5xx bypass all parameter-correction paths;
+  existing bounded retry/backoff resends the admitted payload unchanged.
 
 The executor enforces tool-declared correction permission before any analyzer,
 contextual retry, or legacy callback. Explicit `retryable:false` forbids both
@@ -530,6 +534,13 @@ layers during resume.
 ---
 
 ## Execution Models
+
+Before each tool/agent dispatch, `validateDispatchParameters` checks declared
+required inputs, unresolved reserved references, enum membership and supported
+container/scalar shape mismatches. This is generic schema validation, not domain
+validation or permission to invent missing values. Corrections are validated
+again before resend. Explicit retry refusal, approved bindings and capability
+type still constrain the retry path.
 
 ### Conversation correlation ingress
 
@@ -776,6 +787,63 @@ Dependency, schema, hook and dispatch validation still apply to recovered plans.
 The parse-retry prompt constrains the outer JSON envelope while allowing code and
 Markdown within escaped string values. See `plan_json.go` and `parsePlan`.
 
+Model responses additionally pass the model-only intent decoder in
+`plan_envelope.go`. Nonempty steps preserve omitted-terminal compatibility;
+zero-work model responses require explicit `terminal:true` or a clarification
+object with a nonblank `question`. A present clarification object with a blank
+or missing question is rejected even alongside steps or terminal intent because
+the phase loop gives clarification priority. Question contents are preserved;
+whitespace is inspected only to recognize intent. Null controls alone, identity-only JSON,
+unknown-only envelopes and null roots do not establish intent. Known-field type
+errors remain typed errors; additive unknown fields on recognized plans remain
+compatible. Structural recovery passes through the same check before generated
+fields and terminal-synthesis normalization. Typed/direct plans, refinement and
+HITL resume retain their existing validation/terminal semantics.
+
+Envelope correction uses the existing regeneration feedback byte budget,
+JSON-encoded sorted top-level keys and an omitted-key count. Field values are
+excluded from this diagnostic; opted-in raw debug recording remains unchanged.
+Existing initial/continuation parse-error events add the bounded `reason` field:
+`unrecognized_plan_envelope`, `missing_explicit_plan_intent`,
+`invalid_clarification_request` or `plan_decode_failed`.
+No new attempts, selection pass or executor behavior is introduced.
+
+The default initial prompt builder, fallback/continuation format rules and
+agent-name retry guidance show
+`{"terminal": true, "steps": []}` for requests that available capabilities cannot
+fulfill, including when iterative planning is disabled. Both active and legacy
+iterative instruction text limit omitted-terminal compatibility to nonempty
+model plans. This aligns guidance with the existing decoder; it does not change
+typed/direct-plan terminal defaults, hallucination retry budgets or dispatch.
+
+In initial planning, if a replacement produced during unknown-agent recovery fails plan decoding,
+the next recovery attempt uses that latest parse/intent error and reuses the
+selected catalog and its system prompt. It spends the existing
+`HallucinationMaxRetries` budget; it does not start a separate parse-retry budget
+or reselect tools for a syntax correction. A valid replacement clears the parse
+failure and still passes agent and subsequent phase validation. Exhaustion
+preserves the latest typed parse error, rather than reporting the earlier
+unavailable agent. Provider/cancellation errors retain their immediate return
+path. The phase loop's existing fallback regeneration still applies and receives
+the actual generation failure; the inner limit is not a whole-request call cap.
+Continuation unknown-agent recovery instead makes one regeneration attempt and
+returns the original unknown-agent error if that attempt fails. It has no
+initial-style replacement-parse loop. The outer phase loop may still attempt
+fallback regeneration, subject to its context and preparation gates.
+Parse failures use `llm.plan_generation.parse_error` with
+`retry_context=hallucination_recovery`. Correction and exhaustion emit
+`llm.plan_generation.retry_parse_correction` and
+`llm.plan_generation.retry_parse_exhausted`; the latter has a corresponding
+`plan_generation.retry_parse_exhausted` counter with a bounded `reason` label.
+These are deterministic diagnostics, not additional model interactions.
+
+Each `hallucination_detection` debug record carries the effective prompt, system
+prompt and raw response of the attempt whose plan was rejected. Its allowed-agent
+diagnostics reflect that attempt's validated catalog, including after selection
+refresh or an intervening parse correction. This request-local evidence does not
+alter correction prompts or retry decisions. Detection records remain diagnostics
+without duplicated provider identity, token usage or call duration.
+
 Validation failure is different: the phase fails without executing the rejected
 candidate. `MaxValidationRounds` bounds regeneration attempts after the first
 validation failure. Malformed JSON returned by regeneration consumes an attempt
@@ -784,7 +852,9 @@ candidate restarts normalization and the full validation gauntlet before hooks,
 HITL, or execution. Provider, boundary-preparation, and cancellation errors are
 not retried by this loop. Initial-generation retry policies and HITL checkpoint
 resume behavior are unchanged. Parse failures emit
-`orchestrator.plan_validation.regeneration_parse_error` span events; exhaustion
+`orchestrator.plan_validation.regeneration_parse_error` span events. A regenerated
+continuation that still conflicts with executed step IDs returns early; the
+round limit is a ceiling, not a guaranteed number of model calls. Exhaustion
 uses the existing validation-exhaustion event and counter. Structural corrections
 reuse the phase's selected capability prompt and add bounded, encoded feedback
 containing the rejected candidate and distinct errors. A new phase selects again;
@@ -1037,6 +1107,15 @@ func (p *ServiceCapabilityProvider) GetCapabilities(ctx context.Context, request
 ---
 
 ## Capability Provider Architecture
+
+### Built-in catalog rendering contract
+
+Full and tier-selected planner catalogs render declared return fields as compact
+`name:type` hints even when `Returns.Type` is empty. Return-field descriptions and
+examples stay in metadata but are not rendered by these builders. Input parameter
+descriptions are rendered; input examples are not. Custom builders can choose a
+different view. Template validation uses declared output field names, so planner
+visibility and the underlying schema are distinct contracts.
 
 ### Scaling Challenge
 
@@ -1425,7 +1504,7 @@ added. Runtime backend failures retain their existing fail-open behavior.
 
 The derived historical view reserves scope/headings/counts and admits complete
 JSON records in the existing domain → entity → investigation → knowledge order.
-Request-local event detail uses `event-detail/v1`: an `event` tuple containing
+Request-local event detail uses `event-detail/v2-record-facts`: an `event` tuple containing
 the exact event ID, origin request ID, timestamp, agent, action and outcome,
 alongside named summary/entity fields. The complete tuple legend precedes all
 records, follows the historical-scope notice, and is charged to the same budget.
@@ -1441,18 +1520,22 @@ the record is omitted. Stored events, query order, entity/claim semantics, other
 hooks' RAG context and compactor generation budgets are unchanged. Detail views
 omit the repeated multi-entity list with an explicit count; compactor input still
 retains that list. Cached digests never contain these tuples. The
-`historical-origin/v4-window` cache joins the existing AI fingerprint with a
+`historical-origin/v5-record-facts` cache joins the existing AI fingerprint with a
 bounded returned-window identity: complete event-content hashes, domain,
 lookback, raw-event limit and output-token target. Unchanged windows reuse a
 digest without a model call even at the configured limit. A strict extension
-updates from only new events, including equal-timestamp arrivals; changed,
+updates from only new events when their count is at most the incremental threshold
+(20 by default), including equal-timestamp arrivals; larger additions or changed,
 expired or displaced records require a bounded full rebaseline. Summary and
 window metadata are written together. Concurrent stale writes may cause a
 later cache miss, but are not treated as coverage of a different current window.
 No cursor, atomic read snapshot or full-history guarantee is asserted.
-Legacy/custom episodic readers without the observed-read extension, or custom
-compactors without a known stable behavior identity, remain functional but
-bypass digest cache reuse. Backend read failure leaves the cache untouched;
+Legacy/custom episodic readers without the observed-read extension and
+independently implemented external compactors remain functional but bypass
+digest cache reuse. The behavior
+fingerprint method is package-private, not a supported custom-compactor extension.
+The built-in compactor needs a stable effective AI fingerprint.
+Backend read failure leaves the cache untouched;
 compaction failure exposes current raw events instead of an uncovered stale
 digest. Old view versions are cache misses, not automatically deleted records.
 Mixed-version writers sharing a domain cache can recompact until rollout converges.
@@ -1473,6 +1556,49 @@ preserves the existing calculation; invalid explicit values fail construction.
 Direct callers use
 `WithSummarizerMaxTokens(n)` and receive an error for non-positive values.
 Requests continue through the existing AI, debug, and tracing paths.
+
+Recording supplies optional error text and copied structured error bytes to
+summarizers, including when the step response is empty. The built-in prompt
+places failure facts first as JSON-encoded untrusted strings, sharing the
+existing per-step response allowance (4000 encoded payload bytes by default).
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_RESPONSE_BYTES` configures that
+positive allowance through the builder; direct callers retain
+`WithSummarizerMaxResponseChars`, whose historical name counts bytes. Omitted
+or shortened views are labelled; original execution fields stay unchanged.
+Failed heuristic summaries use the recorded code, otherwise error text,
+otherwise an unknown-cause label. Stored event metadata distinguishes
+`summary_source=model|heuristic|custom` and a fixed fallback reason.
+The heuristic cause (including a structured code) is limited to 256 UTF-8-safe
+bytes by default, configured through
+`TRUVAG3_SHARED_MEMORY_RECORD_FAILURE_CAUSE_MAX_BYTES` or direct
+`WithRecordFailureCauseMaxBytes`. Positive values are required; invalid explicit
+builder values fail even without dependencies. Operation/entity framing and the
+additional ` [shortened]` marker are outside this cause-only budget. Shortening
+sets `summary_cause_shortened=true`; original execution errors and model/custom
+summaries are unchanged. Steps excluded by the built-in summary batch cap record
+`batch_limit`, not the admitted batch's model failure; `batch_excluded` is a
+separate coverage count, not parser truncation. Record effects expose independent
+`backend_assigns_event_id` and `backend_assigns_timestamp` booleans, replacing
+the ambiguous combined diagnostic field. Historical effects are not rewritten.
+
+`WithBuilderRecordRequestEntityExtractor` (or direct
+`WithRecordRequestEntityExtractor`) opts into extracting recording entities
+from `PipelineContext.Request` and cloned JSON-like request metadata. Valid
+request entities precede distinct step/model entities. Opaque metadata values
+remain application-owned and read-only. The default step extractor, enrichment
+extractor and claims acquired at request start are unchanged. Request-only
+recording entities never enter legacy name-owned release; managed cleanup
+still releases only its acquired private handles.
+
+New events use a non-future, internally consistent step end time, then a valid
+start time, then recording time with unknown occurrence. Metadata retains
+`recorded_at`, `event_time_basis` and any fallback reason. Event windows and
+content-hash cache identity therefore see occurrence time, while provider
+retention stays ingestion-based. Detail views project summary/time provenance;
+legacy records report unknown provenance, not fabricated facts. Historical
+records, query algorithms, planning/executor behavior and AI call budgets are
+unchanged. Recording span counts include entity-less events; hook effects
+remain producer/provider-call observations, not durable-write acknowledgements.
 
 Direct summary construction rejects overflow in the calculated batch allowance
 unless a valid fixed allowance replaces it. Memory retrieval weights accept
@@ -1521,7 +1647,9 @@ empty digests receive the same guard.
 
 `orchestration.event_summarization.success` retains its provider-completion
 meaning. The additive `orchestration.event_summarization.outcomes` counter has
-`outcome=complete|partial|fallback`, emitted once per non-empty built-in batch.
+`outcome=complete|partial|fallback|llm_unavailable|parent_cancelled|summary_timeout`,
+emitted once per non-empty built-in batch. `batch_excluded` is a count in the
+outcome event/report, not an outcome label.
 Both memory dashboard copies distinguish that semantic series from legacy
 completion. Corresponding summary/compaction/recording span events contain
 bounded counts and outcomes; raw content stays in the existing debug path.
@@ -1804,7 +1932,9 @@ func (r *ContextualReResolver) ReResolve(ctx context.Context, execCtx *Execution
 }
 ```
 
-**Example scenario:**
+**Hypothetical opt-in scenario:** The shipped `currency-tool` sends
+`retryable:false` for amount validation and stops. The recovery below assumes
+explicit correction permission for that condition and all executor gates passing.
 ```
 User: "Sell 100 Tesla shares and convert proceeds to EUR"
 Step 1: Returns {price: 468.285}
@@ -1909,6 +2039,12 @@ The orchestration module includes a debug store that captures complete LLM reque
   final execution outcome and lineage promotion may retain the current and
   root records longer
 - **Async recording**: Uses goroutines with WaitGroup for non-blocking capture
+- **Completion provenance ownership**: Callers that defer generic AI recording
+  preserve the exact response's reasoning, finish reason and content source in
+  their authoritative typed interaction, including available partial-error
+  responses. Missing provider facts stay unknown. Validation-only audit records
+  do not manufacture another completion. These payload fields remain in opt-in
+  debug storage, not logs, span attributes or metric labels.
 - **Graceful fallback**: Never fails orchestration if debug store fails
 - **Payload fidelity**: Built-in stores preserve application and model
   payloads without framework-inferred redaction. Sanitization, access control,
@@ -2126,6 +2262,11 @@ On native streaming, synthesis tokens have already been delivered when
 `AfterSynthesis` runs. `FinalResponse` is therefore the post-hook response
 object, not a claim that the hook-mutated text was the byte stream observed by
 the client.
+
+At request finalization, partial-content delivery is a failed lifecycle even if
+some text reached the client. `request_lifecycle.go` also treats a returned error
+or response errors as failure; partial output is not authoritative successful
+completion and must not be displayed as such.
 
 Workflow-mode `ExecutePlanWithSynthesis` executes a caller-supplied plan and
 synthesizes its results, but it does not run pipeline hooks and does not
@@ -3358,17 +3499,49 @@ modularity and flexibility.
 
 ## Version History
 
+Version 1.45 (2026-10-04): classify transient failures before analyzer,
+contextual and legacy correction; keep configured budgets but narrow correction
+eligibility. Explicit false stops retries, non-transient 4xx cannot be resent
+unchanged, and approved inputs permit only eligible unchanged resends.
+Delegation stays single-dispatch. Debug interactions preserve exact finish/source/separate reasoning
+facts supplied by AI adapters, without changing planning or result acceptance.
+
+Version 1.44 (2026-10-02): additive summary failure inputs and bounded views;
+record-only request entity extraction; occurrence/recording provenance and
+versioned historical detail/digest views. Executor and query algorithms unchanged.
+
+Version 1.43 (2026-10-02): pair unavailable-agent rejection records with the actual
+rejected attempt's effective prompt/system, raw response and validated catalog;
+preserve planning feedback, retry budgets and deterministic diagnostic semantics.
+
+Version 1.42 (2026-10-02): consolidate the active iterative terminal example and
+carry latest parse failure through unknown-agent recovery using its existing
+budget and selected context. Preserve the phase fallback, validation and
+executor; add reasoned correction/exhaustion telemetry and regression coverage.
+
+Version 1.41 (2026-10-02): align default and agent-name retry no-work guidance with
+explicit model terminal intent; qualify active/legacy omission instructions.
+Preserve decoder, typed-plan, executor and retry behavior.
+
+Version 1.40 (2026-10-02): reject missing/blank questions in fresh model
+clarification objects, including mixed-intent responses; preserve question bytes,
+typed/direct-plan compatibility and existing correction budgets.
+
+Version 1.39 (2026-10-01): fresh model-plan decoding requires recognized routing
+intent, preserves typed/direct/resume contracts and payload fidelity, and reports
+bounded actionable envelope diagnostics within existing correction budgets.
+
 Version 1.38 (2026-09-29): independent request lifecycle observations, monotonic
 record/effect merging, and request-owned activity renewal with joined all-exit
 cleanup. Legacy/direct-plan lifecycle remains unknown.
 
-Version 1.36 (2026-09-29): fail-fast numeric memory-hook construction with an
-explicit error return and synchronous application handling; preserve absent
-defaults, direct-option sentinels, ownership and runtime memory fail-open.
-
 Version 1.37 (2026-09-29): request-segment-owned investigation leases, bounded
 all-exit cleanup, private ownership and fresh resume acquisition. Preserve legacy
 direct-hook/custom-coordinator behavior and original request outcomes.
+
+Version 1.36 (2026-09-29): fail-fast numeric memory-hook construction with an
+explicit error return and synchronous application handling; preserve absent
+defaults, direct-option sentinels, ownership and runtime memory fail-open.
 
 Version 1.35 (2026-09-29): classify declared prior-phase template inclusions
 without planner-error warnings; preserve legacy totals and add reason telemetry.

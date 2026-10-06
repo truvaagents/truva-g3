@@ -236,13 +236,14 @@ redisOpt, _ := redis.ParseURL(os.Getenv("REDIS_URL"))
 redisClient := redis.NewClient(core.ApplyRedisClientDefaults(redisOpt))
 
 // Step 1: memory module creates backends
-backends, _ := memory.NewSharedBackends(redisClient, agent.Logger,
+backends, err := memory.NewSharedBackends(redisClient, agent.Logger,
     memory.WithAgentName("my-agent"),
     memory.WithDomain("infrastructure"),
 )
-if backends != nil {
-    defer backends.Close()
+if err != nil {
+    return fmt.Errorf("configure memory backends: %w", err)
 }
+defer backends.Close()
 
 // Step 2: orchestration module creates hooks from backends
 hooks, activityCoord, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger)
@@ -272,11 +273,15 @@ That's it. No `memory_setup.go` file needed. From this point on, every request a
 ```go
 embedder, _ := ai.NewEmbeddingClient(ai.WithEmbeddingLogger(agent.Logger))
 
-backends, _ := memory.NewSharedBackends(redisClient, agent.Logger,
+backends, err := memory.NewSharedBackends(redisClient, agent.Logger,
     memory.WithAgentName("my-agent"),
     memory.WithDomain("infrastructure"),
     memory.WithEmbeddingClient(embedder),  // Enables Phase 2
 )
+if err != nil {
+    return fmt.Errorf("configure memory backends: %w", err)
+}
+defer backends.Close()
 ```
 
 **What each call does:**
@@ -348,7 +353,12 @@ if err != nil {
     return fmt.Errorf("configure memory hooks: %w", err)
 }
 
-// Use a domain-specific extractor on the enrichment path (pre-planning entity-keyed lookup)
+```
+
+Alternatively, use a domain-specific extractor on the enrichment path:
+
+```go
+// Pre-planning entity-keyed lookup
 hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithBuilderEnrichmentEntityExtractor(myDomainExtractor))
 if err != nil {
@@ -357,6 +367,43 @@ if err != nil {
 ```
 
 **Writing a custom extractor:** implement the `orchestration.EntityExtractor` interface. The framework treats `Entity{Type, ID}` as an opaque key — domain semantics are entirely up to you.
+
+**Retaining explicit request entities during recording:** by default, the
+record hook extracts from each step's instruction/parameters and model summary,
+not the request metadata. To keep an application-supplied request identity even
+when summarization fails, opt in separately:
+
+```go
+hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
+    orchestration.WithBuilderRecordRequestEntityExtractor(orchestration.NoOpEntityExtractor{}))
+```
+
+This extractor receives `PipelineContext.Request` and cloned JSON-like request
+metadata. Request entities precede distinct step/model entities; empty type/ID
+pairs are ignored. Opaque metadata values remain read-only and application-owned.
+This recording-only option does not change enrichment, acquire new investigation
+claims, or release request-only entities through legacy name-based cleanup.
+Direct hook callers use `WithRecordRequestEntityExtractor`.
+
+Event metadata records `summary_source=model|heuristic|custom`, a fixed
+`summary_fallback_reason` when needed, `recorded_at` and `event_time_basis`.
+Failure summaries receive separate error text/structured bytes even when the
+response is empty. The built-in prompt shares a configurable 4000-byte per-step
+payload allowance between encoded failure facts and response; use
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_RESPONSE_BYTES` with the builder or
+`WithSummarizerMaxResponseChars` directly (despite the name, it counts bytes).
+Output tokens remain a separate setting. New event timestamps prefer valid
+step completion time, then start time, then recording time with unknown
+occurrence. Retention is still ingestion-based; old records are not rewritten.
+
+Heuristic failure causes use a separate 256-byte default limit, configured with
+`TRUVAG3_SHARED_MEMORY_RECORD_FAILURE_CAUSE_MAX_BYTES` (builder) or
+`WithRecordFailureCauseMaxBytes` (direct hook). Positive values are required.
+Shortening preserves UTF-8, adds ` [shortened]` outside the cause allowance and
+sets `summary_cause_shortened=true`. Raw execution evidence and model/custom
+summaries remain unchanged. A step outside the built-in summarizer batch records
+`batch_limit`, independently of whether the admitted batch succeeded or failed.
+Hook effects distinguish backend ID assignment from timestamp assignment.
 
 ```go
 type myDomainExtractor struct{}
@@ -392,16 +439,16 @@ This tells the LLM: "someone else is already working on this." The LLM can decid
 ```xml
 <agent_memory>
 Memory scope: historical domain/entity evidence at request start. Attribute outcomes to their recorded origin; establish current-request progress from current execution results.
-Event tuple (event-detail/v1): [event_id, origin_request_id, timestamp, agent, action, outcome]. Each record is self-contained.
+Event tuple (event-detail/v2-record-facts): [event_id, origin_request_id, timestamp, agent, action, outcome]. Each record is self-contained.
 Historical domain activity digest:
 {"section":"domain","admitted":1,"omitted":0,"shortened":0,"duplicates":0}
-- {"text":"Historical domain activity: request-a created DEVOPS-52 (event-1, 2026-03-26T23:30Z, success); request-b queried logs (event-2, 2026-03-26T23:31Z, success)."}
+- {"text":"Coverage: bounded returned event window; older history may be omitted.\nHistorical domain activity: request-a created DEVOPS-52 (event-1, 2026-03-26T23:30Z, success); request-b queried logs (event-2, 2026-03-26T23:31Z, success)."}
 
 Historical domain events (detail):
 {"section":"domain","admitted":3,"omitted":0,"shortened":0,"duplicates":0}
-- {"event":["event-2","request-b","2026-03-26T23:31:00Z","devops-chat-agent","lookup","success"],"summary":"Queried logs"}
-- {"event":["event-1","request-a","2026-03-26T23:30:00Z","devops-chat-agent","create","success"],"summary":"Created JIRA ticket DEVOPS-52"}
-- {"event":["event-0","request-a","2026-03-26T23:29:00Z","devops-chat-agent","lookup","success"],"summary":"Checked ticket status"}
+- {"event":["event-2","request-b","2026-03-26T23:31:00Z","devops-chat-agent","lookup","success"],"summary":"Queried logs","summary_source":"model","event_time_basis":"step_end"}
+- {"event":["event-1","request-a","2026-03-26T23:30:00Z","devops-chat-agent","create","success"],"summary":"Created JIRA ticket DEVOPS-52","summary_source":"model","event_time_basis":"step_end"}
+- {"event":["event-0","request-a","2026-03-26T23:29:00Z","devops-chat-agent","lookup","success"],"summary":"Checked ticket status","summary_source":"unknown","event_time_basis":"unknown"}
 </agent_memory>
 ```
 
@@ -429,7 +476,10 @@ this budget, and compactor input/output limits are separate.
 
 ## Activity Compaction: Scaling to Thousands of Events
 
-Without compaction, every request sends all recent events (up to 200) to the LLM. That's expensive. Activity compaction solves this:
+Without compaction, enrichment queries the configured recent-event limit
+(20 by default), then renders a bounded view. With compaction, the default raw
+window is 200 events, summarized into a digest alongside recent detail. This
+allows a larger event window without including every raw record in the prompt:
 
 ```
 Request 1 (first request, cold cache):
@@ -446,6 +496,12 @@ Request 4 (burst of 50 new events):
 ```
 
 These timings are illustrative, not a measured service-level guarantee.
+The default 500-token digest length is a prompt target, not an enforced token
+count. The built-in compactor sets `AIOptions.MaxTokens` to five times the target
+(2500 by default), for both full and incremental updates. Provider reasoning
+translation may further adjust the wire budget. The final enrichment byte
+budget is independent of this generation allowance.
+
 Every request still reads its configured retained event window. With built-in
 observed readers, an unchanged window reuses the digest without an AI call,
 including a full-size window with older history omitted. Newly returned events
@@ -456,12 +512,21 @@ cursor or a claim to summarize the entire retained history.
 
 Read failures preserve the cache without claiming "nothing new". A failed or
 empty compaction leaves the prior cache stored but exposes current raw details
-in that request. Readers without `core.ObservedEpisodicReader`, or custom
-compactors without a stable behavior identity, bypass digest reuse rather than
-assuming equivalent behavior. The existing raw-event limit bounds cache event
+in that request. Readers without `core.ObservedEpisodicReader` and independently
+implemented external compactors bypass digest reuse: the fingerprint method is package-private,
+not a public extension point. The built-in compactor requires a stable effective
+AI fingerprint. The existing raw-event limit bounds cache event
 fingerprints; lookback, limit and digest token target are part of its identity.
 Read-health and cache decisions are recorded as hook effects for execution
 inspection; the corresponding trace events contain bounded classifications.
+
+Stored event metadata includes `entity_source`: `none`, `llm_entities`,
+`explicit_metadata`, `request_metadata`, or `request_and_step`. This describes
+indexing provenance, not proof that an inferred entity is correct. The
+`memory_planning_context` hook effect includes `agent_domain`, `entities`,
+`sections`, and a `view` report with version/format, byte budget/usage, outcome,
+and per-section admitted/omitted/shortened/duplicate counts. These observations
+describe the prepared view, not unlimited historical coverage or backend health.
 
 The cache is shared across all agents in the same domain via Redis — if `event-driven-agent` compacts the digest, `devops-chat-agent` benefits from the cache too. Each cached digest also stores the stable, secret-free AI policy and route fingerprint. A rule, middleware, resolved-model, provider-surface, or semantic-route change causes a cache miss instead of reusing a digest produced under different semantics. When the request fingerprint is unstable, activity compaction bypasses both cache reads and writes; this is correct but forces full compaction until the policy becomes stable.
 
@@ -495,12 +560,17 @@ T=1s: Same alert arrives at devops-chat-agent
 T=30s: event-driven-agent finishes → signal cleaned up, event recorded
 ```
 
-Signals expire automatically via TTL (default: 5 minutes). No cleanup needed if an agent crashes.
+Signals expire automatically via TTL (default: 5 minutes). Managed orchestration
+requests renew their signal at TTL/3 while the request segment remains active,
+then stop and join renewal before submitting cleanup on every exit. If an agent
+crashes, the signal expires after its last renewal. Direct hook users do not
+receive this request-owned renewal automatically.
 
 Configuration:
 
 ```bash
-# Signal expiry — should be longer than your longest request (default: 5m)
+# Signal expiry after the last announcement/renewal (default: 5m)
+# Managed requests renew at TTL/3; size this for renewal delays and crash expiry.
 TRUVAG3_ACTIVITY_SIGNAL_TTL=5m
 
 # Max signals shown to the LLM (default: 10)
@@ -694,7 +764,7 @@ Memory hooks appear as dedicated spans in your Jaeger traces:
 
 ▼ pipeline.hook.before_planning.memory-enrichment (2836ms)
     ▼ activity.compaction.cache_decision
-        cache_hit: true, path: "incremental", duration_ms: 2705
+        cache_hit: true, path: "incremental", coverage: "returned_window", duration_ms: 2705
     ▼ memory.enrichment.injected
         entities_found: 0, context_chars: 6424
     └─ orchestrator.activity_compaction_incremental (2704ms)  ← child span
@@ -703,7 +773,20 @@ Memory hooks appear as dedicated spans in your Jaeger traces:
     events_recorded: 1
 ```
 
-The `cache_decision` span event tells you which path was taken: `full` (cache miss), `cached` (0ms hit), `incremental` (few new events), or `full_recompact` (burst).
+The `cache_decision` span event describes the bounded returned event window:
+
+| `path` | Meaning |
+|---|---|
+| `full` | No reusable cache entry; compact the current window |
+| `cached` | Reuse an unchanged window under the same semantic policy |
+| `incremental` | Every previously represented event remains unchanged, with additions within the incremental threshold |
+| `full_recompact` | Rebaseline after events change, disappear or expire, window policy changes, or additions exceed the threshold |
+| `raw_fallback` | Compaction failed or returned an empty digest; show bounded current raw events |
+
+`coverage` is `returned_window`, `limited_window` (the query bound was reached),
+or `unknown`. It does not certify coverage of all retained history. `cache_hit`
+means a compatible decoded entry with window metadata was found, so it can be
+true even when that entry is not reused; raw key existence alone is insufficient.
 
 ### LLM Debug Store
 
@@ -735,14 +818,32 @@ Verify in Jaeger: look for `pipeline.hook.before_planning.memory-enrichment` spa
 
 ### Events Not Being Recorded
 
-Check `pipeline.hook.after_execution.memory-record` span in Jaeger. If `events_recorded: 0`, entities weren't extracted from the step results. The entity extractor uses regex patterns and structured metadata — generic operations without entity references won't produce events.
+Check `pipeline.hook.after_execution.memory-record` and its structured effects.
+Steps without extracted entities still produce domain-level events. A zero
+count can instead reflect no eligible steps, dependency-skipped/refinement
+steps, or missing execution results. The event count describes submissions,
+including ones whose provider calls fail. Inspect step eligibility and the
+submitted-event/provider outcomes; a fail-open provider's
+nil return is not an independent confirmation that Redis stored the event.
+`memory.entity_extraction.completed` describes indexing, not permission to
+record an entityless step.
 
 ### Compaction Taking Too Long
 
-If `activity.compaction.cache_decision` shows `path: "full"` on every request, the digest cache is not working. Check:
-- Is `WithDigestCache(digestCache)` passed to the enrichment hook?
-- Is Redis accessible from the agent pod?
+If `activity.compaction.cache_decision` repeatedly shows `path: "full"`, check
+cache eligibility as well as backend configuration:
+
+- Is `WithDigestCache(digestCache)` passed to the enrichment hook, and is Redis accessible?
+- Does the episodic provider implement `core.ObservedEpisodicReader`, with the current read succeeding? Legacy reads remain usable but cannot authorize cache reuse.
+- Is the built-in compactor using a stable effective AI fingerprint? External implementations cannot opt into the package-private fingerprint contract.
+- Does the returned window have unique event identities? An incompatible view/AI fingerprint or missing cache yields `full`. A compatible entry whose events changed, expired from the window, or were displaced yields `full_recompact`; so does a window-policy change or an extension exceeding the incremental threshold. Cache TTL expiry yields `full`. Failed/empty compaction yields `raw_fallback`.
 - Is `TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL` too short?
+
+`cache_hit` indicates a compatible decoded entry with window metadata was found;
+it does not mean the digest was reused or that any raw cache key merely existed.
+
+Inspect `coverage` and `raw_fallback` alongside `cache_hit`. Raw fallback keeps
+the previous cache but does not present it as covering the current window.
 
 ### Activity Signals Not Showing
 

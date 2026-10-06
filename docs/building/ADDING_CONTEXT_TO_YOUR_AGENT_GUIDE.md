@@ -963,7 +963,7 @@ The orchestration module provides ready-to-use hooks for cross-agent shared memo
 | `MemoryRecordHook` | AfterExecution | Records structured `AgentEvent` for each execution step. Uses LLM `EventSummarizer` for actionable summaries (falls back to heuristic). |
 | `KnowledgeExtractionHook` | AfterSynthesis | Extracts reusable knowledge from the synthesis response via LLM and stores in vector DB. |
 | `ActivityAnnouncementHook` | BeforePlanning | Announces the agent's current activity and injects other agents' signals into `activity_coordination`. |
-| `ActivityCleanupHook` | AfterSynthesis | Marks the agent's activity as completed (removes the transient signal). |
+| `ActivityCleanupHook` | AfterSynthesis | For direct hook users, completes the activity. In managed requests it is a no-op: the request lifecycle owner removes the transient signal on every exit, including failure/cancellation. |
 
 These hooks are ordered: announcement (first) → enrichment → record → extraction → cleanup (last). See [examples/devops-chat-agent/main.go](https://github.com/truvaagents/truva-g3/blob/main/examples/devops-chat-agent/main.go) for wiring via `BuildMemoryHooks`, or construct hooks manually for full control over each option.
 
@@ -980,21 +980,33 @@ if err != nil {
     return fmt.Errorf("configure memory hooks: %w", err)
 }
 
-// Opt out of LLM extraction (use explicit metadata only)
+```
+
+Alternative: opt out of LLM extraction (use explicit metadata only):
+
+```go
 hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithBuilderRecordEntityExtractor(orchestration.NoOpEntityExtractor{}))
 if err != nil {
     return fmt.Errorf("configure memory hooks: %w", err)
 }
 
-// Use a domain-specific extractor on the enrichment path
+```
+
+Alternative: use a domain-specific extractor on the enrichment path:
+
+```go
 hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithBuilderEnrichmentEntityExtractor(myDomainExtractor))
 if err != nil {
     return fmt.Errorf("configure memory hooks: %w", err)
 }
 
-// Use the same extractor for both hooks (shorthand)
+```
+
+Alternative: use the same extractor for both hooks (shorthand):
+
+```go
 hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithMemoryEntityExtractor(myExtractor))
 if err != nil {
@@ -1003,6 +1015,12 @@ if err != nil {
 ```
 
 The framework treats `Entity{Type, ID}` as an opaque key — domain semantics are entirely the application's responsibility. See [Agent Memory User Guide](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md#how-entity-extraction-works) for the full design rationale.
+
+For explicit request identities that should survive a summary failure, add
+`WithBuilderRecordRequestEntityExtractor(NoOpEntityExtractor{})`. This separate
+record-only input reads request metadata; it preserves the default step/model
+extractor and leaves enrichment and investigation claim acquisition unchanged.
+Direct hook construction uses `WithRecordRequestEntityExtractor`.
 
 ### Built-In User Memory Pipeline Hooks
 

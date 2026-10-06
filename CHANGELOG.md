@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+These unreleased changes describe affected framework contracts and adoption
+requirements. See the module changelogs for details.
+
+- **AI:** GPT-6 family handling on native OpenAI and the shared OpenAI-wire helpers
+  used by Azure; exact reviewed OpenRouter
+  capabilities and sampling adaptation; one retry budget for transport and
+  decoded provider errors; final-answer/reasoning separation and completion
+  provenance. See [AI changelog](ai/CHANGELOG.md).
+- **Orchestration:** generated-plan intent/normalization and bounded correction
+  feedback; payload-preserving parsing and binding; retry classification before
+  correction; bounded failed-operation views; compact return-field catalogs;
+  resource-selector v2; truthful request lifecycle and shared-memory recording,
+  enrichment, digest reuse and request-resource cleanup. See
+  [orchestration changelog](orchestration/CHANGELOG.md).
+- **Core/memory:** fail-fast explicit numeric memory configuration, observed
+  read health, acquisition-safe advisory investigation claims, newest-first
+  filtered retrieval, and failure/completion facts in shared contracts. See
+  [core](core/CHANGELOG.md) and [memory](memory/CHANGELOG.md) changelogs.
+- **Telemetry:** optional completion facts in debug records and safe serialized
+  singleton shutdown. See [telemetry changelog](telemetry/CHANGELOG.md).
+
+Adoption points: handle the new `BuildMemoryHooks` error return; correct invalid
+numeric memory settings rather than relying on fallback; provide explicit intent
+for zero-work model plans; treat `retryable:false` as refusal of all same-step
+retries. Compatible codec consumers now receive final text separately from
+reasoning unless the explicit legacy fallback option is enabled. These changes
+do not add durable external-task execution or domain-specific workflow policy.
+
+Additional adoption checks:
+
+- Preserve resolved configuration defaults when changing individual fields;
+  unresolved zero-value memory/activity configuration can now fail validation.
+  Shared-backend stream/claim environment settings are now read and validated.
+- Review hook-generated dependency declarations, compact return-field visibility,
+  source-qualified binding metadata and whole-config failed-view overrides.
+- Reasoning-only stream callbacks may carry no answer text. Compatible-codec v2
+  fingerprints cause cache misses; partial stream delivery is a failed lifecycle.
+- Approval protects inputs, not exactly-once effects. Ordinary approved calls
+  may retry unchanged; side-effecting tools need application idempotency.
+
+Module changelogs distinguish initial planning, continuation and regeneration
+budgets, and enumerate the observability/adaptation changes.
+
 ## v0.5.0
 
 All seven Go modules are co-versioned and require Go 1.27.0 or newer.

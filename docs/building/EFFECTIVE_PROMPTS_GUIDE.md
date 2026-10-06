@@ -210,7 +210,7 @@ This single example teaches template syntax (`{{double-braces}}`), `depends_on` 
 | Negative (Avoid) | Positive (Use Instead) |
 |---|---|
 | "Do NOT wrap JSON in code fences" | "Start with `{` and end with `}`" |
-| "Do NOT use markdown formatting: no `**`, no `*`" | "Use plain text in all string values" |
+| "Do NOT use markdown formatting: no `**`, no `*`" | "Use the required outer JSON framing; preserve code and Markdown inside escaped string values" |
 | "WRONG: `{step-1.response.data.id}`" | *(Remove — the correct example already shows double braces)* |
 | "NOT strings for literal values (e.g., `\"35.6897\"`)" | "Number parameters use JSON numbers: `35.6897`" |
 | "Do NOT put completed step IDs in depends_on" | "`depends_on` references only this phase's step IDs" |
@@ -468,8 +468,8 @@ For multi-turn or multi-phase systems, the follow-up prompt should **not** repea
 **What to add:**
 - Phase budget: how many phases remain, how many steps are used/remaining
 - Completed step summaries: what earlier phases discovered
-- An optimization reminder: prefer intra-phase dependency chains over new phases
 - A FINAL phase warning when applicable (force `terminal: true`)
+- Bounded correction feedback on regeneration: the validation error and prior rejected outputs, using the already selected catalog
 
 ```xml
 <phase_budget>
@@ -477,13 +477,14 @@ Phase: 2 of 3 maximum.
 Steps used: 4 of 20. Remaining: 16.
 Phases remaining after this: 1.
 </phase_budget>
-
-<optimization_reminder>
-If remaining steps can reference completed step data via {{step-N.response.data.field}}
-templates, include them in THIS phase with depends_on chains rather than requesting
-another continuation. Only use terminal: false if you need to discover new entities.
-</optimization_reminder>
 ```
+
+Regeneration appends `<plan_correction>` to the selected phase prompt. This
+section carries the quoted latest validation error, bounded prior errors and
+rejected outputs, and a directive to produce one corrected JSON plan. It is
+correction feedback, so initial and ordinary continuation prompts do not carry
+it. The current builder does not emit a separate optimization-reminder section;
+phase/dependency guidance remains in the planning instructions.
 
 ### 4.6 Single Persona, Single CRITICAL
 
@@ -680,13 +681,17 @@ This section maps the universal principles to TruvaG3's specific implementation.
 | XML tags (2.10) | `<identity>`, `<instructions>`, `<example>`, `<available_agents>`, `<user_request>` | `orchestration/default_prompt_builder.go` |
 | Concrete example (2.3) | `buildConcreteExample()` — realistic few-shot plan | `orchestration/default_prompt_builder.go` |
 | Positive instructions (2.4) | All rules rewritten as positive directives | `orchestration/default_prompt_builder.go` |
-| Slim continuations (4.5) | `buildContinuationPrompt()` with `<phase_budget>` and `<optimization_reminder>` | `orchestration/orchestrator.go` |
+| Slim continuations (4.5) | `buildContinuationPrompt()` with `<phase_budget>` and completed-step context; bounded `<plan_correction>` on regeneration | `orchestration/orchestrator.go`, `orchestration/plan_attempt.go` |
 | Single persona (2.7) | Merged identity via `SystemInstructions` config | `orchestration/interfaces.go` |
 | Dynamic tool selection (6) | Phase context metadata in `GetCapabilities()` | `orchestration/interfaces.go`, `orchestration/tiered_capability_provider.go` |
 
 ### 7.2 The Restructured Prompt Architecture
 
-TruvaG3's planning prompts follow this structure after applying the principles:
+The following is a simplified application-prompt sketch, not a verbatim runtime
+prompt or a statement of framework defaults. Its 3-phase/20-step values are
+illustrative application choices. Current planning adds canonical runtime
+context and applicable skills/enrichments; see the planning guide for the full
+assembly contract.
 
 ```
 SYSTEM MESSAGE (via SystemPromptBuilder — static, cacheable):
@@ -726,7 +731,11 @@ USER MESSAGE (per-request — dynamic content):
 **Continuation prompts** (Phase 2+) drop the repeated instructions and example, adding instead:
 - `<completed_steps>` — summaries of what earlier phases produced
 - `<phase_budget>` — dynamic phase/step counts with FINAL phase warning
-- `<optimization_reminder>` — prefer intra-phase depends_on over new phases
+- `<planning_instructions>` — next-phase planning and dependency guidance
+
+Regeneration adds `<plan_correction>` with bounded feedback and rejected-output
+history to the selected phase prompt when available. Genuine discovery misses
+or unavailable selection context may refresh discovery/selection.
 
 > **For configuration details**: See the [Domain-Specific Agent Configuration Guide](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md) for `PromptConfig`, `SystemInstructions`, `CustomInstructions`, `TypeRules`, `TemplatePromptBuilder`, and domain-specific examples (healthcare, finance, travel, e-commerce).
 
@@ -863,7 +872,7 @@ User prompt:
   Output only valid JSON                             ← REDUNDANT (2nd mention)
 ```
 
-**AFTER** (~1,900 tokens, clean structure, all principles applied):
+**AFTER** (illustrative prompt refactoring, not a current runtime snapshot or measured token count):
 
 ```xml
 SYSTEM MESSAGE:
@@ -1089,14 +1098,14 @@ Three standalone LLM calls, each with its own prompt. All tags use the `user_mem
 | `<completed_steps>` | User msg | Results from prior phase steps |
 | `<executed_ids>` | User msg | Step IDs already completed + next ID range |
 | `<phase_budget>` | User msg | Phase and step budget info |
-| `<optimization_reminder>` | User msg | Guidance on minimizing phase splits |
 | `<previous_note>` | User msg | Continuation note from prior phase |
 | `<upstream_failures>` | User msg | Nested inside `<previous_note>` when the prior phase had steps skipped because their upstream template-referenced dependencies failed. Carries the per-skip enumeration of failed upstream deps (with single-lined / length-bounded errors), the optional one-line failure-pattern summary, and the planner directive (propose alternative approach OR return `terminal:true, steps:[]`). Emitted by `buildRemediationContinuationNote`. |
 | `<available_agents>` | User msg | Capability catalog |
 | `<custom_instructions>` | User msg | Your `CustomInstructions` |
 | `<planning_instructions>` | User msg | Next phase planning guidance |
-| `<parse_error>` | User msg | JSON parsing error feedback (attr: `detail`) |
-| `<json_rules>` | User msg | JSON correction rules |
+| `<plan_correction>` | User msg, regeneration only | Bounded validation feedback and rejected-output history appended to the selected phase prompt |
+| `<parse_error>` | User msg | Parsing/intent failure feedback in the element body; no `detail` attribute |
+| `<json_rules>` | User msg | Syntax-parse correction rules; missing-intent feedback uses `<parse_error>` without this section |
 
 #### Event Summarization (`event_summarizer.go`)
 

@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased — shared memory contracts and configuration
+
+Adoption: start typed configuration from `DefaultConfig()` and check constructor
+errors. `Config.Validate` rejects zero values for positive memory/activity fields;
+an unresolved zero-value struct does not receive defaults through validation.
+Only documented sentinels (such as zero recent-detail limits) remain valid.
+Announcement limits must be positive in typed configuration and environment
+settings; direct `NewActivityAnnouncementHook(..., 0)` instead selects its default
+of 10. This is a stricter configuration contract, even when memory is disabled.
+
+- Validate explicit numeric shared-memory/activity settings at construction,
+  including environment presence, JSON null/type errors, overflow, positive
+  duration constraints and finite retrieval weights. Preserve absent defaults
+  and documented zero sentinels; do not turn runtime backend failure into a
+  configuration failure.
+- Add optional `ObservedEpisodicReader` for read errors without changing legacy
+  fail-open episodic methods.
+- Add optional `InvestigationLeaseCoordinator` with private acquisition identity
+  and observed release outcomes. Preserve legacy coordinator interfaces and
+  advisory ownership; introduce no domain-specific policy or background worker.
+
+## Unreleased — AI completion provenance (2026-10-04)
+
+- Add response finish/source/separate reasoning facts and a separate stream
+  reasoning channel; keep legacy interfaces and canonical dispatcher behavior.
+
+## Unreleased — memory summary failure facts (2026-10-02)
+
+- Add omitted `Error` and raw `ToolError` fields to `StepSummaryInput`, preserving
+  the `EventSummarizer` interface and module dependency boundary.
+
 ## v0.5.0
 
 See the [root changelog](../CHANGELOG.md)

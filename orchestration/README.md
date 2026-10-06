@@ -351,10 +351,15 @@ When a step fails (e.g., wrong parameters, validation errors), the executor uses
 |-------|-----------|---------|------------|
 | **Layer 1** | Auto-Wirer | Before execution | Exact name matching, type coercion |
 | **Layer 2** | Micro-Resolver | Before execution | LLM extracts values from source data |
-| **Layer 3** | Error Analyzer | After 4xx error | LLM suggests parameter corrections |
-| **Layer 4** | Semantic Retry | After Layer 3 fails | LLM computes derived values with full context |
+| **Layer 3** | Error Analyzer | Eligible, correction-permitted 4xx error | LLM suggests parameter corrections |
+| **Layer 4** | Semantic Retry | Correction permitted, Layer 3 cannot fix, source data available | LLM computes derived values with full context |
 
 **Example: Layer 4 Semantic Retry in Action**
+
+This is a hypothetical opt-in walkthrough, not the shipped `currency-tool`'s
+behavior. Its amount-validation error currently sends `retryable:false`, which
+stops all same-step retries. The flow below requires `retryable:true` for that
+safely correctable error and the executor's correction gates to permit it.
 
 ```
 User: "Sell 100 Tesla shares and convert to EUR"
@@ -1359,12 +1364,16 @@ if metrics.ComponentCallsFailed > 10 {
 
 For generated plans, orchestration derives `implicit_deps` from prior-phase
 step IDs referenced in parameter templates. The planner may omit that field;
-if it supplies declarations, they must match exactly. Prior observations used
+if it supplies a valid partial list, normalization fills the rest. Same-phase
+or unreferenced declarations are rejected. After normalization, the list must
+match exactly. Prior observations used
 only to inform planning are not dependencies. Numeric bracket indices inside
 framework step templates are normalized to the canonical dot form before the
 full validation gauntlet. Surplus declarations and unsupported template syntax
-still cause bounded correction. Existing caller-supplied plans, hook results,
-and approved HITL checkpoints retain their original validation contract.
+still cause bounded correction. Model-only normalization does not apply to
+caller/hook plans. Hook-modified plans still pass the shared validation gauntlet,
+which now rejects same-phase or surplus `implicit_deps`; hook authors must supply
+valid declarations. Approved HITL checkpoint restoration is a separate path.
 
 Structural correction reuses the phase's selected capability prompt, with
 bounded feedback about rejected output and prior errors. New phases and genuine
@@ -1373,6 +1382,16 @@ the request remains failed; returned and stored execution records retain only
 admitted steps with `termination_reason=plan_validation_exhausted` and
 `execution_request_id` metadata. A tool invocation in the rejected plan never
 appears as an executed step.
+
+Validation rounds are an upper bound. A regenerated continuation that still
+conflicts with previously executed step IDs returns an error immediately rather
+than using every outer validation round. Fresh empty model plans without
+explicit `terminal:true` or a nonempty clarification question are plan-decode
+errors: ordinary initial/continuation generation uses the configured plan-parse
+budget, initial unknown-agent replacements share the hallucination budget, and
+validation regeneration spends validation rounds. They are not silently accepted
+as no work. Direct plans and approved checkpoints
+retain their existing contract.
 
 If two consecutive phases do no work because every step is dependency-skipped
 on the same failed ancestors, orchestration stops a non-terminal continuation
@@ -1408,14 +1427,15 @@ retain their completed classification in Registry Viewer.
 | `TRUVAG3_ITERATIVE_MAX_PHASES` | `5` | Maximum planning phases per request. Most queries need at most 2. |
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | Maximum total steps across all phases. Prevents runaway plan generation. |
 | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | Maximum duration for a single phase (plan generation + execution). Prevents a single continuation phase from hanging. |
-| `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | Maximum encoded correction context added to one phase's selected prompt. Earlier rejected output is summarized or omitted with a marker if needed. |
+| `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | Maximum regenerations after the first validation failure. Malformed replacements consume a round; provider/boundary failures and persistent step-ID conflicts can stop earlier. |
+| `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | Maximum encoded correction context added to one phase's selected prompt. Effective value must be > 0 when validated. Earlier rejected output is summarized or omitted with a marker if needed. |
 | `TRUVAG3_STEP_RETRY_INITIAL_DELAY` | `500ms` | Initial backoff delay for step retries. Go duration format. Exponential backoff doubles this per attempt. |
 | `TRUVAG3_STEP_RETRY_MAX_DELAY` | `10s` | Maximum backoff delay for step retries. Delay is capped at this value regardless of attempt count. |
 | `TRUVAG3_FAILURE_PATTERN_MIN_FAILURES` | `2` | Minimum distinct failed upstream steps required before the remediation continuation prompt embeds a shared-error pattern summary. Raise to make the analyzer more conservative. |
 | `TRUVAG3_FAILURE_PATTERN_SIGNATURE_LEN` | `120` | Max chars of each step's error used to bucket failures into a shared signature. |
 | `TRUVAG3_FAILURE_PATTERN_DISPLAY_LEN` | `80` | Max chars of the shared error rendered into the remediation prompt (trailing `…` appended on truncation). |
 | `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `""` | Model for event summarization and activity compaction LLM calls. Supports aliases (`fast`, `smart`). |
-| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | Max tokens for compacted domain activity digest. |
+| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | Requested digest length. Built-in full/incremental compaction supplies 5× this target as `AIOptions.MaxTokens` (2500 by default), before provider reasoning scaling; the final enrichment view has a separate byte budget. |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` | `200` | Max events fetched before compaction. |
 | `TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL` | `5m` | Cached digest expiry. Next request after TTL does full recompaction. |
 | `TRUVAG3_SHARED_MEMORY_DIGEST_INCREMENTAL_THRESHOLD` | `20` | New events above this trigger full recompaction instead of incremental update. |
@@ -1446,72 +1466,46 @@ export TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL=10m
 
 Prefer starting from deterministic defaults and changing only owned values.
 Pass the result to `CreateResolvedOrchestrator`, or use
-`ResolveOrchestratorConfig` when environment layering is intentional. A raw
-struct literal is shown below to make the major fields visible, but omitted
-fields do not communicate whether their zero values are deliberate.
+`ResolveOrchestratorConfig` when environment layering is intentional. Field
+assignments preserve required defaults, including validation-round and
+regeneration-feedback limits.
 
 ```go
-config := &orchestration.OrchestratorConfig{
-    // Stable low-cardinality request ID prefix. Generated IDs use
-    // <prefix>-<unix-nanoseconds> in every request/delivery mode.
-    RequestIDPrefix: "travel",
+config := orchestration.NewDefaultOrchestratorConfig()
+// Stable, low-cardinality prefix; generated IDs use <prefix>-<unix-nanoseconds>.
+config.RequestIDPrefix = "travel"
+config.RoutingMode = orchestration.ModeAutonomous
+config.SynthesisStrategy = orchestration.StrategyLLM
+config.CapabilityProviderType = "default" // Or "service"
+config.EnableFallback = true
+config.EnableTieredResolution = true
+config.TieredResolution.MinToolsForTiering = 20
+config.PromptConfig.SystemInstructions = `You are a helpful assistant.
+Prioritize accuracy and provide practical recommendations.`
 
-    // Routing mode
-    RoutingMode: orchestration.ModeAutonomous,  // Options: ModeAutonomous, ModeWorkflow
-
-    // Synthesis strategy
-    SynthesisStrategy: orchestration.StrategyLLM, // Options: StrategyLLM, StrategyTemplate, StrategySimple
-
-    // Capability Provider (for scaling)
-    CapabilityProviderType: "default",  // Options: "default" or "service"
-    EnableFallback: true,                // Fallback to default provider on service failure
-
-    // Tiered Capability Resolution (token optimization)
-    // Enabled by default - uses 2-phase approach for 20+ tools
-    EnableTieredResolution: true,
-    TieredResolution: orchestration.TieredCapabilityConfig{
-        MinToolsForTiering: 20,  // Threshold to trigger tiered resolution
-    },
-
-    // Prompt customization
-    PromptConfig: orchestration.PromptConfig{
-        // SystemInstructions defines the orchestrator's persona and behavioral context
-        SystemInstructions: `You are a helpful assistant.
-Prioritize accuracy and provide practical recommendations.`,
-    },
-
-    // Iterative planning (multi-phase DAG planning)
-    IterativePlanning: orchestration.IterativePlanConfig{
-        Enabled:       true,
-        MaxPhases:     5,
-        MaxTotalSteps: 200,
-        PhaseTimeout:  180 * time.Second,
-    },
-
-    // Execution configuration
-    ExecutionOptions: orchestration.ExecutionOptions{
-        MaxConcurrency:   5,                // Maximum parallel tool/agent calls
-        StepTimeout:      120 * time.Second, // Timeout per step
-        TotalTimeout:     5 * time.Minute,  // Overall execution timeout
-        RetryAttempts:    2,                // Retry failed steps
-        RetryDelay:       2 * time.Second,  // Delay between retries
-        CircuitBreaker:   true,             // Enable circuit breaker
-        FailureThreshold: 5,                // Circuit breaker threshold
-        RecoveryTimeout:  30 * time.Second, // Circuit breaker recovery
-    },
-
-    // Authentication and header propagation
-    OAuthToken: os.Getenv("TRUVAG3_OAUTH_TOKEN"), // Bearer token for outbound calls
-    PropagatedHeaders: map[string]string{         // Custom headers for all outbound calls
-        "X-Tenant-ID": "tenant-42",
-    },
-
-    // History and caching
-    HistorySize:  100,              // Execution history buffer size
-    CacheEnabled: true,              // Enable routing cache
-    CacheTTL:     5 * time.Minute,  // Cache expiration time
-}
+config.IterativePlanning.Enabled = true
+config.IterativePlanning.MaxPhases = 5
+config.IterativePlanning.MaxTotalSteps = 200
+config.IterativePlanning.PhaseTimeout = 180 * time.Second
+// Retain the default MaxValidationRounds and RegenerationFeedbackMaxBytes.
+config.ExecutionOptions.MaxConcurrency = 5
+config.ExecutionOptions.StepTimeout = 120 * time.Second // Delegation allowance
+config.ExecutionOptions.TotalTimeout = 5 * time.Minute // Base HTTP timeout; may enlarge
+config.ExecutionOptions.RetryAttempts = 2 // Total attempts, when retry policy permits
+config.OAuthToken = os.Getenv("TRUVAG3_OAUTH_TOKEN")
+config.PropagatedHeaders = map[string]string{"X-Tenant-ID": "tenant-42"}
+config.HistorySize = 100
+config.CacheEnabled = true
+config.CacheTTL = 5 * time.Minute
 ```
+
+`ExecutionOptions.RetryDelay`, `CircuitBreaker`, `FailureThreshold` and
+`RecoveryTimeout` remain legacy fields; `SmartExecutor` does not consume them.
+Configure retry timing with `WithStepRetryBackoff` (or `SetStepRetryBackoff` on a
+direct executor): defaults are 500ms initial delay, 10s maximum, multiplier 2 and
+jitter. A capability-service circuit breaker is a separate discovery concern.
+For the interaction between HTTP, delegation and phase budgets, see
+[Execution Limits](../docs/reference/LIMITS_CHEATSHEET.md#execution-limits).
 
 ## 14. Usage Patterns
 
@@ -2071,7 +2065,7 @@ In multi-step workflows, parameters must flow between tools automatically. The o
 |-------|----------|-----------|------|
 | **Layer 1: Auto-Wiring** | Exact name match, case-insensitive match, type coercion | Always (first) | Free |
 | **Layer 2: Micro-Resolution** | LLM extracts parameters via function calling | When Layer 1 leaves required params unmapped | 1 LLM call |
-| **Layer 3: Error Analysis** | LLM analyzes tool errors and suggests corrections | When tool returns 400/404/409/422 | 1 LLM call |
+| **Layer 3: Error Analysis** | LLM analyzes eligible tool errors and suggests corrections | Non-transient 4xx with correction permission, mutable inputs and remaining budget | 1 LLM call |
 | **Layer 4: Semantic Retry** | LLM computes parameters from full execution context | When Layer 3 says "cannot fix" but source data exists | 1 LLM call |
 
 **How it works:**
@@ -2126,8 +2120,8 @@ analyzer.Enable(true)   // Re-enable
 
 | Status | Handler | Action |
 |--------|---------|--------|
-| 400, 404, 409, 422 | LLM Error Analyzer → Semantic Retry | Analyze → correct → retry |
-| 408, 429, 5xx | Resilience Module | Same payload + backoff |
+| 400, 404, 409, 422 | Eligible LLM correction → Semantic Retry | Explicit false stops first; only valid permitted corrections can retry |
+| 408, 429, 5xx | Executor retry loop | Same payload + backoff, unless explicit false stops retries |
 | 401, 403, 405 | Neither | Fail immediately |
 
 **Observability:**
@@ -2138,7 +2132,9 @@ analyzer.Enable(true)   // Re-enable
 
 **The Problem Solved:** When Layer 3 (Error Analysis) determines "this error cannot be fixed with different parameters" but the source data to compute the correct value actually exists, standard retry gives up. Semantic Retry uses the full execution trajectory to compute the correct parameters.
 
-**Real-World Example:**
+**Hypothetical opt-in example:** The shipped `currency-tool` sends
+`retryable:false` for this amount error and therefore stops. This walkthrough
+assumes a tool explicitly permits correction for it and all correction gates pass.
 ```
 User: "Sell 100 Tesla shares and convert proceeds to EUR"
 
@@ -2165,7 +2161,7 @@ Retries with: {amount: 46828.5} ✅ SUCCESS!
 │ Layer 4: Semantic Retry (enabled by default)                 │
 │                                                              │
 │   Triggers when:                                             │
-│   • Tool returns 4xx error (400, 404, 409, 422)             │
+│   • Eligible 4xx error permits input correction              │
 │   • Layer 3 says "cannot fix"                                │
 │   • Source data exists from dependent steps                  │
 │                                                              │
@@ -2213,7 +2209,7 @@ export TRUVAG3_SEMANTIC_RETRY_INDEPENDENT_STEPS=true
 **When Semantic Retry Activates:**
 
 All rows below are subject to tool correction permission and the configured
-budget. Explicit `retryable:false` disables semantic retries (including when
+budget. Explicit `retryable:false` disables all same-step retries (including when
 emitted by a Go zero value). Missing policy retains status-based handling; it
 does not permit unchanged non-transient 4xx retries. Corrections cannot replace
 exact-bound or HITL-approved values. Inspect `dispatch_count`/`dispatches` for
@@ -2222,10 +2218,10 @@ physical requests, not just the regular-retry `attempts` counter.
 | Condition | Layer 4 Activates? |
 |-----------|-------------------|
 | Tool returns 400 + Layer 3 says "cannot fix" | ✅ Yes |
-| Tool returns 500 (server error) | ❌ No (handled by resilience) |
+| Tool returns 408/429/5xx | ❌ No (executor's unchanged-input retry, subject to permission/budget) |
 | Tool returns 401 (auth error) | ❌ No (not retryable) |
 | Layer 3 successfully corrects | ❌ No (already fixed) |
-| Independent step (no dependencies) with error | ✅ Yes (uses user query + error context) |
+| Independent step with an eligible non-transient 4xx | ✅ Yes (uses user query + error context) |
 | Independent step + `EnableForIndependentSteps=false` | ❌ No (disabled by config) |
 
 **Observability:**
@@ -2497,7 +2493,7 @@ may retain stronger failure detail only in their logs.
 | 2 | `MemoryEnrichmentHook` | BeforePlanning | Queries episodic events, compacts into digest, searches knowledge — injects into `<agent_memory>` |
 | 3 | `MemoryRecordHook` | AfterExecution | Records structured events for each step with LLM-powered summaries |
 | 4 | `KnowledgeExtractionHook` | AfterSynthesis | Extracts reusable knowledge from synthesis and stores in vector DB |
-| 5 | `ActivityCleanupHook` | AfterSynthesis | Marks this agent's activity signal as completed |
+| 5 | `ActivityCleanupHook` | AfterSynthesis | Returns without cleanup in managed requests, where the outer request owner joins renewal and submits removal on every exit; direct hook use submits removal here |
 
 **Key components:**
 
@@ -2525,6 +2521,7 @@ Wire via `memory.NewSharedBackends()` + `orchestration.BuildMemoryHooks()` — s
 **Per-hook overrides** for fine-grained control:
 - `WithMemoryEntityExtractor(e)` — overrides BOTH hooks (shorthand)
 - `WithBuilderRecordEntityExtractor(e)` — overrides record hook only
+- `WithBuilderRecordRequestEntityExtractor(e)` — adds recording-only request entities; does not change enrichment or investigation claims
 - `WithBuilderEnrichmentEntityExtractor(e)` — overrides enrichment hook only
 
 Custom domain-specific extractors implement the `EntityExtractor` interface (a single `ExtractEntities(text, metadata) []Entity` method). The framework treats `Entity{Type, ID}` as an opaque key — domain semantics are entirely the application's responsibility.

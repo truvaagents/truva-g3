@@ -1406,6 +1406,8 @@ change request correlation or caller-owned span-error handling.
 | orchestration | `plan_generation` | LLM plan creation |
 | orchestration | `plan_validation` | Plan structural validation |
 | orchestration | `plan_execution` | Executing plan steps |
+| orchestration | `step_retry_stopped` | INFO when a component explicitly forbids retry. Fields: `request_id`, `step_id`, `http_status`, `reason=component_retry_forbidden`. This is a structured log operation, not a span event; it stops all same-step retries, including parameter correction |
+| orchestration | `parameter_binding` | ERROR when pre-dispatch binding rejects a parameter shape. Fields: `request_id`, `step_id`, `error_type=shape_mismatch`, application-owned error text, `dispatch_count=0`; paired with trace event `parameter.binding.rejected` |
 | orchestration | `agent_discovery` | Finding agents |
 | orchestration | `llm_call` | LLM API calls |
 | orchestration | `conversation_history` | Shared conversation-history preparation and compaction lifecycle. Used by the metadata ingress path and the optional `ConversationHistoryHook` adapter. Success logs include `path`, token estimates, and `duration_ms`; degraded paths use bounded `error_type` values such as `count_tokens`, `compaction`, `watermark_mismatch`, `preparation`, or `session_read` |
@@ -1796,12 +1798,24 @@ Decode-aware AI provider retries reuse the existing `ai_request_retry`,
 `ai_request_retry_wait`, `ai_request_recovery` and `ai_request_final_failure`
 operations. HTTP-200 decoded errors are classified independently of the real
 HTTP status. Retry logs contain bounded error classification, attempt counts and
-delay, not prompts, response bodies or credentials. Successful recovery emits
-one final response log; earlier failed content remains failure evidence.
+delay, not prompts, response bodies or credentials. The decoded path emits an
+`ai_request_recovery` log after successful retry; earlier failed content remains
+failure evidence. **Current parity gap:** unlike the transport-only helper, a
+first-attempt decoded success does not emit the `ai_http_success` Debug log, and
+its recovery log omits `duration_ms`. Attempt spans and logical response
+instrumentation remain available; do not depend on those two log fields/events
+until that separate follow-up is implemented.
 Available attempt usage and validated response IDs live on owned attempt spans,
 not additional logical request/token counters or metric labels. This applies to
 adapters adopting the shared decoded-attempt loop; it does not change other
 providers' transport-only contracts or the common logical instrumentation layer.
+
+Unsupported reasoning effort inherited from a client/chain default is a Debug
+adaptation in OpenAI-compatible and direct Azure clients, with its request
+adjustment retained. It does not increment degraded-translation warning metrics
+or add the degraded event. Explicit unsupported options and legacy native-extra
+paths retain their existing error/warning behavior; this distinction does not
+change provider routing or retry budgets.
 
 When telemetry is enabled, framework logs emit
 `truvag3.framework.operations`. Labels have two sources:

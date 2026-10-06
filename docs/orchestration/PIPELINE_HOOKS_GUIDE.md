@@ -265,6 +265,15 @@ results is sent to synthesis or returned as a successful application response.
 
 ### 4.3 AfterExecutionHook
 
+The built-in `MemoryRecordHook` receives the existing request-local
+`PipelineContext` here. Its optional `WithRecordRequestEntityExtractor`
+(`WithBuilderRecordRequestEntityExtractor` in `BuildMemoryHooks`) extracts
+request identities for recording only, then merges distinct step identities.
+It does not modify execution results or dispatch parameters, rerun enrichment,
+or acquire new claims. Summary inputs include optional error facts; recorded
+events distinguish summary source and occurrence time from recording time.
+Managed claim cleanup still releases only execution-owned acquired handles.
+
 ```go
 // core/interfaces.go
 type AfterExecutionHook interface {
@@ -296,7 +305,7 @@ Runs after the final response is synthesized. It receives the response string an
 Every stage receives the same `*PipelineContext` for the request:
 
 ```go
-// core/interfaces.go:251-255
+// core/interfaces.go — PipelineContext
 type PipelineContext struct {
     Request     string                 // the raw user request
     Metadata    map[string]interface{} // caller-supplied request metadata (user_id, session, turns…)
@@ -313,20 +322,19 @@ type PipelineContext struct {
 This is the part that trips people up: writing to `pctx.Enrichments` is necessary but the magic that carries it into the prompt is a two-step handoff.
 
 ```
-BeforePlanning hook        orchestrator                    prompt builder
-─────────────────────      ─────────────────────────       ────────────────────────
-pctx.Enrichments[key]  ──▶  ctx = core.WithPipeline    ──▶  enrichments :=
-   = value                  Enrichments(ctx,                core.GetPipelineEnrichments(ctx)
-                            pctx.Enrichments)                → emits <agent_memory>, etc.
+BeforePlanning hook       request lifecycle               prompt preparation/builder
+─────────────────────     ─────────────────────────       ──────────────────────────
+pctx.Enrichments[key] ──▶  stores enrichments in ctx  ──▶  prepares input.Metadata
+   = value                 (WithPipelineEnrichments)       → emits <agent_memory>, etc.
 ```
 
 1. Your hook writes `pctx.Enrichments[core.EnrichmentRAGContext] = "...retrieved docs..."`.
-2. After `BeforePlanning` hooks finish, the orchestrator copies the map into the Go context: `ctx = core.WithPipelineEnrichments(ctx, pctx.Enrichments)` (`orchestrator.go:2960`). The helpers are in `core/context.go:10-19`.
-3. The prompt builder reads it back via `core.GetPipelineEnrichments(ctx)` and emits known keys as tagged sections of the planning prompt (`orchestrator.go:5229-5258`).
+2. After `runBeforePlanningHooks` finishes, `runRequest` stores the map in the Go context with `core.WithPipelineEnrichments(state.Context, state.Pipeline.Enrichments)`. See `orchestration/request_lifecycle.go` and the enrichment helpers in `core/context.go`.
+3. `buildPlanningPrompt` prepares `PromptInput.Metadata` from `core.GetPipelineEnrichments(ctx)`. The default builder emits known keys as tagged sections; `preparePromptInput` in `orchestration/prompt_assembly.go` applies the configured prompt-value preparation to known string enrichments.
 
 > **Default builder vs. custom `PromptBuilder`**
 >
-> The two routes to the prompt are the same map seen from two surfaces. The **default** builder calls `core.GetPipelineEnrichments(ctx)` itself and renders the well-known keys below. If you supply a **custom `PromptBuilder`**, the orchestrator hands it the identical enrichment map as `PromptInput.Metadata` (`orchestrator.go:5199`) — so your builder reads `input.Metadata[core.EnrichmentRAGContext]` rather than calling the context helper. [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) documents the `PromptInput.Metadata` path; this guide documents the default-builder path. They are the same data.
+> Both routes receive pipeline enrichments through the prepared `PromptInput.Metadata` snapshot. The **default** builder renders the well-known keys below; a **custom `PromptBuilder`** can read `input.Metadata[core.EnrichmentRAGContext]`. The snapshot is a copy of the enrichment map, and known string values pass through configured prompt preparation. It may be nil when no enrichments exist. Arbitrary request metadata is not automatically forwarded. [Adding Context to Your Agent](../building/ADDING_CONTEXT_TO_YOUR_AGENT_GUIDE.md) documents the custom-builder path.
 
 ### 5.3 Well-known enrichment keys
 
@@ -339,7 +347,7 @@ The default prompt builder recognizes four keys. Using these keys means your inj
 | `core.EnrichmentActivityCoordination` | `"activity_coordination"` | wrapped in `<agent_coordination>…</agent_coordination>` | `ActivityAnnouncementHook` |
 | `core.EnrichmentUserProfile` | `"user_profile"` | **inserted verbatim** — no tag wrapping | `UserMemoryEnrichmentHook` |
 
-The first three are defined at `core/interfaces.go:258-262`; `EnrichmentUserProfile` at `core/interfaces.go:932`. Three are wrapped in their own XML section by the builder; `user_profile` is the exception — the builder writes it **as-is** (`default_prompt_builder.go:284-288`), so a custom user-profile hook must supply its own preformatted `<user_profile>…</user_profile>` block, exactly as `UserMemoryEnrichmentHook` does.
+The constants are defined in `core/interfaces.go`. Three are wrapped in their own XML section by `DefaultPromptBuilder.BuildPlanningPrompt`; `user_profile` is the exception — the builder writes it **as-is**, so a custom user-profile hook must supply its own preformatted `<user_profile>…</user_profile>` block, exactly as `UserMemoryEnrichmentHook` does.
 
 > **Custom keys: enrichments are the only channel**
 >
@@ -347,7 +355,7 @@ The first three are defined at `core/interfaces.go:258-262`; `EnrichmentUserProf
 
 > **Note: enrichments survive multi-phase planning**
 >
-> Enrichments are set once, before the first planning call, and stored in `ctx`. When the orchestrator runs continuation phases (Phase 2+), the continuation-prompt builder re-reads `GetPipelineEnrichments(ctx)` and re-emits the same sections (`orchestrator.go:5500-5535`). You inject once; every phase sees it.
+> Enrichments are set once, before the first planning call, and stored in `ctx`. In Phase 2+, `buildContinuationPrompt` re-reads `GetPipelineEnrichments(ctx)` and prepares the known string enrichments through `prepareKnownPromptEnrichments`. You inject once; each phase receives the request-start snapshot.
 
 ### 5.4 Auto-promotion: the zero-hook path
 
@@ -355,7 +363,7 @@ Skills activation/resource selectors also consume the four known string
 enrichments through `buildSkillSelectorContext`. Each value is cut to its first
 1,000 UTF-8-safe bytes (plus `...` when truncated). Put scope and historical-origin
 warnings first; verify this view separately from the full planner prompt.
-Built-in memory detail puts its `event-detail/v1` tuple legend, when selected,
+Built-in memory detail puts its `event-detail/v2-record-facts` tuple legend, when selected,
 immediately after the scope notice, before any event record. Sparse histories
 retain named fields when they would not repay the legend's cost. Both the notice
 and any legend are included in the view's byte
@@ -365,7 +373,7 @@ prefix; this change does not reprioritize another hook's contribution.
 Memory enrichment is a request-start snapshot reused across phases, so current
 execution progress belongs in phase-updated step results rather than this text.
 
-Before any hook runs, the orchestrator calls `prepareKnownEnrichments` (`orchestration/pipeline_hooks.go:40-70`). It copies `conversation_history` and `rag_context` straight out of `Metadata` into `Enrichments`, and runs conversation turns through the configured `ConversationHistoryPreparer`. The practical consequence:
+Before any hook runs, the orchestrator calls `prepareKnownEnrichments` in `orchestration/pipeline_hooks.go`. It copies `conversation_history` and `rag_context` from request `Metadata` into `Enrichments`, and runs conversation turns through the configured `ConversationHistoryPreparer`. The practical consequence:
 
 > If you can attach your context as request **metadata**, you may not need a hook at all. Pass `metadata[core.EnrichmentRAGContext]` (or conversation turns via `metadata[orchestration.MetadataConversationTurns]`) and the framework promotes it for you. Hooks run *after* this step, so a `BeforePlanning` hook can still override or augment the prepared values. Reach for a hook when retrieval requires logic (a vector query, a cache lookup) rather than data you already hold.
 
@@ -410,13 +418,13 @@ When a decision is accepted:
 
 - The orchestrator **stops running further `BeforePlanning` hooks** — the first short-circuit wins.
 - Planning, execution, and synthesis are **all skipped**.
-- A complete `OrchestratorResponse` is built from the short-circuit, with `Confidence: 1.0` and any already-injected enrichments merged into the response metadata (`buildShortCircuitResponse`, `pipeline_hooks.go:13-35`).
+- A complete `OrchestratorResponse` is built from the short-circuit, with `Confidence: 1.0` and any already-injected enrichments merged into the response metadata (`buildShortCircuitResponse` in `orchestration/pipeline_hooks.go`).
 - A bounded `orchestration.pipeline.short_circuit.decision` metric records the
   provenance kind, decision reason, and status. Hook names and `Source` values
   are intentionally excluded from metric labels; accepted decisions remain
   identifiable through the correlated `pipeline.short_circuit.decision` trace
   event.
-- On the streaming path, the cached response is chunked and streamed to preserve the streaming contract (`orchestrator.go:3273-3294`).
+- On the streaming path, `runRequest` uses `deliverUTF8Chunks` in `orchestration/request_lifecycle.go` to deliver the cached response through the caller's callback.
 
 The canonical cache use case is a **semantic cache**: hash or embed the request,
 look for a hit, and return the cached answer without paying for an LLM round
@@ -1005,7 +1013,7 @@ span, with copied request baggage but independent cancellation. Trace spans are
 optional correlation evidence, not the source of truth for hook ownership or
 execution. See the [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md).
 
-**Concurrency.** Hooks for a single request run sequentially with no concurrent access to `PipelineContext` (`core/interfaces.go:250`), so you don't need locks around reads/writes of `Enrichments`. Hooks across *different* requests run on different `PipelineContext` instances; any shared state *your* hook holds (a cache client, a retriever) must be safe for concurrent use.
+**Concurrency.** Hooks for a single request run sequentially with no concurrent access to `PipelineContext` (defined in `core/interfaces.go`), so you don't need locks around reads/writes of `Enrichments`. Hooks across *different* requests run on different `PipelineContext` instances; any shared state *your* hook holds (a cache client, a retriever) must be safe for concurrent use.
 
 ---
 
@@ -1015,14 +1023,14 @@ These ship in the `orchestration` module and are the best worked examples to rea
 
 | Type | File | Stage | What it does |
 |---|---|---|---|
-| `MemoryEnrichmentHook` | `orchestration/memory_hooks.go:176` | `BeforePlanning` | Extracts entities from the request, queries shared episodic memory, and **appends** recent/related domain events into `Enrichments[EnrichmentRAGContext]`. Read/enrich. |
-| `MemoryRecordHook` | `orchestration/memory_hooks.go:718` | `AfterExecution` | Records the completed execution (entities, outcome, importance) into episodic memory. Write/record. |
-| `UserMemoryEnrichmentHook` | `orchestration/user_memory_hooks.go:27` | `BeforePlanning` | Reads `Metadata["user_id"]`; recalls per-user identity and query-relevant facts into `Enrichments[EnrichmentUserProfile]`. No-ops without a user ID. |
-| `UserMemoryExtractionHook` | `orchestration/user_memory_extraction.go:59` | `AfterSynthesis` | Extracts durable user facts from request+response via LLM and stores them per-user. Returns the response unchanged. Async or sync. |
-| `KnowledgeExtractionHook` | `orchestration/knowledge_extraction_hook.go:24` | `AfterSynthesis` | Asks an LLM for 0–3 reusable knowledge fragments, embeds and stores them. Runs in a goroutine; never mutates the response. |
-| `ConversationHistoryHook` | `orchestration/conversation_history_hook.go:15` | `BeforePlanning` | Adapter that injects memory-backed conversation history into `Enrichments[EnrichmentConversationHistory]`. Constructed manually via `NewConversationHistoryHook` — not wired by the builders. (For raw turns, prefer the metadata path in §5.4.) |
-| `ActivityAnnouncementHook` | `orchestration/activity_hooks.go:52` | `BeforePlanning` | Announces this agent's activity to the coordinator and injects concurrent activities into `Enrichments[EnrichmentActivityCoordination]`. |
-| `ActivityCleanupHook` | `orchestration/activity_hooks.go:228` | `AfterSynthesis` | Clears this agent's announced activity signal after the response. Pass-through. |
+| `MemoryEnrichmentHook` | `orchestration/memory_hooks.go` | `BeforePlanning` | Extracts entities from the request, queries shared episodic memory, and **appends** recent/related domain events into `Enrichments[EnrichmentRAGContext]`. Read/enrich. |
+| `MemoryRecordHook` | `orchestration/memory_hooks.go` | `AfterExecution` | Submits per-step events (entities, outcome, importance) into episodic memory. Write/record. |
+| `UserMemoryEnrichmentHook` | `orchestration/user_memory_hooks.go` | `BeforePlanning` | Reads `Metadata["user_id"]`; recalls per-user identity and query-relevant facts into `Enrichments[EnrichmentUserProfile]`. No-ops without a user ID. |
+| `UserMemoryExtractionHook` | `orchestration/user_memory_extraction.go` | `AfterSynthesis` | Extracts durable user facts from request+response via LLM and stores them per-user. Returns the response unchanged. Async or sync. |
+| `KnowledgeExtractionHook` | `orchestration/knowledge_extraction_hook.go` | `AfterSynthesis` | Asks an LLM for 0–3 reusable knowledge fragments, embeds and stores them. Runs in a goroutine; never mutates the response. |
+| `ConversationHistoryHook` | `orchestration/conversation_history_hook.go` | `BeforePlanning` | Adapter that injects memory-backed conversation history into `Enrichments[EnrichmentConversationHistory]`. Constructed manually via `NewConversationHistoryHook` — not wired by the builders. (For raw turns, prefer the metadata path in §5.4.) |
+| `ActivityAnnouncementHook` | `orchestration/activity_hooks.go` | `BeforePlanning` | Announces this agent's activity to the coordinator and injects concurrent activities into `Enrichments[EnrichmentActivityCoordination]`. |
+| `ActivityCleanupHook` | `orchestration/activity_hooks.go` | `AfterSynthesis` | Pass-through in managed requests: the request owner joins renewal and cleans up on completion/failure/cancellation. In direct hook use without that owner, submits signal removal after synthesis. |
 
 The built-in effect IDs are stable within each invocation:
 
@@ -1030,10 +1038,21 @@ The built-in effect IDs are stable within each invocation:
 |---|---|---|
 | Every `BeforePlanning` hook | `planning_enrichment:<key>` | Exact before/after JSON value and `added`, `updated`, or `removed` operation |
 | `ActivityAnnouncementHook` | `activity_signal`, `activity_context` | Submitted signal and TTL; discovered/selected signals. The exact injected text is carried once by `planning_enrichment:<key>`. |
-| `MemoryEnrichmentHook` | `memory_planning_context` | Extracted entity references and section count. The exact bounded context is carried once by `planning_enrichment:<key>`. |
-| `MemoryRecordHook` | `episodic_memory_records` | Per-step submitted event envelope, provider-call observation/error, backend-assigned identity notice, and claim-release call observations |
+| `MemoryEnrichmentHook` | `memory_planning_context` | Agent domain, extracted entity references, section count and `view` report (version, format, byte budget/usage, outcome and section counts). The exact bounded context is carried once by `planning_enrichment:<key>`. |
+| `MemoryEnrichmentHook` | `memory_episodic_read` | Bounded recent-window read status (`read_succeeded`, `read_failed`, or `legacy_unobserved`), returned-event count and query limit |
+| `MemoryEnrichmentHook` | `memory_digest_window` | Digest path, `cache_entry_found` (compatible decoded entry with window metadata, not raw key existence), returned-event count and coverage (`returned_window`, `limited_window`, or `unknown`); entry presence alone does not prove reuse |
+| `MemoryRecordHook` | `episodic_memory_records` | Per-step submitted event envelope, provider-call observation/error, independent `backend_assigns_event_id`/`backend_assigns_timestamp` flags, and claim-release call observations. Built-in summary coverage separates `batch_excluded` from parsing outcomes; excluded events carry `batch_limit`. Shortened heuristic causes carry `summary_cause_shortened=true`. |
 | `KnowledgeExtractionHook` | `knowledge_extraction` | Pending async state, exact model extraction response, normalized fragments, and explicit per-fragment observed outcome/error |
-| `ActivityCleanupHook` | `activity_signal_cleanup` | Request ID and whether the coordinator returned an explicit error |
+| Managed request activity owner | `activity_signal_renewal` | Pending renewal-loop state followed by terminal submission/error counts after the loop is joined |
+| Managed request activity owner / direct `ActivityCleanupHook` | `activity_signal_cleanup` | Managed removal after joining renewal, or direct-hook removal; captures whether the provider returned an explicit error, not an independent durability/health check |
+| Managed request resource owner | `investigation_lease_cleanup:<ordinal>` | Acquired entity identity and cleanup outcome (`released`, `absent`, `not_owned`, or `unknown`); private acquisition tokens are excluded |
+
+Effect status belongs to the observed effect, not just the hook callback's return.
+Managed activity effects can remain pending after `BeforePlanning` succeeds and
+are completed by the request owner. A provider returning nil confirms its call
+contract, not independently verified backend storage or health. See the
+[tracing guide](../observability/DISTRIBUTED_TRACING_GUIDE.md) for the related
+read, renewal and cleanup events.
 
 Notice the symmetry: the `BeforePlanning` hooks **read/enrich**, the `AfterExecution`/`AfterSynthesis` hooks **write/record**. Several also declare the compile-time conformance assertion recommended in [§7](#7-writing-your-own-hook) — a habit worth adopting in your own hooks.
 

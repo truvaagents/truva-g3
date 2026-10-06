@@ -1,27 +1,6 @@
 # TruvaG3 Framework Environment Variables Guide
 
-### Failed-operation evidence (implemented)
-
-`TRUVAG3_FAILED_OPERATION_VIEW_DISABLED` defaults to `false`.
-`TRUVAG3_FAILED_OPERATION_MAX_VALUE_BYTES`,
-`TRUVAG3_FAILED_OPERATION_MAX_STEP_BYTES`, and
-`TRUVAG3_FAILED_OPERATION_MAX_PROMPT_BYTES` default to `4096`, `16384`, and
-`32768`. Numeric values must be positive; canonical orchestration
-`EnvironmentStrict` rejects invalid values and `EnvironmentCompatible` reports
-ignored invalid overrides. Code zero means unset; negative code limits fail
-validation. Explicit `WithFailedOperationView` options take precedence over env.
-These are final-encoded child ceilings inside continuation's existing failure
-share, not a way to raise its parent budget. See the Limits Cheatsheet and
-Result Compaction Guide for measurement and omission semantics.
-
 This document provides a comprehensive reference for all environment variables supported by the TruvaG3 framework. Variables are organized by module/functionality with their default values, descriptions, and verification status.
-
-## Important Notes
-
-**Variable Status Legend:**
-- **Implemented** - Variable is actively read via `os.Getenv()` and works
-- **Struct Tag Only** - Defined in struct tags but NOT currently loaded (requires code changes to work)
-- **Example Only** - Used in example applications, not core framework
 
 ## Table of Contents
 
@@ -35,11 +14,13 @@ This document provides a comprehensive reference for all environment variables s
 8. [Telemetry Configuration](#telemetry-configuration)
 9. [Memory Configuration](#memory-configuration)
 10. [Shared Memory Configuration](#shared-memory-configuration)
+    - [Event-summary deadline](#builtin-event-summary-deadline)
 11. [Activity Coordination Configuration](#activity-coordination-configuration)
 12. [Logging Configuration](#logging-configuration)
 13. [Development Configuration](#development-configuration)
 14. [Kubernetes Configuration](#kubernetes-configuration)
 15. [Orchestration Configuration](#orchestration-configuration)
+    - [Failed-operation evidence](#failed-operation-evidence-implemented)
 16. [LLM Debug Configuration](#llm-debug-configuration)
 17. [Execution Debug Store Configuration](#execution-debug-store-configuration)
 18. [Human-in-the-Loop (HITL) Configuration](#human-in-the-loop-hitl-configuration)
@@ -49,6 +30,35 @@ This document provides a comprehensive reference for all environment variables s
 22. [Quick Reference Table](#quick-reference-table)
 
 ---
+
+## Important Notes
+
+**Variable Status Legend:**
+- **Implemented** - Read by the documented owning constructor/configuration path (`Getenv` or presence-aware `LookupEnv`); setting it does not automatically wire that feature into an application
+- **Struct Tag Only** - Defined in struct tags but NOT currently loaded (requires code changes to work)
+- **Example Only** - Used in example applications, not core framework
+
+### Related code-only controls
+
+The following controls have **no dedicated
+environment variable**. Use the owning API; setting a similarly named env key
+does not configure them.
+
+| Behavior | Programmatic control | Default / scope |
+|---|---|---|
+| Reasoning-as-answer compatibility | `ai.WithReasoningContentFallback(bool)`, `ai.WithChainReasoningContentFallback(bool)`, direct codec `ReasoningContentFallback` | false; compatible-codec response policy, not a model/token limit |
+| Reasoning token multiplier | `ai.WithReasoningTokenMultiplier(int)` / `WithChainReasoningTokenMultiplier(int)` | 5 when scaling applies; no per-model ceiling clamp |
+| Shared-memory lookback | `WithMemoryLookback(d)` / direct `WithEnrichmentLookback(d)` | 24h; independent of event retention and digest TTL |
+| Event-summary batch size | `WithSummarizerMaxStepsPerBatch(n)` | 20; excess steps get heuristic fallback |
+| Calculated summary tokens per step | `WithSummarizerTokensPerStep(n)` | 150, floor 300 per call; fixed max-tokens override wins |
+| Failed-input disclosure restriction | `FailedOperationViewConfig.InputPolicy` | nil permits bounded views; applications can restrict or disable |
+| Recording-only request entities | `WithBuilderRecordRequestEntityExtractor` / direct `WithRecordRequestEntityExtractor` | unset; enrichment/claim acquisition unchanged |
+| Per-acquisition claim expiry | `core.InvestigationLeaseRequest.TTL` | 0 selects provider default; negative invalid |
+
+Returned completion provenance, request lifecycle revisions and physical
+dispatch counts need no new enablement flag. Existing debug-store enablement,
+access and retention settings still govern persistence. There is no env knob
+for rewriting provider finish reasons or turning empty completion into success.
 
 ## Kubernetes Deployment Requirements
 
@@ -178,6 +188,24 @@ env:
 ## Core Configuration
 
 These variables configure the fundamental settings of a TruvaG3 agent or tool.
+
+The resilience-shaped declarations below are **struct tags only**, not env
+inputs consumed by `core.Config.LoadFromEnv`. They are listed to avoid confusing
+them with the implemented AI and orchestration retry budgets. Configure the
+owning component programmatically instead.
+
+| Reserved declaration | Default in core configuration | Status |
+|---|---|---|
+| `TRUVAG3_CB_ENABLED` | false | Struct Tag Only |
+| `TRUVAG3_CB_THRESHOLD` | 5 | Struct Tag Only |
+| `TRUVAG3_CB_TIMEOUT` | 30s | Struct Tag Only |
+| `TRUVAG3_CB_HALF_OPEN` | 3 | Struct Tag Only |
+| `TRUVAG3_RETRY_MAX_ATTEMPTS` | 3 | Struct Tag Only |
+| `TRUVAG3_RETRY_INITIAL_INTERVAL` | 1s | Struct Tag Only |
+| `TRUVAG3_RETRY_MAX_INTERVAL` | 30s | Struct Tag Only |
+| `TRUVAG3_RETRY_MULTIPLIER` | 2.0 | Struct Tag Only |
+| `TRUVAG3_TIMEOUT_DEFAULT` | 30s | Struct Tag Only |
+| `TRUVAG3_TIMEOUT_MAX` | 5m | Struct Tag Only |
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
@@ -373,9 +401,9 @@ documented.
 | `TRUVAG3_AI_TEMPERATURE` | `0.7` | Struct Tag Only | Sampling temperature declaration; permitted values and field support are provider/model-specific | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_MAX_TOKENS` | `2000` | Struct Tag Only | Maximum tokens in response | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_TIMEOUT` | `30s` in `core.DefaultConfig` (the unused struct tag says `180s`) | Struct Tag Only | `core.Config.LoadFromEnv` does not read this variable. Direct `ai.NewClient` / `ai.NewRequestClient` construction also does not read it: those constructors use 180s unless an explicitly selected standalone provider declares another default (Bedrock: 60m) or `ai.WithTimeout(d)` supplies a positive override. Auto-detected clients and framework-managed chain entries use 180s. Programmatic zero and negative values mean unset and do not disable provider deadlines. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go), [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/registry.go](https://github.com/truvaagents/truva-g3/blob/main/ai/registry.go) |
-| `TRUVAG3_AI_RETRY_ATTEMPTS` | `3` for independently constructed clients and heterogeneous `ProviderEntry`; `0` per provider in legacy `NewChainClient` | **Implemented** | Per-provider retry budget. Precedence is explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` > positive environment value > constructor-specific default. `NewClient`, `NewRequestClient`, and each `NewChain` `ProviderEntry` default to 3. Legacy `NewChainClient` defaults each provider to 0 so provider retries do not multiply ordered failover attempts. `ClientEntry` is caller-owned. Zero, negative, and non-integer environment values are rejected and fall through; use an explicit programmatic 0 to disable retries. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/chain_client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_client.go), [ai/chain_entries.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_entries.go) |
+| `TRUVAG3_AI_RETRY_ATTEMPTS` | `3` for independently constructed clients and heterogeneous `ProviderEntry`; `0` per provider in legacy `NewChainClient` | **Implemented** | Per-provider retry budget. `ai/providers/openai` and its registered aliases share this one budget across transport/HTTP and eligible decoded/in-body failures; direct Azure remains transport-only. Retry permission comes from the adapter classifier, and `Retry-After` can affect delay without adding attempts. Precedence is explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` > positive environment value > constructor-specific default. `NewClient`, `NewRequestClient`, and each `NewChain` `ProviderEntry` default to 3. Legacy `NewChainClient` defaults each provider to 0 so provider retries do not multiply ordered failover attempts. `ClientEntry` is caller-owned. Zero, negative, and non-integer environment values are rejected and fall through; use an explicit programmatic 0 to disable retries. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/chain_client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_client.go), [ai/chain_entries.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_entries.go) |
 | `TRUVAG3_AI_SSE_EVENT_MAX_BYTES` | `1048576` (1 MiB) | **Implemented** | Maximum bytes in one OpenAI-compatible server-sent event. A positive `AIConfig.SSEEventMaxBytes` wins; invalid, zero, and negative environment values fall back to 1 MiB. The ceiling is per event, not per response. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/providerkit/openaiwire/sse.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providerkit/openaiwire/sse.go) |
-| `TRUVAG3_AI_RETRY_DELAY` | `1s` | **Implemented** | Initial exponential delay between provider attempts. A positive `AIConfig.RetryDelay` wins over a positive Go-duration environment value, then the one-second default. Invalid, zero, and negative environment values fall back safely. For HTTP 429/503, a valid `Retry-After` seconds/date value is honored only when it is greater than exponential backoff. Every retry wait ends at the earlier caller deadline or an absolute wait cap: the positive HTTP-client timeout, or the 180-second framework fallback when that timeout is disabled. The cap applies to the wait timer rather than the transport context, so it does not make a successful streaming response body unreadable. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/providers/base.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/base.go) |
+| `TRUVAG3_AI_RETRY_DELAY` | `1s` | **Implemented** | Initial exponential delay between provider attempts, including eligible decoded retries in adopting adapters. A positive `AIConfig.RetryDelay` wins over a positive Go-duration environment value, then the one-second default. Invalid, zero, and negative environment values fall back safely. For an eligible HTTP 429/503 or decoded semantic 429/503, a valid response `Retry-After` seconds/date value is honored only when it is greater than exponential backoff. It does not grant retry permission or add attempts. Every retry wait ends at the earlier caller deadline or an absolute wait cap: the positive HTTP-client timeout, or the 180-second framework fallback when that timeout is disabled. The cap applies to the wait timer rather than the transport context, so it does not make a successful streaming response body unreadable. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/providers/base.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/base.go) |
 
 ### Example
 
@@ -384,6 +412,10 @@ export TRUVAG3_AI_ENABLED=true
 export TRUVAG3_AI_MODEL="smart"
 export TRUVAG3_AI_BASE_URL="https://api.openai.com/v1"
 ```
+
+Reaching the provider retry-wait cap returns `context.DeadlineExceeded`; it
+does not shorten a required cooldown and then resend early. A caller deadline
+or cancellation also stops the wait without another provider attempt.
 
 ---
 
@@ -398,6 +430,16 @@ See the
 for the registration pattern.
 
 ### OpenAI (Priority: 1000)
+
+For the `ai/providers/openai` implementation and its registered aliases
+(including OpenRouter), the existing provider retry settings also cover eligible
+decoded/in-body failures, sharing one budget with HTTP/transport errors. Direct
+Azure OpenAI adapters retain transport-only retries. These settings do not
+configure orchestration tool-step retries or outer-chain
+failover. Adapters opting into `ExecuteWithRetryDecoded` own the retry decision
+for actual HTTP 429/5xx as well. OpenRouter uses its conservative typed/status
+classifier; no new retry env setting enables rejected error types. Eligible
+decoded semantic 429/503 can use the existing Retry-After wait handling.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
@@ -739,22 +781,48 @@ optional dependencies; invalid input returns an error, not a partial hook bundle
 The event-summarizer override is hook-owned, not parsed by core. Core validation
 alone is not backend wiring.
 
+Ownership and precedence matter: `BuildMemoryHooks` reads hook-owned overrides
+and otherwise keeps direct-constructor defaults. Its behavioral options include
+entity extractors and lookback, but it does not accept direct-hook numeric
+options. `NewSharedBackends` validates its own stream/claim settings before I/O.
+Direct constructors do not inherit these environment overrides automatically.
+Changing env after construction does not reconfigure existing instances.
+
+JSON `null`, malformed numeric types and empty env values are explicit invalid
+settings, not “unset.” Relative retrieval weights must be finite but may be
+signed/zero and need not sum to one. This strict numeric-memory rule is separate
+from general orchestration compatible-mode fallback and from skills' own
+precedence rules.
+
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_SHARED_MEMORY_PROVIDER` | `noop` | **Implemented** | Storage provider (`redis`, `noop`). Agents must use `redis` for cross-agent memory. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_VECTOR_DB_URL` | `localhost:6334` for direct vector construction | **Implemented** | Qdrant gRPC address used by memory vector configuration; backend/embedding wiring remains explicit. Setting an address alone does not enable every memory hook. | [memory/vector_config.go](../../memory/vector_config.go) |
 | `TRUVAG3_AGENT_DOMAIN` | `default` | **Implemented** | Groups agents for memory scoping. Agents in the same domain see each other's events. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN` | `100000` | **Implemented** | Max events in the Redis domain stream (approximate, uses `~MAXLEN`). | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL` | `30m` | **Implemented** | Auto-expiry for investigation claims. Must be >= HITL timeout + execution buffer for agents using cross-agent delegation. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_SHARED_MEMORY_INVESTIGATION_TTL` | `30m` | **Implemented** | Positive advisory investigation-claim expiry, not renewed. Managed request cleanup releases on exit/HITL suspension; resume acquires fresh ownership. It need not span the human wait. Legacy/direct-hook callers own their lifecycle. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` | `2000` | **Implemented** | `BuildMemoryHooks` reads this at startup for both raw and compacted memory views. Bounds the hook's own contribution at four encoded bytes per token; complete records and omission markers fit inside that budget. Invalid/empty/non-positive/overflowing values fail construction. Direct construction uses `WithEnrichmentMaxTokens`, which rejects invalid values. | [memory_hook_builder.go](../../orchestration/memory_hook_builder.go) |
 | `TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT` | `20` | **Implemented** | Recent domain events for baseline situational awareness (without compactor). Higher values show more cross-agent activity but consume more prompt tokens. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `""` (agent default) | **Implemented** | Model for LLM event summarization and activity compaction calls. Accepts aliases such as `fast` and `smart` only when the selected provider defines them, or a concrete model ID. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` | Unset: max(300, 150 × batch size) | **Implemented** | Positive fixed output-token allowance per event-summary call. Read at startup by `BuildMemoryHooks`; invalid explicit values fail construction, including without an AI client. Independent of synthesis and compaction. Direct constructors use `WithSummarizerMaxTokens(n)` instead. | [orchestration/memory_hook_builder.go](../../orchestration/memory_hook_builder.go) |
-| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | **Implemented** | Max token budget for the compacted domain activity digest. Controls the output size of the `ActivityCompactor` LLM call. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` | `2m` | **Implemented** | Positive builtin AI-invocation deadline, not a memory-write timeout. Earlier parent deadline wins; invalid/empty/non-positive values fail `BuildMemoryHooks` even without dependencies. Direct constructor: `WithSummarizerTimeout(d)`. | [orchestration/memory_hook_tuning.go](../../orchestration/memory_hook_tuning.go) |
+| `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_RESPONSE_BYTES` | `4000` | **Implemented** | Positive per-step encoded payload allowance shared by failure facts and response in the built-in summary prompt. Invalid/empty/overflow values fail builder construction, including without AI/memory dependencies. Direct construction uses `WithSummarizerMaxResponseChars(n)` (legacy name; byte units). Independent of output-token limits. | [orchestration/event_summarizer.go](../../orchestration/event_summarizer.go) |
+| `TRUVAG3_SHARED_MEMORY_RECORD_FAILURE_CAUSE_MAX_BYTES` | `256` | **Implemented** | Positive UTF-8 byte allowance for the cause in heuristic failure summaries. Framing and explicit shortening marker are additional. Invalid/empty/overflow values fail builder construction even without AI/memory dependencies. Direct option: `WithRecordFailureCauseMaxBytes(n)`. Original execution errors and model/custom summaries stay unchanged. | [orchestration/memory_hooks.go](../../orchestration/memory_hooks.go) |
+| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | **Implemented** | Requested digest length in the built-in compactor prompt. Full and incremental calls supply `AIOptions.MaxTokens = 5 × target` (2500 by default), before any provider reasoning scaling. The target is not a tokenizer-enforced cap; the final enrichment view has a separate byte budget. | [orchestration/activity_compactor.go](../../orchestration/activity_compactor.go) |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` | `200` | **Implemented** | Max raw events fetched before compaction. Higher values give the compactor more context but increase LLM input size. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` | `15` | **Implemented** | Raw events appended after the compacted digest for immediate detail access. Set to `0` to disable. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL` | `5m` | **Implemented** | TTL for cached domain activity digests. When expired, next request triggers full compaction. Go duration format. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_DIGEST_INCREMENTAL_THRESHOLD` | `20` | **Implemented** | Max new events for incremental digest update. Above this threshold, full recompaction is triggered instead. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_SHARED_MEMORY_COMPACTION_ENABLED` | `false` | **Implemented** | Enable background compaction (event digesting into knowledge). Must be explicitly enabled. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_SHARED_MEMORY_COMPACTION_ENABLED` | `false` | **Parsed; application wiring required** | Loads `Config.SharedMemory.CompactionEnabled`. Applications must pass it through `WithCompactorEnabled` when constructing `MemoryCompactor`, then invoke `RunCompaction` on their chosen schedule. No background worker is started by this flag. It does not control the request-time activity digest that `BuildMemoryHooks` installs when an AI client is supplied. | [core/config.go](../../core/config.go), [orchestration/memory_compaction.go](../../orchestration/memory_compaction.go) |
+
+### Builtin event-summary deadline
+
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT`: positive Go duration, default
+`2m`, resolved by `orchestration.BuildMemoryHooks`. Explicit empty, malformed,
+non-positive or overflowing values fail construction even when AI or memory is
+absent. Only the builtin AI invocation gets a child deadline; shorter enclosing
+contexts win. Custom summarizers are unchanged. Direct constructor users choose
+`WithSummarizerTimeout`; that layer does not read this environment variable.
 
 ---
 
@@ -871,9 +939,9 @@ Configure real-time agent coordination signals. Activity signals are transient R
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_ACTIVITY_COORDINATION_ENABLED` | `true` | **Implemented** | Enable/disable the activity coordination layer. When false, no signals are emitted or read. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_ACTIVITY_SIGNAL_TTL` | `5m` | **Implemented** | Time-to-live for activity signals. Should be longer than the longest expected request duration. Go duration format. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_ACTIVITY_SIGNAL_TTL` | `5m` | **Implemented** | Positive expiry for transient activity signals. Managed request segments renew at TTL/3 and join renewal before cleanup, so TTL need not exceed the request duration. Direct/unmanaged callers own renewal. | [orchestration/execution_activity.go](../../orchestration/execution_activity.go) |
 | `TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT` | `10` | **Implemented** | Max activity signals shown in the `<agent_coordination>` prompt section. Most recent first after filtering. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_ACTIVITY_SIGNAL_QUERY_MAX_LEN` | `200` | **Implemented** | Max characters of the request query included in activity signals. Longer queries are truncated. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_ACTIVITY_SIGNAL_QUERY_MAX_LEN` | `200` | **Implemented** | Request-query byte prefix retained in activity signals; legacy helper appends `...` when truncated. This is not a rune count or an exact final-size cap. | [orchestration/activity_hooks.go](../../orchestration/activity_hooks.go) |
 
 ---
 
@@ -954,16 +1022,47 @@ env:
 
 Configure the AI orchestrator for multi-agent coordination.
 
+### Failed-operation evidence (implemented)
+
+`TRUVAG3_FAILED_OPERATION_VIEW_DISABLED` defaults to `false`.
+`TRUVAG3_FAILED_OPERATION_MAX_VALUE_BYTES`,
+`TRUVAG3_FAILED_OPERATION_MAX_STEP_BYTES`, and
+`TRUVAG3_FAILED_OPERATION_MAX_PROMPT_BYTES` default to `4096`, `16384`, and
+`32768`. Numeric values must be positive; canonical orchestration
+`EnvironmentStrict` rejects invalid values and `EnvironmentCompatible` reports
+ignored invalid overrides. Code zero means unset; negative code limits fail
+validation. `WithFailedOperationView` replaces the entire environment-resolved
+configuration. Omitted code fields resolve to defaults; they do not retain env values.
+These are final-encoded child ceilings inside continuation's existing failure
+share, not a way to raise its parent budget. See the Limits Cheatsheet and
+Result Compaction Guide for measurement and omission semantics.
+
+### Execution and planning variables
+
+Related controls used by the current planning/execution paths:
+
+| Variable | Default | Scope and validation |
+|---|---|---|
+| `TRUVAG3_STEP_RETRY_MAX_ATTEMPTS` | `3` total attempts | Positive integer; `ExecutionOptions.RetryAttempts` in canonical construction. Direct `NewSmartExecutor` also reads it; `SetMaxAttempts(n)` is the direct code seam (values below 1 become 1). Orchestrator capabilities remain single dispatch |
+| `TRUVAG3_PLAN_REFINEMENT_ENABLED` | `false` | Enables the post-orchestrator refinement pass; standard orchestration boolean resolution, not a provider setting |
+| `TRUVAG3_EXCLUDED_CAPABILITIES` | empty | Comma-separated capability names, trimmed and empty entries discarded; populates `OrchestratorConfig.ExcludedCapabilities`. Separate from capabilities marked Internal |
+
+These existing controls are not new feature flags for the hardening work.
+Explicit `ToolError.Retryable=false` stops all same-step retries, including
+transient resends. Transient 408/429/5xx preserves admitted inputs; eligible
+non-transient 4xx may be corrected, never resent unchanged. Increasing a retry
+budget does not bypass refusal, immutable inputs or the delegated-call limit.
+
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `600s` | **Implemented** | HTTP client timeout for tool/agent calls | [orchestration/executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go) |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `600s` | **Implemented** | Base shared HTTP-client timeout per tool/agent call, not the whole execution. Orchestrator construction raises it to `HITL.DefaultTimeout + ExecutionOptions.StepTimeout` when that allowance is larger. Earlier enclosing deadlines still apply. | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
 | `TRUVAG3_EXECUTION_MAX_CONCURRENCY` | `25` | **Implemented** | Max parallel step executions in DAG. Controls goroutine concurrency during plan execution. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `120s` | **Implemented** | Per-step execution timeout. Each individual step must complete within this duration. Go duration format. For `CapabilityOrchestrator` steps, the effective timeout is `TRUVAG3_HITL_DEFAULT_TIMEOUT` + this value. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `120s` | **Implemented** | Go-duration execution allowance added to `HITL.DefaultTimeout` for an orchestrator capability's per-call context deadline. Ordinary tool calls have no separate deadline from this setting; they use the shared HTTP timeout and enclosing context. The delegation allowance can also enlarge the shared client timeout and phase budget. | [orchestration/executor.go](../../orchestration/executor.go), [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
 | `TRUVAG3_CONVERSATION_TOKEN_BUDGET` | `48000` | **Implemented** | Maximum estimated tokens allowed for prepared `<conversation_history>` before Tier 1 truncation/elision. Default-on safety net for metadata and hook ingress paths. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONVERSATION_RECENT_TURNS_PRESERVED` | `4` | **Implemented** | Number of newest turns always kept verbatim when turn-aware conversation preparation needs to shed context. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONVERSATION_SUMMARY_CACHE_SIZE` | `256` | **Implemented** | LRU capacity for the optional Tier 2 recursive conversation-summary cache. Only used when the application injects a compaction-enabled conversation-history preparer. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_STEP_RETRY_INITIAL_DELAY` | `500ms` | **Implemented** | Initial backoff delay for step retries. Go duration format (e.g., `500ms`, `2s`). Exponential backoff doubles this per attempt. Invalid values are silently ignored. | [orchestration/executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go) |
-| `TRUVAG3_STEP_RETRY_MAX_DELAY` | `10s` | **Implemented** | Maximum backoff delay for step retries. Go duration format. Delay is capped at this value regardless of attempt count. Invalid values are silently ignored. | [orchestration/executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go) |
+| `TRUVAG3_STEP_RETRY_INITIAL_DELAY` | `500ms` | **Implemented** | Initial step-retry backoff, with 2× growth and jitter. Canonical construction requires a positive Go duration: strict mode rejects invalid values; compatible mode diagnoses ignored overrides. Direct `NewSmartExecutor` retains compatibility with zero/negative delays. | [orchestration/config_resolution.go](../../orchestration/config_resolution.go), [orchestration/executor.go](../../orchestration/executor.go) |
+| `TRUVAG3_STEP_RETRY_MAX_DELAY` | `10s` | **Implemented** | Maximum step-retry backoff. Canonical construction requires a positive Go duration: strict mode rejects invalid values; compatible mode diagnoses ignored overrides. Direct `NewSmartExecutor` retains compatibility with zero/negative delays. | [orchestration/config_resolution.go](../../orchestration/config_resolution.go), [orchestration/executor.go](../../orchestration/executor.go) |
 | `TRUVAG3_OAUTH_TOKEN` | (empty) | **Implemented** | OAuth Bearer token for outbound HTTP calls to tool/agent endpoints. Per-request tokens via `WithOAuthToken()` take priority. When set, executor requests include `Authorization: Bearer <token>`. | [orchestration/executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go) |
 | `TRUVAG3_TIERED_RESOLUTION_ENABLED` | `true` | **Implemented** | Enable tiered capability resolution for LLM token optimization. Uses 2-phase approach to reduce tokens by 50-75%. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_TIERED_MIN_TOOLS` | `20` | **Implemented** | Minimum tool count to trigger tiered resolution. Below this threshold, all tools are sent directly. Research-backed default. | [orchestration/tiered_capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/tiered_capability_provider.go) |
@@ -974,7 +1073,7 @@ Configure the AI orchestrator for multi-agent coordination.
 | `CAPABILITY_SERVICE_URL` | (fallback) | **Implemented** | Alternative capability service URL | [orchestration/capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/capability_provider.go) |
 | `TRUVAG3_CAPABILITY_TOP_K` | `20` | **Implemented** | Number of capabilities to return | [orchestration/capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/capability_provider.go) |
 | `TRUVAG3_CAPABILITY_THRESHOLD` | `0.7` | **Implemented** | Minimum similarity threshold | [orchestration/capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/capability_provider.go) |
-| `TRUVAG3_PLAN_RETRY_ENABLED` | `true` | **Implemented** | Retry plan generation on JSON parse failures | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_PLAN_RETRY_ENABLED` | `true` | **Implemented** | Retry initial/continuation generation on syntax or routing-intent decoding failures; other recovery paths have their own budgets | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_PLAN_RETRY_MAX` | `2` | **Implemented** | Maximum retry attempts for plan parsing (0 = disabled) | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_PLAN_MAX_TOKENS` | `15000` | **Implemented** | Max output tokens for plan generation LLM calls (including hallucination and validation retries) | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_SYNTHESIS_MAX_TOKENS` | `5000` | **Implemented** | Max output tokens for response synthesis LLM calls | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -989,10 +1088,11 @@ Configure the AI orchestrator for multi-agent coordination.
 | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | `true` | **Implemented** | Enable multi-phase iterative planning. LLM planner can generate partial plans that execute in phases. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_MAX_PHASES` | `5` | **Implemented** | Maximum planning phases per request. Forces termination with synthesis if reached. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | **Implemented** | Maximum total steps across all phases. Prevents runaway plan generation. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | **Implemented** | Maximum duration for a single phase (plan generation + execution). Go duration format. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | **Implemented** | Max plan regenerations after the first validation failure before the phase fails explicitly (total validations = 1 + N). Prevents an infinite regenerate↔reject loop. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Phase 14: floor-preview size (chars) for a **non-JSON** completed-step result in continuation prompts. JSON results are rendered as a structure-complete digest instead; orchestrator JSON delegation responses are also child-summary-extracted, so child sub-steps stay visible regardless. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `32768` | **Implemented** | Phase 14: **soft target** (chars) for the whole `<completed_steps>` section — drives newest-first eviction (older steps evict with a "showing N of M" note, ~268 B/digest → ~122 steps fit 32 KB). Not a hard cap: failed steps and the newest successful step are always kept, and notes are appended after the budget decision. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | **Implemented** | Configured phase budget (plan generation + execution). The phase loop raises it to the delegation allowance (`HITL.DefaultTimeout + StepTimeout`) when larger, even if the plan has no delegated step. Earlier parent deadlines still apply. | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
+| `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | **Implemented** | Regeneration attempts after the first validation failure; at most 1 + N validations. Malformed or intent-invalid regenerated JSON spends a round without validation; provider/boundary/cancellation errors and persistent continuation step-ID conflicts can stop earlier. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | **Implemented** | Byte limit on encoded correction context added to a selected phase prompt. The effective value must be greater than zero when validated; environment handling follows the selected configuration-resolution mode. Omitted prior evidence is marked; failure to fit required feedback stops preparation. Not a whole-prompt/token limit. | [orchestration/plan_attempt.go](../../orchestration/plan_attempt.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Floor-preview size in bytes (legacy setting name) for a non-JSON completed-step result. JSON results use a structural digest; delegation summaries have a separate projection. Visibility remains subject to digest and enclosing budgets. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `32768` | **Implemented** | Soft byte target (legacy setting name) for completed-step views before enclosing prompt encoding. Older successful steps may be omitted; failed steps and the newest successful step are retained, and markers can exceed the target. Failed-operation evidence is sub-allocated and also bounded by its own encoded-byte limits. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | `8` | **Implemented** | Phase 14: max non-JSON steps escalated to the continuation distiller (a fast-model summary) per phase, newest-first. Sequential fast-model calls on the phase-gating path, so the cap bounds latency. `0` disables; fires ~never on all-JSON workloads. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | `3` | **Implemented** | Phase 14: per-array head-sample size in a continuation digest (arrays render as the first N elements + a length sentinel). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | `200` | **Implemented** | Phase 14: max length of a string value kept inline in a digest before elision. Raise it so the planner sees longer salient values (status/error strings) at plan time. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1073,11 +1173,17 @@ export TRUVAG3_CONVERSATION_SUMMARY_CACHE_SIZE=512
 ### Plan Parse Retry
 
 When LLMs generate execution plans, JSON parsing may fail due to:
+- Missing or invalid routing-plan intent, including ambiguous empty plans
 - Arithmetic expressions in values (e.g., `"amount": 100 * price`)
 - Malformed JSON syntax (trailing commas, missing quotes)
 - Invalid JSON structures
 
-The retry mechanism provides error feedback to the LLM, allowing it to correct its output:
+Initial/continuation generation uses the parse-retry mechanism for these failures.
+Initial unavailable-agent replacements use the hallucination-recovery budget;
+validation-regeneration outputs instead spend validation rounds. A continuation
+unknown-agent recovery has only one regeneration attempt. These paths are distinct.
+
+The parse-retry mechanism provides error feedback to the LLM:
 
 ```bash
 # Disable retry (fail fast on parse errors)
@@ -1157,7 +1263,7 @@ Semantic Retry is an advanced error recovery feature that uses LLM analysis to c
 
 **How Semantic Retry Works:**
 
-1. **Error Detected**: Tool returns 4xx error (400, 404, 409, 422)
+1. **Error Detected**: Tool returns an eligible, correction-permitted 4xx error (e.g. 400, 404, 409, 422); explicit `retryable:false` stops all same-step retries first
 2. **Layer 3 Analysis**: ErrorAnalyzer determines it cannot fix the issue
 3. **Layer 4 Activation**: ContextualReResolver receives full execution context:
    - User's original query (intent)
@@ -1166,7 +1272,10 @@ Semantic Retry is an advanced error recovery feature that uses LLM analysis to c
 4. **LLM Computation**: The LLM analyzes the context and computes corrected parameters
 5. **Retry**: The step is retried with computed parameters
 
-**Example scenario:**
+**Hypothetical opt-in scenario:** The shipped `currency-tool` sends
+`retryable:false` for amount validation, so it stops rather than following this
+flow. This example assumes explicit `retryable:true` permission for that
+correctable condition and all executor correction gates passing.
 ```
 User: "Sell 100 Tesla shares and convert proceeds to EUR"
 Step 1 (stock-tool): Returns {price: 468.285}
@@ -1198,8 +1307,9 @@ Iterative planning allows the LLM planner to generate partial plans (`terminal: 
 | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | `true` | **Implemented** | Enable multi-phase iterative planning. When enabled, the LLM planner can signal partial plans that execute in phases. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_MAX_PHASES` | `5` | **Implemented** | Maximum number of planning phases per request. If reached without a terminal plan, the orchestrator forces termination and synthesizes with available results. Most queries need at most 2. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | **Implemented** | Maximum total steps across all phases. Prevents runaway plan generation. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | **Implemented** | Maximum duration for a single phase (plan generation + execution). Uses Go duration format. Prevents a single continuation phase from hanging indefinitely. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | **Implemented** | Max plan regenerations after the first validation failure before the phase fails explicitly (total validations = 1 + N). Prevents an infinite regenerate↔reject loop. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | **Implemented** | Configured phase budget (plan generation + execution), raised to the delegation allowance when larger. Earlier parent deadlines still apply; see [Execution Limits](LIMITS_CHEATSHEET.md#execution-limits). | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
+| `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | **Implemented** | Regeneration attempts after the first validation failure; at most 1 + N validations. Malformed or intent-invalid regenerated JSON spends a round without validation; provider/boundary/cancellation errors and persistent continuation step-ID conflicts can stop earlier. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | **Implemented** | Byte limit on encoded correction context added to a selected phase prompt. The effective value must be greater than zero when validated; environment handling follows the selected configuration-resolution mode. Omitted prior evidence is marked; failure to fit required feedback stops preparation. Not a whole-prompt/token limit. | [orchestration/plan_attempt.go](../../orchestration/plan_attempt.go) |
 
 **How Iterative Planning Works:**
 
@@ -1397,13 +1507,13 @@ config.ResultDistill = orchestration.ResultDistillConfig{
 ### Example
 
 ```bash
-# For long-running AI workflows
+# Base HTTP timeout per tool/agent call; enclosing request deadlines still apply
 export TRUVAG3_ORCHESTRATION_TIMEOUT=5m
 
 # For high-concurrency execution
 export TRUVAG3_EXECUTION_MAX_CONCURRENCY=10
 
-# For steps that need more time (e.g., large API responses)
+# Execution allowance added to the HITL timeout for delegated orchestrator calls
 export TRUVAG3_EXECUTION_STEP_TIMEOUT=180s
 
 # For step retry backoff tuning (exponential backoff between retries)
@@ -1467,6 +1577,12 @@ export TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD=0
 ---
 
 ## LLM Debug Configuration
+
+The removed `TRUVAG3_LLM_DEBUG_REDIS_DB` and
+`TRUVAG3_LLM_DEBUG_KEY_PREFIX` are rejected when nonempty by owning Redis LLM
+recorder/debug-store constructors. Use the canonical DB-0 deployment namespace
+or typed keyspace option; empty values are absent, not a request for a legacy
+key layout. New completion fields reuse existing enablement/retention settings.
 
 Configure LLM debug payload storage for debugging orchestration issues. This feature captures full LLM request/response payloads to help diagnose planning failures, parse errors, and unexpected AI behavior.
 
@@ -1539,7 +1655,7 @@ Configure execution debug storage for DAG visualization and debugging. This feat
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | `false` | **Implemented** | Enable/disable execution debug storage | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_DEBUG_TTL` | `24h` | **Implemented** | Base retention for successful execution records; related-lineage promotion may extend it | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
-| `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Base retention for failed execution records; HITL approval windows and investigation extensions may retain them longer | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
+| `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Base retention when the execution result fails or request lifecycle is `failed`/`cancelled`, including post-tool synthesis failures with successful steps. Existing longer/persistent retention, HITL approval windows and investigation extensions may retain records longer | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX` | `truvag3:v1:default:execution-debug:` | **Generic provider only** | Logical prefix for generic StorageProvider execution keys; rejected by selected Redis backends. Use `TRUVAG3_REDIS_NAMESPACE` or typed Redis keyspace options for Redis isolation. | [orchestration/execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | **Implemented** | Maximum executions returned by one framework conversation lookup | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | **Implemented** | Maximum conversation-index members scanned by one framework lookup, including stale members | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1910,7 +2026,7 @@ Configure the scheduled-execution subsystem: delayed and recurring task executio
 | `TRUVAG3_EXECUTOR_MAX_RETRIES` | `3` | **Implemented** | Max retry attempts per task before dead-lettering | [examples/scheduled-executor/worker.go](https://github.com/truvaagents/truva-g3/blob/main/examples/scheduled-executor/worker.go) |
 | `TRUVAG3_EXECUTOR_RETRY_BASE_DELAY` | `5s` | **Implemented** | Base delay for exponential backoff (Go duration) | [examples/scheduled-executor/worker.go](https://github.com/truvaagents/truva-g3/blob/main/examples/scheduled-executor/worker.go) |
 | `TRUVAG3_EXECUTOR_RETRY_MAX_DELAY` | `60s` | **Implemented** | Maximum backoff cap (Go duration) | [examples/scheduled-executor/worker.go](https://github.com/truvaagents/truva-g3/blob/main/examples/scheduled-executor/worker.go) |
-| `TRUVAG3_EXECUTOR_DISPATCH_TIMEOUT` | `15m` | **Implemented** | Per-request HTTP timeout for POST to target agent (Go duration). Must be ≥ the target agent's `TRUVAG3_ORCHESTRATION_TIMEOUT` | [examples/scheduled-executor/worker.go](https://github.com/truvaagents/truva-g3/blob/main/examples/scheduled-executor/worker.go) |
+| `TRUVAG3_EXECUTOR_DISPATCH_TIMEOUT` | `15m` | **Implemented** | Per-request HTTP timeout for POST to the target agent. Size it for that agent's entire synchronous request, including planning, phases, retries, synthesis and any blocking HITL wait. Matching only the target's per-call `TRUVAG3_ORCHESTRATION_TIMEOUT` is insufficient. | [examples/scheduled-executor/worker.go](https://github.com/truvaagents/truva-g3/blob/main/examples/scheduled-executor/worker.go) |
 
 Both components require `REDIS_URL` for the task queue and service registry. The scheduled-executor also requires `TRUVAG3_K8S_SERVICE_NAME` and standard framework variables for service registration.
 
@@ -1927,7 +2043,7 @@ export TRUVAG3_EXECUTOR_MAX_RETRIES=5
 export TRUVAG3_EXECUTOR_RETRY_BASE_DELAY=2s
 export TRUVAG3_EXECUTOR_RETRY_MAX_DELAY=30s
 # Dispatch timeout defaults to 15m — only lower this if your agents
-# complete orchestration faster (must be >= TRUVAG3_ORCHESTRATION_TIMEOUT).
+# complete the entire synchronous request faster, including all phases.
 ```
 
 ### Code-Level Override
@@ -2143,7 +2259,7 @@ export TRUVAG3_DEBUG=true
 export TRUVAG3_ITERATIVE_PLANNING_ENABLED=true
 export TRUVAG3_ITERATIVE_MAX_PHASES=5          # Max planning phases per request
 export TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS=200   # Max total steps across all phases
-export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s    # Max duration per phase
+export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s    # Configured phase budget; delegation may enlarge it
 ```
 
 ### Step Retry Backoff Variables (for Retry Tuning)
@@ -2186,7 +2302,7 @@ export TRUVAG3_AGENT_DOMAIN="infrastructure"
 
 # Activity compaction — LLM-powered event digests
 export TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL=fast     # Model for summarization/compaction
-export TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS=500  # Digest output budget
+export TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS=500  # Digest target; built-in generation allowance is 5x
 export TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT=200  # Max events sent to compactor
 export TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL=15  # Raw events after digest
 
@@ -2285,12 +2401,3 @@ To use these variables, you would need to either:
 - [AI Module README](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md)
 - [Telemetry README](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md)
 - [Auto-Discovery Guide](../operations/AUTO_DISCOVERY_GUIDE.md)
-
-### Builtin event-summary deadline
-
-`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT`: positive Go duration, default
-`2m`, resolved by `orchestration.BuildMemoryHooks`. Explicit empty, malformed,
-non-positive or overflowing values fail construction even when AI or memory is
-absent. Only the builtin AI invocation gets a child deadline; shorter enclosing
-contexts win. Custom summarizers are unchanged. Direct constructor users choose
-`WithSummarizerTimeout`; that layer does not read this environment variable.

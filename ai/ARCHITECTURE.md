@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.11
+**Version**: 1.13
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -93,8 +93,9 @@
 Every `openaiwire.RequestProfile` declares both its token-field spelling and
 its token-budget policy. `TokenBudgetExact` sends the portable maximum
 unchanged. `TokenBudgetScaleForReasoning` is valid only with
-`max_completion_tokens` and expands the value only for an explicit active
-reasoning effort; empty effort and `none` remain exact. Only verified OpenAI
+`max_completion_tokens` and expands the value for an effective active
+reasoning effort, including inherited client/chain defaults. Empty effective
+effort and `none` remain exact. Only verified OpenAI
 and Azure OpenAI reasoning profiles use scaling. A future compatible-provider
 profile starts from exact semantics unless its upstream contract proves
 otherwise.
@@ -116,6 +117,11 @@ selection, so Astra, Sol, Luna and suffixed snapshot IDs use the same
 `MatchFamilyBoundary` to match the family name or a hyphen-delimited suffix;
 the generic lookup has no GPT-6-specific branch. `ExactModel` takes precedence,
 empty-prefix rows remain provider catch-alls, and longest matching prefix wins.
+
+The exported compatibility helpers `BuildDraft` and `BuildRequestBody` also
+recognize GPT-6 through `IsReasoningModel`: they select the reasoning token field,
+budget policy and reasoning/sampling wire handling. This shared profile selection
+is not a substitute for the native adapter's final model-contract validation.
 The GPT-6 row opts in: it does not match `gpt-60` or vendor-prefixed IDs.
 Existing GPT-5/o-series rows retain their legacy prefix matching.
 It is a wire-contract classification, not proof that an arbitrary future ID
@@ -127,13 +133,15 @@ with `ai.WithModel`, `AIOptions.Model` or `AIRequest.Generation.Model`, or map a
 semantic alias using `TRUVAG3_OPENAI_MODEL_<ALIAS>`. Alias resolution retains its
 existing environment-override precedence. Client options and presence-aware
 `Set`/`Omit` values still control reasoning, output format and token budgets.
-The existing multiplier applies only to explicitly active reasoning effort;
-omitted effort and `none` keep the exact token budget. No new effort is imposed.
+The existing multiplier applies to effective nonempty reasoning effort other
+than `none`, including inherited client/chain defaults. A call that supplies no
+effort can therefore still trigger scaling. Empty effective effort and `none`
+keep the configured token budget unmultiplied. No new effort is imposed.
 
 **Known budget limitation:** the adapter does not enforce per-model output
-ceilings. The default multiplier of five applies equally to every explicit
-active effort, so a 30,000-token budget becomes 150,000, exceeding the currently
-documented 128,000-token output limit of Astra, Sol and Luna. Applications can
+ceilings. The default multiplier of five applies equally to every effective
+active effort, explicit or inherited, so a 30,000-token budget becomes 150,000,
+exceeding the currently documented 128,000-token output limit of Astra, Sol and Luna. Applications can
 select multiplier one through `WithReasoningTokenMultiplier(1)` or
 `WithChainReasoningTokenMultiplier(1)` and choose an appropriate total budget;
 `AIRequestReport.EffectiveMaxTokens` records the final wire value. This is not
@@ -195,8 +203,12 @@ The codec validates both before policy evaluation and after it. Thus explicit
 temperature with active reasoning can fail at draft construction before a rule
 can remove it. The `none`-effort route reaches the sampling rule; inherited active
 reasoning sampling is already omitted by the codec. Existing pre-policy guards
-remain unchanged. Native OpenAI and unmatched routes keep their behavior and
-policy fingerprints. Application rules/middleware still own optional routing
+remain unchanged. The scoped sampling rule leaves native OpenAI and unmatched
+routes unchanged and adds no rule identity to their policy fingerprints.
+Separately, the codec surface version `openai-chat-completions-v2` and
+`completion-v2` profile identity change fingerprints for adapters using that
+codec; this release does not preserve their previous v1 identities.
+Application rules/middleware still own optional routing
 preferences; protected privacy and required-parameter settings remain enforced.
 
 OpenAI-compatible and direct Azure (classic/v1) adapters classify only unsupported
@@ -217,7 +229,26 @@ whitespace, `[DONE]`, terminal finish choices, and usage-only trailing chunks.
 One event is limited by the resolved `AIConfig.SSEEventMaxBytes` value (1 MiB
 by default); malformed, oversized, read-failed, or prematurely terminated
 streams fail explicitly. A failure is joined with
-`ErrStreamPartiallyCompleted` only after content has been delivered.
+`ErrStreamPartiallyCompleted` only after a final or reasoning channel has been
+delivered. Either channel prevents same-provider replay and chain failover.
+
+The compatible codec preserves provider finish reasons and separates answer
+`Content` from `ReasoningContent` by default. Empty final text stays empty, even
+when reasoning exists; a `length` finish is evidence, not an automatic domain
+failure or an instruction to retry. `WithReasoningContentFallback(true)` (or
+`WithChainReasoningContentFallback(true)`) explicitly restores the old buffered
+substitution/stream concatenation, marked `reasoning_fallback` or `mixed`.
+Direct codecs use `Config.ReasoningContentFallback`. Both modes retain separate
+reasoning and exact finish facts and vary the response-policy cache fingerprint.
+The stock surface is `openai-chat-completions-v2`; hosted/custom surfaces also
+include the completion policy in their profile identity. This is a behavioral
+option, not a new token limit. Other adapters can leave provenance unreported;
+the framework treats that as unknown rather than inventing `stop`/`final`.
+
+Logical AI spans expose bounded source, finish-reported/token-limit booleans and
+channel byte counts. Raw finish reasons and reasoning belong only in opt-in
+debug records, not logs, metric labels or baggage. The codec owns no retry,
+telemetry or application-success policy.
 
 Buffered and streaming in-band errors are decoded through narrow structural
 DTOs. The codec retains only numeric `code` and a normalized `error_type`
@@ -679,7 +710,7 @@ client, _ := ai.NewClient(
 
 `openai.openrouter` is a registered OpenAI-compatible alias. Built-in semantic
 aliases are catalog-owned because their concrete mappings can change without
-changing the architecture; the [provider catalog](providers/openai/catalog.go)
+changing the architecture; the [provider catalog](providers/openai/modelcatalog/catalog.go)
 and its contract tests are the source of truth. Exact OpenRouter model IDs pass
 through unchanged. Router models remain capability-conservative unless the
 catalog carries positive, offline-enforced evidence for the requested portable
@@ -932,7 +963,8 @@ dependency, lifecycle, ordering, and classification contracts they must obey.
 
 ### Per-Provider Retry Budget
 
-OpenAI-compatible clients use the additive `ExecuteWithRetryDecoded` composition
+The `ai/providers/openai` implementation and its registered aliases (including
+OpenRouter) use the additive `ExecuteWithRetryDecoded` composition
 seam: one existing base loop owns the budget for both transport and decoded API
 failures. The provider supplies `ResponseAttemptDecoder`, returning result,
 normalized error, an explicit **same-provider** retry decision and a normalized
@@ -1919,6 +1951,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.13 | 2026-10-04 | Additive completion facts, separate final/reasoning channels by default, explicit legacy compatibility, response-policy fingerprints and reasoning-channel no-replay |
 | 1.12 | 2026-09-30 | Opt-in decoded-attempt composition shares one provider retry budget; OpenAI-compatible adoption, transport-only adapter compatibility, per-attempt usage/status and stream no-replay boundaries |
 | 1.11 | 2026-09-28 | Scoped OpenRouter Luna metadata/sampling compatibility using the existing policy engine; documented pre-policy validation boundary; inherited-default reasoning omission diagnostics and report parity for OpenAI-compatible and direct Azure adapters |
 | 1.10 | 2026-09-26 | Added native GPT-6 family compatibility and post-policy validation, declarative family-boundary capability matching, developer overrides, token-ceiling limitations, prompt-cache migration guidance, and bounded three-model live-verification evidence |

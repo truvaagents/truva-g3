@@ -386,7 +386,7 @@ type FieldHint struct {
 While `InputSummary` tells the orchestrator what fields your tool **accepts**, `OutputSummary` tells it what fields your tool **returns**. This enables the orchestrator to:
 
 1. **Validate template references** — When a DAG plan references `{{step-1.response.data.analysis}}`, the orchestrator checks that `analysis` is a declared output field of the producing step's capability. Hallucinated field names are caught before execution.
-2. **Render return fields in LLM prompts** — The `FormatForLLM()` catalog output includes a "Return Fields" section per capability, giving the planner accurate knowledge of available outputs.
+2. **Render return fields in LLM prompts** — `FormatForLLM()` emits one compact `Return Fields: name:type, ...` line when fields exist, including when no top-level return type is set. Field descriptions and examples remain in catalog/API metadata; the built-in planner view does not render them. A `Returns: type - description` line is emitted only when the top-level return type exists. Display delimiters/control characters in field names/types are quoted without changing stored schema values.
 
 ```go
 // Capability with both InputSummary and OutputSummary
@@ -425,9 +425,9 @@ t.RegisterCapability(core.Capability{
 |-----------|---------|
 | **Match your response struct** | Field names must exactly match the JSON tags in your response struct |
 | **Required vs Optional** | Required = always present in every response. Optional = conditionally present (use `omitempty` fields) |
-| **Use `Example` for numeric types** | Helps the LLM understand value ranges (e.g., `Example: "0"` for exit codes) |
+| **Use `Example` for numeric types** | Documents value ranges in metadata/API (e.g., `Example: "0"` for exit codes). The built-in compact planner catalog omits example values; put essential semantics in the capability/input description or explicit agent guidance. |
 | **Top-level fields only** | Declare the top-level JSON keys. Nested object structures are not yet validated |
-| **No OutputSummary = passthrough** | If you omit OutputSummary, template references to your output fields are allowed without validation (backwards compatible) |
+| **No available output fields = field-check passthrough** | Validation uses catalog `Returns.Fields`, which may come from the HTTP catalog or `OutputSummary` enrichment. Omitting `OutputSummary` does not disable existing catalog fields. Only when no usable fields are available is the field-name check skipped; known-step and dependency validation still apply. |
 
 ### Writing Effective Descriptions
 
@@ -776,7 +776,7 @@ func (t *YourTool) sendError(rw http.ResponseWriter, message string, status int,
         Error: &core.ToolError{
             Code:      code,
             Message:   message,
-            Retryable: status >= 500,
+            Retryable: status >= 500, // Conservative default: local 4xx errors refuse correction
         },
     }
     json.NewEncoder(rw).Encode(response)
@@ -1709,7 +1709,29 @@ curl http://localhost:8081/api/registry
 
 #### Upstream Error Handling
 
-The orchestrator routes errors by HTTP status code — **400s** go to the LLM error analyzer for parameter correction, **429/5xx** trigger resilience retry, and **401/403** fail immediately. If your tool wraps an upstream 400 as 502, the orchestrator retries with the same broken parameters instead of fixing them.
+For a condition your tool has identified as safely correctable, opt in explicitly
+at that condition's handler (not for every 4xx):
+
+```go
+// This branch has already identified a correctable input-validation failure.
+rw.Header().Set("Content-Type", "application/json")
+rw.WriteHeader(http.StatusBadRequest)
+json.NewEncoder(rw).Encode(core.ToolResponse{
+    Success: false,
+    Error: &core.ToolError{
+        Code: "INVALID_INPUT", Category: core.CategoryInputError,
+        Message: "The supplied value does not match the documented input format",
+        Retryable: true,
+        Details: map[string]string{"hint": "Supply the required format described by the capability"},
+    },
+})
+```
+
+Permission is not a retry guarantee: terminal statuses, approved/exact bindings,
+capability type, correction configuration and budgets still apply. The generic
+`sendError` template above deliberately refuses correction for local 4xx errors.
+
+The orchestrator first honors explicit retry refusal. Eligible non-transient 4xx errors can reach parameter correction; 408/429/5xx can trigger unchanged-input step retry; 401/403/405 stop immediately. `ClassifyUpstreamError` returns `Retryable:false` for recognized upstream input errors, so those stop before correction unless the tool deliberately grants permission for a specific correctable condition. Misreporting a 400 as 502 can cause repeated unchanged requests rather than correction.
 
 ```go
 // ❌ WRONG: All upstream errors become 502
@@ -1725,7 +1747,7 @@ t.sendUpstreamError(rw, "API call failed: "+safeError, info)
 
 > **Important: Error Message Format Contract**
 >
-> `ClassifyUpstreamError` uses the regex `(?:status|error|code)[:\s]+(\d{3})` to extract upstream HTTP status codes. Your API client error messages **must** include one of the keywords `status`, `error`, or `code` followed by a colon/space and the 3-digit HTTP status code. If the regex doesn't match, the error defaults to 502/SERVICE_ERROR and the orchestrator will pointlessly retry instead of routing to the LLM error analyzer.
+> `ClassifyUpstreamError` uses the regex `(?:status|error|code)[:\s]+(\d{3})` to extract upstream HTTP status codes. Include one of those keywords followed by a colon/space and the three-digit status. Without a match it returns retryable 502/SERVICE_ERROR, which permits unchanged retry; it cannot recognize an input failure from prose alone.
 >
 > ```go
 > // ✅ CORRECT — these all match the regex:
@@ -1740,7 +1762,7 @@ t.sendUpstreamError(rw, "API call failed: "+safeError, info)
 > ```
 >
 > For business logic errors (HTTP 200 but empty/invalid data), use the same pattern:
-> `fmt.Errorf("API error 404: invalid symbol or no data available")` — this routes to the LLM error analyzer which can suggest corrected parameters.
+> `fmt.Errorf("API error 404: invalid symbol or no data available")` — the classifier returns HTTP 400 with retry refusal. Grant correction permission only if the tool can distinguish a safely correctable input from a genuine absence of data.
 
 ### Performance
 
@@ -2416,19 +2438,22 @@ type ToolError struct {
     Code      string        `json:"code"`      // Error code (e.g., "INVALID_REQUEST", "API_ERROR")
     Message   string        `json:"message"`   // Human-readable message
     Category  ErrorCategory `json:"category"`  // Classification for orchestrator routing
-    Retryable bool          `json:"retryable"` // Permission to retry with corrected input
+    Retryable bool          `json:"retryable"` // Permission for policy-eligible same-step retries
     Details   map[string]string `json:"details,omitempty"` // Additional context (e.g., "retry_after", "hint")
 }
 ```
 
-**Note:** Some tools (like stock-market-tool) return raw JSON responses without the `core.ToolResponse` wrapper. Both patterns work, but using `core.ToolResponse` provides more consistency for error handling.
+**Note:** Raw JSON success responses can be consumed without `core.ToolResponse`. Structured retry permission is recognized only in an error envelope with `success:false` and an object-valued `error`; a top-level `retryable` field in arbitrary JSON is not that contract.
 
-`Retryable:false` forbids executor-local semantic correction. The field has no
-`omitempty`: leaving it unset in Go still emits an explicit refusal. Set true
-only for errors where a corrected request is safe, with useful bounded hints.
-The executor retains separate transient HTTP retry handling and never resends a
-non-transient 4xx unchanged. Later planner recovery is possible but not guaranteed
-when iterative planning is disabled or its budget is exhausted.
+`Retryable:false` stops all executor-local retries, including unchanged transient
+retries and semantic correction. The field has no `omitempty`: leaving it unset
+in Go still emits an explicit refusal. Set true when retry is safe; this permits,
+but does not force, the executor's status- and budget-dependent retry policy.
+Transient HTTP 408/429/5xx retries preserve admitted inputs. Eligible
+non-transient 4xx may receive a corrected request, but are never resent unchanged.
+Supply useful bounded correction hints where appropriate. Later planner recovery
+is separate and is not guaranteed when iterative planning is disabled or its
+budget is exhausted.
 
 **Error response helpers:** Every tool should define two error helpers — `sendError` for local validation errors and `sendUpstreamError` for upstream API failures. See [Step 4: Implement Handlers](#6-step-4-implement-handlers) for the implementation pattern and [Best Practices: Error Handling](#error-handling) for when to use which.
 

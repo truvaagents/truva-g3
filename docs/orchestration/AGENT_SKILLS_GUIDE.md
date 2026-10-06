@@ -39,6 +39,7 @@ and Registry Viewer workflows.
 - [11. Skills management lifecycle](#11-skills-management-lifecycle)
 - [12. Registry Viewer](#12-registry-viewer)
 - [13. Observability](#13-observability)
+  - [13.5 Built-in runtime diagnostic codes](#135-built-in-runtime-diagnostic-codes)
 - [14. Kubernetes and multi-replica operations](#14-kubernetes-and-multi-replica-operations)
 - [15. Testing skills](#15-testing-skills)
 - [16. Troubleshooting](#16-troubleshooting)
@@ -2701,7 +2702,10 @@ orchestration.skills.admin.operation.duration_ms
 ```
 
 Metric labels use bounded dimensions such as module, stage, boundary, outcome,
-content kind, selector kind, and prompt kind. Skill names, versions, request
+content kind, selector kind, and prompt kind. Resource resolution reports `empty`
+when it records no new selection; `omitted` instead identifies optional selection
+skipped with a diagnostic. Neither means that a tool executed. Other outcomes
+retain their success/failure contract. Skill names, versions, request
 IDs, error text, and backend URLs do not become labels.
 
 Useful operational questions include:
@@ -2756,6 +2760,44 @@ retention (`TRUVAG3_EXECUTION_DEBUG_TTL` and
 store's retention (`TRUVAG3_LLM_DEBUG_TTL` and
 `TRUVAG3_LLM_DEBUG_ERROR_TTL`). Tune those existing stores rather than adding a
 separate skill-evidence retention mechanism.
+
+### 13.5 Built-in runtime diagnostic codes
+
+Read `Code` together with `Action`, boundary, phase and the load/admission
+outcome in the stored skill execution evidence. A code alone does not establish
+that the request failed. The same underlying condition can omit optional
+content or fail admission of required content. Integrity-specific codes also
+appear in content-load `DiagnosticCode` fields.
+
+| Codes | What to investigate |
+|---|---|
+| `skill_registry_unavailable` | Candidate resolution failed; required candidates fail the request, while optional candidates can be omitted |
+| `skill_candidate_result_missing`, `skill_candidate_result_invalid` | Registry result is absent or inconsistent with the requested candidate |
+| `skill_domain_mismatch`, `skill_required_candidate_unavailable` | Binding/domain eligibility or required candidate availability; the recorded action distinguishes enforced failure from a configured cross-domain allowance |
+| `skill_binding_revoked`, `skill_version_unavailable` | Resume could not retain the approved pinned binding/version |
+| `skill_resume_cache_context_changed` | Resume invalidated cached selector context rather than blindly reusing it |
+| `skill_trusted_activation_ineligible`, `skill_trusted_resource_ineligible` | A trusted selection named something outside its eligible catalog |
+| `skill_activation_policy_failed`, `skill_activation_policy_invalid` | Custom activation policy failed or returned an invalid decision |
+| `skill_activation_selection_failed`, `skill_activation_selection_invalid` | Activation model invocation or strict decision validation failed |
+| `skill_resource_selection_failed`, `skill_resource_selection_invalid` | Resource model invocation or strict decision validation failed |
+| `skill_resource_selection_timeout` | Resource selection exceeded an attempt deadline or returned a deadline error; inspect attempt action and terminal admission outcome |
+| `skill_ai_request_feature_unsupported` | The chosen client cannot honor a requested selector feature |
+| `skill_activation_catalog_budget_exceeded`, `skill_resource_catalog_budget_exceeded` | The eligible catalog exceeded its configured count/token bounds before selection |
+| `skill_active_limit_exceeded`, `skill_budget_exceeded` | Active-skill count or projected instruction budget prevented admission |
+| `skill_resource_limit_exceeded`, `skill_resource_budget_exceeded` | Resource count or projected resource-content budget prevented admission |
+| `skill_manifest_load_failed`, `skill_manifest_hash_mismatch` | Pinned manifest could not be loaded or its bytes failed integrity verification |
+| `skill_resource_load_failed`, `skill_resource_hash_mismatch` | Selected resource could not be loaded or its bytes failed integrity verification |
+| `skill_content_omitted` | A later projection omitted content; inspect the boundary and reason rather than assuming it was never loaded |
+| `skill_token_counter_fallback` | Prompt estimation used its documented fallback after token counting failed |
+
+For resource attempt timeouts, `Action=retry` or `attempt_failed` describes an
+attempt. The terminal `Action=optional_resource_selection_skipped` describes
+one admission omission, and the resource-resolution span reports `omitted`.
+Count the terminal admission actions rather than summing attempt diagnostics.
+Parent request cancellation propagates as an error instead of being relabelled
+as an optional omission. Activation selection has no equivalent per-attempt
+deadline setting. Management HTTP errors such as `skill_audit_not_recorded`
+are separate from these runtime diagnostics.
 
 ---
 

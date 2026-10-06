@@ -97,29 +97,42 @@ The following example demonstrates the principles above using shared memory as t
 
 ```go
 // Layer 1 — Convenience: most developers (minimal code, env-var-driven)
-backends, _ := memory.NewSharedBackends(redisClient, logger)                         // module creates primitives
+backends, err := memory.NewSharedBackends(redisClient, logger)                       // module creates primitives
+if err != nil {
+    return fmt.Errorf("configure shared memory backends: %w", err)
+}
 hooks, coord, err := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger)  // builds hooks
 if err != nil {
     return fmt.Errorf("configure memory hooks: %w", err)
 }
 deps.PipelineHooks = hooks                                                           // application composes
+deps.ActivityCoordinator = coord
 // Numeric tuning via env var: TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL=10m
 
-// Layer 2 — Customisation: swap behaviour without dropping convenience
-hooks, coord, err := orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger,
+// Layer 2 — Alternative composition: replace the hooks built above
+hooks, coord, err = orchestration.BuildMemoryHooks(backends.ToDeps(), aiClient, logger,
     orchestration.WithMemoryEntityExtractor(myExtractor),  // behavioural plug (interface)
 )
 if err != nil {
     return fmt.Errorf("configure memory hooks: %w", err)
 }
 
-// Layer 3 — Direct construction: full control over every option
-enrichHook, _ := orchestration.NewMemoryEnrichmentHook(episodic, coordinator, name, domain, opts...)
-deps.PipelineHooks = []core.PipelineHook{enrichHook}
+deps.PipelineHooks = hooks
+deps.ActivityCoordinator = coord
 
-// ❌ Bad: Monolithic constructor that bundles multiple concerns
-agent := framework.NewSmartAgent(config)  // hides composition — what hooks? what order?
-agent.Run()                                // no way to replace one part without escaping entirely
+// Layer 3 — Alternative direct construction: full control over every option
+enrichHook, err := orchestration.NewMemoryEnrichmentHook(episodic, coordinator, name, domain, opts...)
+if err != nil {
+    return fmt.Errorf("configure memory enrichment: %w", err)
+}
+deps.PipelineHooks = []core.PipelineHook{enrichHook}
+```
+
+Counterexample (pseudocode, not a framework API):
+
+```text
+agent = NewSmartAgent(config)  // hides composition — what hooks? what order?
+agent.Run()                    // no independent behavior replacement
 ```
 
 **Framework is domain-agnostic.** A corollary of "each module does its job" — the framework provides indexing primitives, storage interfaces, and hook contracts; **domain semantics come from the agent or its tools**. The framework has no opinion about what counts as a "pod", "order", "flight", or "patient". Hardcoding domain-specific patterns into framework defaults (e.g., a regex extractor that matches K8s pod names) is a layering violation: the framework default leaks into every agent regardless of whether it's actually a K8s agent. The right pattern is a framework-level no-op default that the agent or tool overrides with domain-aware logic. See [orchestration/ARCHITECTURE.md:367](orchestration/ARCHITECTURE.md#L367) for the same principle applied to parameter resolution.

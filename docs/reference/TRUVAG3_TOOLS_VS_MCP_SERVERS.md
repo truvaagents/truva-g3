@@ -62,7 +62,7 @@ Quite a lot, actually:
 
 2. **Distributed tracing.** Every TruvaG3 tool call carries OTel trace context end-to-end. MCP has no concept of this.
 
-3. **Smart error handling.** TruvaG3's executor looks at error categories and retryable flags to decide what to do next. MCP just says "it failed" with a string.
+3. **Smart error handling.** TruvaG3's executor routes retries using HTTP status and structured retry permission. Error categories describe the failure and can inform model analysis; they do not independently route executor retries.
 
 4. **Per-tool scaling.** TruvaG3 tools are independent deployments. MCP bundles tools into a single server process.
 

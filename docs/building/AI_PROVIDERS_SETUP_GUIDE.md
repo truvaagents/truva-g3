@@ -373,6 +373,29 @@ are rejected rather than emitted beside canonical fields. OpenRouter's top-level
 request-body `session_id` controls upstream sticky routing; it is unrelated to
 framework `session_id` baggage used for application correlation.
 
+The adapter uses reviewed capability rows, not live model discovery, to validate
+portable options. The current exact OpenRouter rows are:
+
+| Exact model ID | JSON object | JSON schema | Portable reasoning |
+|---|---|---|---|
+| `deepseek/deepseek-v4.1-flash` | Yes | Not declared | Not declared |
+| `z-ai/glm-5.3-flash` | Yes | Not declared | Not declared |
+| `openai/gpt-5.6-luna` | Yes | Yes | OpenAI-style |
+| `openai/gpt-6-luna` | Yes | Yes | OpenAI-style |
+
+An undeclared feature is not automatically granted to other model IDs or
+endpoints. Explicit unsupported portable options fail preparation; protected
+`require_parameters` filters upstream endpoint eligibility when used. The exact
+GPT-6 Luna route also has a built-in temperature-removal rule: default
+`requestpolicy.CompatibilityCompatible` permits the adjustment (including
+explicit values) and reports it; `requestpolicy.CompatibilityStrict` requires
+application acknowledgement for an explicit value. This reuses the policy engine
+rather than changing caller prompts.
+Unsupported reasoning inherited only from a client/chain default is omitted
+with a recorded adjustment and Debug diagnostic; explicit unsupported requests
+retain their error/warning contract. The capability table is an adapter
+contract, not a guarantee of current endpoint availability or live certification.
+
 The built-in `default`, `smart`, and `code` aliases resolve to routers, so
 requests using them are not AI-output-cache eligible. `fast` resolves to the
 live-verified concrete `openai/gpt-5.6-luna` model and can be cache-eligible
@@ -428,11 +451,16 @@ No code changes needed. The proxy gets all Groq traffic for logging/monitoring.
 ### The Model Name Problem
 
 Every AI provider has different model names:
-- OpenAI: `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`
+- OpenAI: `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`; native GPT-6 Astra/Sol/Luna are also supported explicitly
 - Anthropic: `claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`
 - Groq: `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`
 
 If you hardcode model names, switching providers means changing code everywhere. And when providers release new models? More code changes.
+
+Native GPT-6 support does not change the existing alias defaults. See the
+[AI module's family compatibility and override guide](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#gpt-6-family-support)
+for effort/sampling restrictions, explicit model selection and verification
+scope. Native OpenAI and OpenRouter are separate capability routes.
 
 **Model aliases solve this** by providing portable names:
 
@@ -1726,7 +1754,7 @@ ignored; disable single-client retries explicitly with `WithMaxRetries(0)`.
 |----------|---------------------|
 | Simple queries with standard models (GPT-4, Claude) | 60s |
 | Complex prompts with standard models | 120s |
-| Reasoning models (GPT-5, o1, o3, o4) | 180s (default) |
+| Reasoning models (GPT-5, GPT-6, o1, o3, o4) | 180s (default) |
 | Orchestration/plan generation | 240-300s |
 | Very complex multi-step reasoning | 300s+ |
 
@@ -1761,12 +1789,27 @@ Notes:
 - Anthropic does not expose this portable control. A request-aware `ReasoningEffort` set returns `core.ErrAIRequestFeatureUnsupported` instead of being silently dropped.
 - There is currently no env-var shortcut for `ReasoningEffort`; use code or orchestration overrides.
 
-OpenAI reasoning models (GPT-5, o1, o3, o4) require special handling because they:
-1. **Reject `max_tokens`** - Must use `max_completion_tokens` instead
-2. **Reject `temperature`** - Only default value (1) is supported
-3. **Count internal reasoning tokens** - Chain-of-thought tokens are counted but NOT returned
+OpenAI reasoning profiles (GPT-5, GPT-6, o1, o3 and o4) require model-specific
+translation:
 
-The framework handles #1 and #2 automatically. For #3, a **token multiplier** ensures sufficient tokens for both reasoning and visible output.
+1. **Completion budget** — The OpenAI reasoning wire profile uses `max_completion_tokens`.
+2. **Sampling controls** — Active/default reasoning restricts sampling; support with effort `none` depends on the model. Native GPT-6 Sol/Luna support `none`, while Astra does not. Native GPT-6 validation and the exact OpenRouter Luna adaptation rule have separate contracts.
+3. **Reasoning consumption** — Internal reasoning can consume the completion budget. Available provider-reported reasoning is returned separately as `ReasoningContent`; it is not automatically substituted for final answer text.
+
+The adapter selects the wire profile and validates supported controls. On a
+scaling profile, the token multiplier reserves additional budget when the
+effective effort is nonempty and not `none`, including an inherited client/chain
+effort. Empty effective effort and `none` do not multiply it. This is a budget
+allocation, not a guarantee of visible answer length or provider acceptance.
+
+The shared `openaiwire.IsReasoningModel` helper now recognizes names exactly at
+the GPT-6 family boundary (`gpt-6` or `gpt-6-*`, case-insensitive; not `gpt-60`
+or `vendor/gpt-6-sol`). Direct Azure adapters use it on the resolved **semantic
+model**. Azure v1 selects its reasoning completion/sampling profile; Azure
+classic rejects reasoning-model requests because it has no verified reasoning
+surface contract. Changing only the route's deployment name does not necessarily change
+the semantic model classification. This recognition does not certify that a
+deployment exists or supports a particular effort.
 
 #### The Token Multiplier Problem
 
@@ -1820,7 +1863,7 @@ chainClient, err := ai.NewChainClient(
 | Complex analysis or planning | 6-8x |
 | Multi-step orchestration plans | 8x+ |
 
-> **Note**: The token multiplier only affects OpenAI reasoning models (GPT-5, o1, o3, o4). Standard models (GPT-4, Claude, etc.) are unaffected.
+> **Note**: Multiplication applies only to scaling reasoning profiles (including native GPT-5, GPT-6, o1, o3 and o4) with effective nonempty effort other than `none`. Client/chain defaults count. Standard non-scaling profiles are unaffected; there is no per-model output ceiling clamp. Choose a total budget accepted by the model.
 
 ### Orchestration Model Overrides
 

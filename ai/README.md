@@ -18,6 +18,7 @@ OpenAI-compatible adapters, and an extensible provider architecture.
 8. [Chain Client (Failover)](#8-automatic-failover-with-chain-client)
 9. [Model Aliases](#9-model-aliases---portable-model-names)
 10. [Supported Providers](#10-supported-providers)
+    - [OpenRouter model compatibility](#openrouter-model-compatibility)
 11. [How It Works](#11-how-it-works)
 12. [Core Concepts](#12-core-concepts-explained)
 13. [Architecture](#13-how-it-fits-in-truvag3)
@@ -399,11 +400,11 @@ single-client default of `3`; `ClientEntry` retains the injected client's policy
 Override deliberately with `WithChainMaxRetries` (legacy chain) or
 `WithMaxRetries` on an independently constructed entry.
 
-OpenAI-compatible adapters share this budget across transport/HTTP failures and
+The `ai/providers/openai` adapter and its registered aliases share this budget across transport/HTTP failures and
 classified decoded provider failures, including HTTP-200 error envelopes. A
 recovered provider call does not re-run planning or tool execution. Permanent,
 unmapped-without-status and partial-stream failures are not newly retried.
-Other adapters retain their transport-only retry contract unless they explicitly
+Direct Azure classic/v1 and other adapters retain their transport-only retry contract unless they explicitly
 adopt `providers.BaseClient.ExecuteWithRetryDecoded`.
 
 OpenRouter's classifier also deliberately narrows retries of actual non-HTML
@@ -1195,8 +1196,9 @@ through a scoped request rule before final model validation. Presence-aware
 `OmitAIParameter` explicitly clears inherited portable options.
 
 All three models accept `low`, `medium`, `high`, `xhigh` and `max`; only Sol and
-Luna accept `none`. Empty effort leaves the provider default unchanged and
-does not activate the framework token multiplier. With active/default
+Luna accept `none`. Empty effective effort after client/chain inheritance leaves
+the provider default unchanged and does not activate the framework token multiplier.
+An inherited active effort does activate scaling. With active/default
 reasoning, remove `temperature`, `top_p`, `top_logprobs` and `logprobs` (default
 temperature is already omitted by the codec). Invalid final combinations fail
 locally, including ones introduced by application policy; overrides do not
@@ -1218,10 +1220,11 @@ those routes.
 
 #### GPT-6 Token Budgets
 
-With explicit active reasoning effort, the native adapter applies its existing
+With effective nonempty reasoning effort other than `none` (including a client
+or chain default), the native adapter applies its existing
 default token multiplier of five: `WithMaxTokens(30000)` becomes
 `max_completion_tokens: 150000`. The same multiplier applies to `low` through
-`max`; omitted effort and `none` keep the original budget. The adapter currently
+`max`; empty effective effort and `none` keep the original budget. The adapter currently
 does **not** clamp or locally enforce model-specific output ceilings. Astra,
 Sol and Luna each document a 128,000-token output limit as of 2026-09-26.
 See the official [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra),
@@ -1347,7 +1350,7 @@ Vertex-hosted Claude are first-class request-aware profiles, not generic
 `OPENAI_BASE_URL` recipes; use the
 [hosted-cloud recipes](../docs/building/CUSTOM_AI_PROVIDER_GUIDE.md#choose-a-hosted-cloud-recipe).
 
-### Auto-Detection Priority
+### OpenRouter model compatibility
 
 OpenRouter also recognizes the exact model `openai/gpt-6-luna` independently of
 native OpenAI support. Its built-in sampling rule removes temperature through
@@ -1359,10 +1362,7 @@ No framework fast/default alias is changed. Metadata and offline tests do not
 prove a live eligible endpoint or completion quality. See the [compatibility
 and pre-policy validation boundary](ARCHITECTURE.md#scoped-openrouter-compatibility-and-default-adaptation).
 
-Client/chain-default reasoning effort is omitted with a Debug adaptation record
-when a selected model does not support it. Explicit unsupported portable effort
-still fails and legacy request-level degradation still warns. The request report
-retains the omission, including for direct Azure classic/v1 clients.
+### Auto-Detection Priority
 
 When you use `ai.NewClient()` without specifying a provider, the module checks for available services in this order:
 
@@ -1952,6 +1952,11 @@ was present in the final provider body, `Omit` means it was absent, and
 `Inherit` means the adapter could not report it reliably. The report never
 contains prompt text, credentials, or raw request bodies.
 
+Client/chain-default reasoning effort is omitted with a Debug adaptation record
+when a selected model does not support it. Explicit unsupported portable effort
+still fails and legacy request-level degradation still warns. The request report
+retains the omission, including for direct Azure classic/v1 clients.
+
 Use `NewChain` with `ProviderEntry` and `ClientEntry` when failover entries need
 independent policy, credentials, routes, or client implementations. The legacy
 `NewChainClient` remains supported for a homogeneous option set.
@@ -1967,12 +1972,38 @@ the streaming capability; callers must check the interface before use.
 
 ### Core Streaming Types
 
+OpenAI-compatible decoding keeps final answers separate from provider reasoning
+by default, even when the final answer is empty. Buffered `core.AIResponse` and
+stream chunks expose `ReasoningContent`, exact `FinishReason`, and
+`ContentSource` (`final`, `reasoning_fallback`, `mixed`; empty means unknown).
+These facts do not determine application success or add automatic retries.
+
+For applications that require legacy reasoning-as-answer behavior, use
+`ai.WithReasoningContentFallback(true)`,
+`ai.WithChainReasoningContentFallback(true)`, or the direct codec's
+`openaiwire.Config.ReasoningContentFallback`. This is a policy for compatible
+codec consumers, not a guarantee that every provider supports a reasoning
+channel. Both modes retain provenance and use distinct policy fingerprints.
+Once either channel is delivered to a streaming callback, retry/failover cannot
+transparently replay that stream. Exact text belongs in opt-in debug records;
+normal tracing records only bounded completion facts.
+
+A reasoning-only callback has nonempty `ReasoningContent` and empty `Content`
+under the default policy. Treat it as delivered stream data, not an empty-response
+failure; render only the appropriate channel for your application. The default
+OpenAI-wire stream decoder still labels such a chunk `ContentSource=final`:
+that label alone does not prove visible final-answer content exists. Inspect
+`Content` and `ReasoningContent` separately; opt-in reasoning fallback changes
+the provenance when reasoning is copied into answer content.
+
 ```go
 // From core/interfaces.go
 
 // StreamChunk represents a single chunk of streaming output
 type StreamChunk struct {
     Content      string                 // The text content of this chunk
+    ReasoningContent string             // Separate provider reasoning
+    ContentSource AIContentSource       // Provenance; empty means unknown
     Delta        bool                   // True for incremental chunks; false for the final chunk
     Index        int                    // Zero-based chunk index
     FinishReason string                 // Why generation stopped (e.g., "stop", "length")

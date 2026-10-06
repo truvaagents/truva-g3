@@ -591,7 +591,14 @@ For the views to show data, the underlying features have to be enabled in your c
 | HITL Interrupted | At least one agent must run the orchestration module with HITL enabled (`HITLConfig.Enabled: true` and a configured checkpoint store). See [HUMAN_IN_THE_LOOP_USER_GUIDE.md](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md). |
 | Execution DAG | The orchestrator must run with `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. This is **independent** of `TRUVAG3_LLM_DEBUG_ENABLED`; the DB 0 execution-debug and LLM-debug subspaces supply different evidence. Pipeline-hook diagnostics are stored with the execution record. Configure `JAEGER_UI_URL` only if the optional Trace browser link is wanted; Registry Viewer never queries Jaeger. |
 | Skills | The Registry Viewer must compose its skills backend and `SkillAdminHandler`; the bundled deployment uses the same topology and `TRUVAG3_REDIS_NAMESPACE` as runtime agents. Runtime skill evidence inside an execution also requires that agent to enable skills and `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true`. Full skill-bearing prompts require `TRUVAG3_LLM_DEBUG_ENABLED=true`. |
-| Memory | Agents must be wired with shared memory via `memory.NewSharedBackends(...)` and `orchestration.BuildMemoryHooks(...)`. See [AGENT_MEMORY_USER_GUIDE.md](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md). `TRUVAG3_AGENT_DOMAIN` must be set so the view has a domain to pick from in its dropdown. |
+| Memory | Agents need shared-memory backends/hooks. The Viewer must use the matching Redis namespace and include the agents' domain in its own `TRUVAG3_VIEWER_MEMORY_DOMAINS` list. Setting only the agent's `TRUVAG3_AGENT_DOMAIN` does not populate the Viewer's configured domain list. See [AGENT_MEMORY_USER_GUIDE.md](../memory-and-chat/AGENT_MEMORY_USER_GUIDE.md). |
+
+Persisted LLM interactions include available separate reasoning, finish reason
+and content source; these are provider facts, not success verdicts. Execution
+records separately carry request lifecycle and revision, so a failed request
+may contain successful delegated steps. Legacy records without lifecycle remain
+unknown. The Viewer is a consumer of those records; storage availability does
+not imply every field has its own rendered UI card.
 
 On the local kind cluster, **enablement varies per agent** because the env vars are independent and each example was originally written for its own purpose:
 

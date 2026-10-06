@@ -282,12 +282,20 @@ Phase 2 adds **structured field hints** to guide AI more precisely. This is the 
 
 ### What Is Phase 2?
 
-Phase 2 provides the AI with:
+Phase 2 exposes the following field hints as discovery metadata:
+
 - **Exact field names** (no guessing: `location` not `city`)
 - **Field types** (`string`, `number`, `boolean`, `object`, `array`)
 - **Examples** (showing valid values)
 - **Field descriptions** (what each field means)
 - **Required vs Optional** (which fields must be included)
+
+The built-in orchestration planner catalog renders input field names, types,
+requiredness and descriptions, but not example values. Output fields use compact
+`name:type` hints; their rich descriptions and examples remain metadata rather
+than planner text. A custom prompt builder can choose to include examples, as
+illustrated in [Agent Usage — Phase 2](#agent-usage---phase-2). Publishing an
+example value does not, by itself, put that value into the built-in prompt.
 
 ### Why Phase 2 Improves Accuracy
 
@@ -946,11 +954,11 @@ Step 1: search_products → {"query": "wireless headphones"}
 Step 2: create_report  → {"data": "{{step-1.response.data.products}}"}
 ```
 
-The orchestrator's `validateTemplatePaths` function checks that `products` is a declared field in `search_products`'s `OutputSummary`. If the LLM hallucinated a field name (e.g., `results` instead of `products`), the validation catches it and requests a corrected plan.
+The orchestrator's `validateTemplatePaths` function checks that `products` is a declared field in the capability's catalog `Returns.Fields`, supplied by the HTTP catalog or enriched from `OutputSummary`. If the LLM hallucinated a field name (e.g., `results` instead of `products`), the validation catches it and requests a corrected plan.
 
 **Key rules:**
 - Field names must exactly match your response struct's JSON tags
-- If you omit `OutputSummary`, template references pass through without validation (backwards compatible)
+- Omitting `OutputSummary` does not disable field validation if the catalog already supplies return fields. When no usable output fields are available, only the field-name check is skipped; known-step and dependency checks still apply.
 - Only top-level fields are validated; nested paths are not yet checked
 
 ### Step 3: Test Your Tool
