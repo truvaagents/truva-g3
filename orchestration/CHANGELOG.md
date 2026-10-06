@@ -15,7 +15,7 @@
   applies to hook-mutated plans. Same-phase/surplus `implicit_deps` are rejected.
   Preserve resolved defaults when customizing `IterativePlanning`; its validated
   regeneration-round and feedback-byte fields must remain positive.
-- Initial unknown-agent replacement parsing shares that recovery budget;
+- Initial unknown-agent replacement parsing uses the hallucination-recovery budget;
   continuation unknown-agent recovery has one regeneration attempt. Parse/intent
   failures during validation regeneration consume validation rounds.
 - Auto-wiring preserves source identity, declines conflicting matches and uses
@@ -28,7 +28,10 @@
 - Current memory views are `event-detail/v2-record-facts` and
   `historical-origin/v5-record-facts`; earlier v1/v3 entries below are historical.
   Invalid builder options now return construction errors. Negative activity
-  prompt limits are rejected; documented zero sentinels remain valid.
+  prompt limits are rejected. Documented direct-constructor zero sentinels remain
+  valid. Announcement environment values must be positive even though the direct
+  announcement-hook constructor accepts zero as its default of 10. The separately
+  documented zero-detail sentinel remains valid.
 
 ## Unreleased — planning and payload integrity baseline
 

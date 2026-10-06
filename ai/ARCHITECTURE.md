@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.13
+**Version**: 1.14
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -95,7 +95,9 @@ its token-budget policy. `TokenBudgetExact` sends the portable maximum
 unchanged. `TokenBudgetScaleForReasoning` is valid only with
 `max_completion_tokens` and expands the value for an effective active
 reasoning effort, including inherited client/chain defaults. Empty effective
-effort and `none` remain exact. Only verified OpenAI
+effort, explicit `OmitAIParameter[string]()` and `none` remain exact. Omission
+suppresses codec-default inheritance before budget/sampling preparation, not
+just during final wire-field removal. Only verified OpenAI
 and Azure OpenAI reasoning profiles use scaling. A future compatible-provider
 profile starts from exact semantics unless its upstream contract proves
 otherwise.
@@ -106,6 +108,10 @@ fingerprint. `AIRequestReport.EffectiveMaxTokens` is read from the final draft
 after policy evaluation and therefore records the actual wire value, including
 on later transport, provider-response, or decode failure paths that retain a
 prepared request report.
+
+Explicit-omission drafts additionally version their policy identity with
+`reasoning-omission-v1`, preventing reuse of cached output prepared under the
+old default-refill behavior. Inherited/set effort identities are unchanged.
 
 ### GPT-6 Family Compatibility and Developer Overrides
 
@@ -1951,6 +1957,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.14 | 2026-10-05 | Respect explicit reasoning-effort omission before codec-default budget/sampling preparation; version only omission identities and preserve final-wire budget reporting |
 | 1.13 | 2026-10-04 | Additive completion facts, separate final/reasoning channels by default, explicit legacy compatibility, response-policy fingerprints and reasoning-channel no-replay |
 | 1.12 | 2026-09-30 | Opt-in decoded-attempt composition shares one provider retry budget; OpenAI-compatible adoption, transport-only adapter compatibility, per-attempt usage/status and stream no-replay boundaries |
 | 1.11 | 2026-09-28 | Scoped OpenRouter Luna metadata/sampling compatibility using the existing policy engine; documented pre-policy validation boundary; inherited-default reasoning omission diagnostics and report parity for OpenAI-compatible and direct Azure adapters |

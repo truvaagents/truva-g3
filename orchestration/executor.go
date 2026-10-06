@@ -133,7 +133,7 @@ type SmartExecutor struct {
 	// Orchestrator steps may block on HITL approval (15+ min). The standard HTTP
 	// client timeout is too short for these calls. When set, a per-request context
 	// with this deadline is used instead of the shared httpClient.Timeout.
-	// Wired from config.ExecutionOptions.StepTimeout for orchestrator capabilities,
+	// Wired from config.HITL.DefaultTimeout + config.ExecutionOptions.StepTimeout,
 	// or overridden via SetOrchestratorStepTimeout.
 	orchestratorStepTimeout time.Duration
 
@@ -3390,7 +3390,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		// with different parameters when correction is permitted. An explicit
 		// retryable:false in a recognized failed-response envelope has already stopped the retry loop.
 		// HTTP Status Routing:
-		//   - 400, 404, 409, 422 → LLM Error Analyzer (might be fixable with different input)
+		//   - Other non-transient 4xx → LLM Error Analyzer, subject to correction gates
 		//   - 408, 429, 5xx      → Executor retry loop (same payload + exponential backoff)
 		//   - 401, 403, 405      → Fail immediately (auth/permission issues)
 		isOrchestrator := capabilitySchema != nil && capabilitySchema.Type == core.CapabilityOrchestrator
@@ -3426,7 +3426,9 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 				}
 				// Fall through to legacy error handling
 			} else if analysisResult == nil {
-				// nil result means delegate to resilience module (transient error)
+				// The analyzer returns nil for transient statuses. Current correction
+				// gates exclude those statuses, so this legacy branch is unreachable;
+				// retries are owned by this executor, not the resilience module.
 				if e.logger != nil {
 					e.logger.DebugWithContext(ctx, "Error delegated to resilience module", map[string]interface{}{
 						"operation":   "resilience_delegation",
@@ -3435,7 +3437,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 						"http_status": httpStatus,
 					})
 				}
-				// Continue with normal retry logic (same payload)
+				// Fall through to the executor's status and retry-budget checks.
 			} else if analysisResult.ShouldRetry {
 				// LLM determined this error is retryable
 				// This handles both:

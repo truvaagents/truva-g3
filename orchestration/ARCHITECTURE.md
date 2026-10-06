@@ -473,7 +473,9 @@ When Layer 1 leaves **required** parameters unmapped (names don't match), the `H
 
 #### Layer 3: Error Analysis (Post-Failure)
 
-When the HTTP call to a tool returns a 4xx error, the `ErrorAnalyzer` uses an LLM to inspect the error response and determine if parameters can be corrected.
+For an eligible non-transient 4xx error without explicit retry refusal, the
+`ErrorAnalyzer` can use an LLM to determine whether parameters can be corrected,
+subject to input protections and correction budgets.
 
 - Analyzes error message semantics (e.g., "invalid currency code")
 - Determines if the error is fixable (bad params) vs. permanent (resource not found)
@@ -2612,10 +2614,12 @@ export OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4318"
 export OTEL_SERVICE_NAME="orchestrator"
 
 # Optional - Configuration
-export TRUVAG3_ORCHESTRATOR_CACHE_ENABLED="true"
-export TRUVAG3_ORCHESTRATOR_CACHE_TTL="5m"
-export TRUVAG3_ORCHESTRATOR_MAX_CONCURRENCY="10"
-export TRUVAG3_ORCHESTRATOR_STEP_TIMEOUT="30s"
+export TRUVAG3_EXECUTION_MAX_CONCURRENCY="10"
+export TRUVAG3_EXECUTION_STEP_TIMEOUT="30s"
+# StepTimeout contributes to delegated orchestrator allowance together with
+# HITL.DefaultTimeout; it is not a standalone per-tool execution deadline.
+# The shared HTTP timeout starts at TotalTimeout and can be raised to that
+# delegation allowance. The enclosing request/phase context still bounds calls.
 ```
 
 ### Health Checks
@@ -3515,7 +3519,7 @@ rejected attempt's effective prompt/system, raw response and validated catalog;
 preserve planning feedback, retry budgets and deterministic diagnostic semantics.
 
 Version 1.42 (2026-10-02): consolidate the active iterative terminal example and
-carry latest parse failure through unknown-agent recovery using its existing
+carry latest parse failure through initial unknown-agent recovery using its existing
 budget and selected context. Preserve the phase fallback, validation and
 executor; add reasoned correction/exhaustion telemetry and regression coverage.
 

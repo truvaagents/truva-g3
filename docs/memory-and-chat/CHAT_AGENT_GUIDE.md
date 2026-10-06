@@ -620,7 +620,7 @@ func (t *TravelChatAgent) InitializeOrchestrator(discovery core.Discovery) error
     // These are important! AI calls can be slow.
     // If a tool takes too long, you don't want to hang forever.
     config.ExecutionOptions.TotalTimeout = 5 * time.Minute  // Overall limit
-    config.ExecutionOptions.StepTimeout = 120 * time.Second // Per-tool limit
+    config.ExecutionOptions.StepTimeout = 120 * time.Second // Added to HITL timeout for delegated orchestrator calls
 
     // === DOMAIN-SPECIFIC CONFIGURATION ===
     // Help the AI understand your domain's data types

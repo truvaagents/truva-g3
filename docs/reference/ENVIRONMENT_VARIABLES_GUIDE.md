@@ -1181,7 +1181,9 @@ When LLMs generate execution plans, JSON parsing may fail due to:
 Initial/continuation generation uses the parse-retry mechanism for these failures.
 Initial unavailable-agent replacements use the hallucination-recovery budget;
 validation-regeneration outputs instead spend validation rounds. A continuation
-unknown-agent recovery has only one regeneration attempt. These paths are distinct.
+unknown-agent recovery has only one regeneration attempt within that path; the
+outer phase loop may subsequently attempt fallback regeneration, subject to
+context and request-preparation success. These paths are distinct.
 
 The parse-retry mechanism provides error feedback to the LLM:
 

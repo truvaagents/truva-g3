@@ -1193,7 +1193,12 @@ extras (`WithExtra` / `AIOptions.Extra`), `WithRequestRules`,
 `WithRequestMiddleware` and per-call `AIRequest.Patches` retain their existing
 precedence. For example, an application can remove an inherited native `top_p`
 through a scoped request rule before final model validation. Presence-aware
-`OmitAIParameter` explicitly clears inherited portable options.
+`OmitAIParameter` explicitly clears inherited portable options. For reasoning
+effort this happens before token-budget calculation, including direct Azure v1:
+the codec does not multiply the budget using a default effort that was omitted.
+This leaves the provider's default reasoning behavior in control, unlike an
+explicit `none`. Omission drafts carry a versioned policy identity to prevent
+reuse of results prepared under the earlier default-refill behavior.
 
 All three models accept `low`, `medium`, `high`, `xhigh` and `max`; only Sol and
 Luna accept `none`. Empty effective effort after client/chain inheritance leaves

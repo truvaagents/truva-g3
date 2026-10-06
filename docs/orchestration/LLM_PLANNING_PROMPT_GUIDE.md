@@ -1677,12 +1677,14 @@ malformed replacements spend a round, and only parsed plans reach validation.
 That limit is a ceiling: a regenerated continuation with conflicting step IDs
 can fail immediately rather than consuming every remaining round. Missing
 explicit intent is a parse/intent failure. Initial/continuation generation uses
-plan-parse retries; initial unknown-agent replacements use that recovery budget;
+plan-parse retries; initial unknown-agent replacements use the hallucination-recovery budget;
 validation-regeneration outputs consume validation rounds. The call path, not
 the error category alone, determines the budget.
 
 The trace distinguishes `orchestrator.plan.normalized`,
-`orchestrator.plan_regeneration.selection`,
+`orchestrator.plan_regeneration.selection` (the initial/no-accumulated-results
+regeneration path; continuation regeneration instead records selection reuse on
+`llm.continuation_plan_regeneration.request`),
 `orchestrator.plan_validation.regeneration_parse_error`, and
 `orchestrator.plan_validation.exhausted`. Unavailable-agent replacement parsing
 also emits `llm.plan_generation.retry_parse_correction` and
@@ -1743,7 +1745,7 @@ For the complete reserved-tag and precedence rules, see the
 Before building a custom PromptBuilder, understand what data you receive:
 
 ```go
-// From orchestration/prompt_builder.go
+// Fields from orchestration/prompt_builder.go; comments explain prepared input.
 type PromptInput struct {
     // CapabilityInfo is the formatted string of available agents and tools.
     // This comes from the CapabilityProvider (discovery-based or service-based).
@@ -1753,6 +1755,10 @@ type PromptInput struct {
     // Request is the user's natural language request.
     // Example: "What's the weather in Tokyo and convert 1000 USD to JPY?"
     Request string
+
+    // AgentName identifies the agent whose orchestrator is planning.
+    // An empty value omits the <agent_identity> prompt section.
+    AgentName string
 
     // Metadata is a prepared copy of pipeline enrichments; nil if absent.
     // Arbitrary request metadata is not automatically forwarded.

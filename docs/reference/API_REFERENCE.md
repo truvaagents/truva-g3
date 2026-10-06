@@ -2451,9 +2451,11 @@ is an adapter-authoring Debug diagnostic; the adapter separately records the
 adjustment. It emits no degraded-translation event or warning metric.
 
 Native OpenAI's GPT-6 family uses `low`, `medium`, `high`, `xhigh` or `max`;
-Sol/Luna also allow `none`, Astra does not. Omitting effort leaves the model's
-default only when no client/chain effort is inherited. An inherited active effort
-also activates reasoning-token scaling on profiles that enable it.
+Sol/Luna also allow `none`, Astra does not. Leaving effort unset inherits the
+client/chain default, if any. Explicit `OmitAIParameter[string]()` suppresses
+that inheritance and the wire effort field; the provider chooses its default.
+Inherited active effort activates reasoning-token scaling on profiles that
+enable it; explicit omission does not.
 Active/default reasoning rejects sampling/logprob controls and native
 Chat Completions tools after application policy; Sol/Luna with `none` can use
 the non-reasoning Chat Completions tool path. These restrictions are native-route
@@ -2523,7 +2525,9 @@ Responses expose `ReasoningContent`, exact `FinishReason` and `ContentSource`
 `StreamChunk.ReasoningContent` is separate from answer `Content`. The default
 compatible decoder keeps final text intact, including an empty final answer.
 It can deliver reasoning-only callbacks with empty `Content` and nonempty
-`ReasoningContent`; these count as delivered output for no-replay rules.
+`ReasoningContent` and `ContentSource=final`; these count as delivered output for
+no-replay rules. Here `final` labels the delivery policy, not the presence of
+nonempty answer text in that chunk.
 `ai.WithReasoningContentFallback(true)` / `ai.WithChainReasoningContentFallback(true)`
 or direct `openaiwire.Config.ReasoningContentFallback` explicitly restores the
 legacy substitution/concatenation; both policies retain truthful provenance and
@@ -6445,8 +6449,8 @@ in failure propagation, and does not schedule same-phase work. Fresh generated
 plans derive this field; same-phase `depends_on` remains validated planner input.
 
 Managed request segments observe running revision 1 and terminal revision 2.
-Caller cancellation is cancelled; a deadline/error is failed; HITL interruption
-is suspended. A completed pipeline does not prove a positive domain outcome or
+Caller cancellation is cancelled; a deadline/error or partial-content delivery
+is failed; HITL interruption is suspended. A completed pipeline does not prove a positive domain outcome or
 that every step succeeded. `StoredExecution` and `ExecutionSummary` expose
 `Lifecycle` and `RecordRevision`; record revision also advances on late effects
 without reverting the latest snapshot. Legacy/direct-plan omissions and zero
