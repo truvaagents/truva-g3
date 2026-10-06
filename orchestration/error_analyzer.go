@@ -8,7 +8,7 @@
 // Missing retry declarations retain bounded status-based compatibility handling.
 //
 // HTTP Status Code Routing:
-//   - Eligible 400, 404, 409, 422 → LLM Error Analyzer, subject to correction gates
+//   - Other non-transient 4xx → LLM Error Analyzer, subject to correction gates
 //   - 408, 429, 5xx      → Executor retry loop (same payload + exponential backoff)
 //   - 401, 403, 405      → Fail immediately (auth/permission issues)
 //
@@ -118,7 +118,7 @@ func (e *ErrorAnalyzer) SetAIOptionsOverride(opts *AIOptionsOverride) {
 }
 
 // AnalyzeError determines if an error can be fixed with different parameters.
-// Returns nil if the error should be handled by the resilience module (transient errors).
+// Returns nil for transient errors, leaving retry/backoff to the caller.
 // Returns a result with ShouldRetry=false for permanent failures.
 // Returns a result with ShouldRetry=true and SuggestedChanges for fixable errors.
 func (e *ErrorAnalyzer) AnalyzeError(ctx context.Context, errCtx *ErrorAnalysisContext) (*ErrorAnalysisResult, error) {
@@ -137,12 +137,13 @@ func (e *ErrorAnalyzer) AnalyzeError(ctx context.Context, errCtx *ErrorAnalysisC
 		return result, nil
 	}
 
-	// HTTP status indicates this should go to resilience module
+	// Transient status handling belongs to the caller's retry loop. The legacy
+	// helper/log names below do not imply a resilience-module dependency.
 	if e.shouldDelegateToResilience(errCtx.HTTPStatus) {
 		e.logDebug("Error delegated to resilience module", map[string]interface{}{
 			"http_status": errCtx.HTTPStatus,
 		})
-		return nil, nil // nil means "let resilience module handle it"
+		return nil, nil // caller owns unchanged-payload retry policy
 	}
 
 	// Layer 2: LLM analyzes the error
@@ -161,7 +162,7 @@ func (e *ErrorAnalyzer) AnalyzeError(ctx context.Context, errCtx *ErrorAnalysisC
 }
 
 // routeByHTTPStatus returns an immediate result for status codes that don't need LLM analysis.
-// Returns nil if LLM analysis is needed or if resilience module should handle.
+// Returns nil if LLM analysis is needed or the caller should handle a transient status.
 func (e *ErrorAnalyzer) routeByHTTPStatus(status int) *ErrorAnalysisResult {
 	switch status {
 	case 401:

@@ -26,7 +26,7 @@ import (
 //   - AI error analysis (agents use their own AI providers)
 //   - RetryConfig/ErrorContext (agent configuration)
 //
-// See: docs/INTELLIGENT_ERROR_HANDLING_ARCHITECTURE.md
+// See: docs/orchestration/ERROR_HANDLING_GUIDE.md in the repository.
 
 // ErrorCategory classifies errors for agent retry logic decisions.
 // This is the shared vocabulary that tools and agents must agree on.

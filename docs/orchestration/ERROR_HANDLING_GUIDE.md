@@ -25,9 +25,13 @@ Think of TruvaG3's error handling like an air traffic control system. When a pil
 
 - **Squawk 7600** (communication failure) — land immediately, no second chances. In TruvaG3, this is a 401/403 auth error: fail immediately.
 - **Squawk 7700** (general emergency) — enter a holding pattern. For an eligible 429/5xx error without explicit retry refusal, the executor may retry the same payload after backoff.
-- **Approach correction** — the pilot is on the wrong heading. An eligible 400 input error can reach parameter correction only when the tool permits it and the executor's correction gates pass.
+- **Approach correction** — the pilot is on the wrong heading. An eligible 400 input error can reach parameter correction when the response does not explicitly refuse retries and the executor's correction gates pass.
 
 Tools classify failures and can refuse retries. The executor chooses an eligible recovery path within that permission, its budgets and binding protections. `ClassifyUpstreamError` returns `Retryable:false` for recognized input 4xx errors; it does not automatically opt a tool into correction.
+
+An omitted `retryable` retains bounded status-based compatibility. Standard Go
+`core.ToolError` always serializes the boolean, so leaving it unset sends false.
+Custom response envelopes, written in Go or another language, can omit it.
 
 ### Go Modules Involved
 

@@ -351,8 +351,8 @@ When a step fails (e.g., wrong parameters, validation errors), the executor uses
 |-------|-----------|---------|------------|
 | **Layer 1** | Auto-Wirer | Before execution | Exact name matching, type coercion |
 | **Layer 2** | Micro-Resolver | Before execution | LLM extracts values from source data |
-| **Layer 3** | Error Analyzer | Eligible, correction-permitted 4xx error | LLM suggests parameter corrections |
-| **Layer 4** | Semantic Retry | Correction permitted, Layer 3 cannot fix, source data available | LLM computes derived values with full context |
+| **Layer 3** | Error Analyzer | Eligible 4xx without explicit retry refusal; correction gates pass | LLM suggests parameter corrections |
+| **Layer 4** | Semantic Retry | No explicit retry refusal, correction gates pass, Layer 3 cannot fix, source data available | LLM computes derived values with full context |
 
 **Example: Layer 4 Semantic Retry in Action**
 
@@ -683,17 +683,22 @@ Use this module when you need capabilities beyond basic tool/agent coordination:
 | Capability | Without Orchestration | With Orchestration |
 |------------|----------------------|-------------------|
 | Tool discovery | Manual HTTP calls | Automatic via registry |
-| Error handling | Fail or basic retry | **AI analyzes error, corrects parameters** |
+| Error handling | Fail or basic retry | AI analyzes eligible errors and proposes corrections within permission/budget gates |
 | Multi-tool workflows | Custom coordination code | Declarative YAML or AI-planned |
 | Parameter generation | Manual payload construction | **LLM-generated from natural language** |
-| Retry logic | Simple exponential backoff | **Semantic retry with parameter correction** |
+| Retry logic | Simple exponential backoff | Bounded unchanged retries or eligible semantic correction |
 
 ### Key Features You Get
 
 1. **Intelligent Error Recovery (Layer 4 Semantic Retry)**
-   - LLM analyzes why a tool call failed
-   - Automatically corrects parameters (e.g., "Flower Mound, TX" → "Flower Mound, US")
-   - Retries with corrected payload
+   - LLM analyzes eligible non-transient input errors, subject to correction gates
+   - Can correct parameters when the response does not explicitly refuse retries
+   - Retries corrected inputs within the correction and attempt budgets
+   - A location correction such as "Flower Mound, TX" → "Flower Mound, US" is
+     hypothetical: the shipped weather tool's input-error responses use
+     `retryable:false` and stop same-step correction and resends. A standard Go
+     `ToolError` serializes an unset `Retryable` as false; custom envelopes can
+     omit the field and retain bounded status-based compatibility.
 
 2. **AI-Powered Orchestration**
    - Natural language request processing

@@ -1901,7 +1901,7 @@ The orchestration module emits span events for every LLM interaction:
 | `orchestrator.terminal_synthesis.normalized` | Acceptance-time normalizer stripped a terminal synthesis pseudo-step and collapsed the plan toward a zero-step terminal plan (the framework synthesizes the final answer). NOT an error — no `RecordSpanError`. Paired counter: `orchestration.plan.terminal_synthesis_normalized`. | `request_id`, `plan_id`, `dropped_agent`, `dropped_capability`, `remaining_steps` |
 | `orchestrator.plan_validation.exhausted` | Plan still failed validation after `MaxValidationRounds` regenerations; the phase fails explicitly rather than dispatching a known-bad plan. Paired with `RecordSpanError` and counter `orchestration.plan.validation_exhausted` (`error_type=plan_validation_exhausted`). | `request_id`, `phase_number`, `rounds` |
 | `orchestrator.plan.normalized` | Generated-plan reserved numeric-index references and prior-phase dependencies were normalized before validation; application payloads are not semantically repaired | `request_id`, `phase_number`, `changes` |
-| `orchestrator.plan_regeneration.selection` | Regeneration reused the captured selection/prompt, or built a new selection when reuse was unavailable or invalidated | `request_id`, `selection_reused` |
+| `orchestrator.plan_regeneration.selection` | Initial/no-accumulated-results regeneration reused the captured selection/prompt, or built a new selection when reuse was unavailable or invalidated. Continuation regeneration uses the request event below instead. | `request_id`, `selection_reused` |
 | `llm.continuation_plan_regeneration.request` | Continuation regeneration is about to call the model; `selection_reused` records whether its selected prompt/catalog was reused | `request_id`, `prompt_length` (bytes), `phase_number`, `selection_reused`, bounded `validation_error`, optional `model` |
 | `semantic_template_resolution` | Scoped semantic fallback inferred a non-null value from the referenced step's own output. This is inference, not exact binding; the inferred value itself is not an event attribute. | `request_id`, `step_id`, `param_name`, `source_step`, `original_template`, `binding_method=inferred` |
 | `llm.hallucination_detected` | A generated plan named an unavailable agent. Initial planning and continuation emit different attribute sets. | Both: `request_id`, `hallucinated_agent`. Initial: `allowed_agent_count`, `hall_retry`, `max_hall_retries`, `attempt`. Continuation: `phase_number`. |
@@ -2017,7 +2017,7 @@ When you click on an orchestration span in Jaeger and expand the **Logs** tab, y
 
 The following illustrative diagnostic chain requires a correction-permitted
 error and the executor's correction gates. The shipped `country-info-tool`
-returns `retryable:false` for not-found responses and therefore stops instead;
+returns `retryable:false` for its local validation/not-found responses and therefore stops instead;
 this is not a trace promised for that shipped response.
 
 ```

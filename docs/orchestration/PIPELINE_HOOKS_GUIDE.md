@@ -216,8 +216,13 @@ HITL resume plans do not run this hook because they are approved checkpoint
 state rather than newly produced plans.
 
 Mutation is copy-on-write and chained in registration order. Each hook must
-return a non-nil `*orchestration.RoutingPlan`. The framework normalizes and
-runs the complete plan-validation gauntlet after each mutation. For an ordinary
+return a non-nil `*orchestration.RoutingPlan`. The framework applies terminal-synthesis
+normalization and runs the complete plan-validation gauntlet after each mutation.
+The model-only numeric-reference/dependency normalizer does not run here: hooks
+must supply canonical references and exact `implicit_deps` for referenced
+prior-phase step IDs. Missing, unreferenced, or same-phase entries in
+`implicit_deps` are rejected; same-phase references require `depends_on` instead.
+For an ordinary
 hook, a hook error, wrong return type, clone failure, or invalid mutation is
 rejected with bounded diagnostics and the last valid plan continues. It never
 triggers LLM regeneration and cannot corrupt that prior plan.

@@ -376,6 +376,9 @@ when summarization fails, opt in separately:
 ```go
 hooks, _, err := orchestration.BuildMemoryHooks(backends.ToDeps(), agent.AI, agent.Logger,
     orchestration.WithBuilderRecordRequestEntityExtractor(orchestration.NoOpEntityExtractor{}))
+if err != nil {
+    return fmt.Errorf("configure memory hooks: %w", err)
+}
 ```
 
 This extractor receives `PipelineContext.Request` and cloned JSON-like request

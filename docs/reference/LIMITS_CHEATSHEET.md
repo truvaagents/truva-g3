@@ -128,8 +128,10 @@ acknowledges the affected path.
 The default ×5 token multiplier applies only to a scaling reasoning profile
 with effective nonempty effort other than `none`, including client/chain
 defaults inherited by calls that supply no effort. An empty effective effort
-or `none` leaves the configured budget unmultiplied. There is **no per-model
-output-token ceiling clamp**; developers must choose a budget/multiplier accepted by that
+or `none` leaves the configured budget unmultiplied. Explicit request-aware
+`OmitAIParameter[string]()` also suppresses inherited effort and its multiplier;
+it leaves upstream default reasoning in control rather than requesting `none`.
+There is **no per-model output-token ceiling clamp**; developers must choose a budget/multiplier accepted by that
 model. No new model defaults or automatic model discovery were introduced.
 
 Final/reasoning separation defaults on for compatible codecs. The legacy

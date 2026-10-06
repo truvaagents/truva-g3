@@ -409,13 +409,11 @@ dispatch. See [the executor routing contract](ERROR_HANDLING_GUIDE.md#12-quick-r
 
 ```
 HTTP Status Code Decision:
-┌─────────────────────────────────────────────────────────────────────┐
-│ 2xx (Success)     → No retry needed                                 │
-│ 401/403/405       → NOT retryable                                 │
-│ 408/429           → Retry unchanged after bounded backoff          │
-│ 5xx (Server)      → Retry with SAME payload (transient error)       │
-│ 4xx (Client)      → Check ToolError.Retryable for AI correction     │
-└─────────────────────────────────────────────────────────────────────┘
+2xx (Success) → No retry needed
+401/403/405   → NOT retryable
+408/429      → Retry unchanged after bounded backoff
+5xx (Server) → Retry with SAME payload (transient error)
+Other 4xx    → Check ToolError.Retryable and correction gates
 
 Retry Strategy:
 ┌─────────────────────────────────────────────────────────────────────┐
