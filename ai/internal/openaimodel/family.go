@@ -4,10 +4,11 @@ package openaimodel
 
 import "strings"
 
-// IsGPT6 recognizes the GPT-6 family, including suffixed model snapshots,
-// without matching unrelated names such as gpt-60 or vendor/gpt-6-sol.
+// IsGPT6 recognizes the GPT-6 family, including hyphen-suffixed variants and
+// snapshots, without matching unrelated names such as gpt-60 or vendor/gpt-6-sol.
+// This wire-profile classification does not certify a variant's availability.
 func IsGPT6(model string) bool {
-	return MatchesFamily(model, "gpt-6")
+	return MatchesFamily(model, "gpt-6") || MatchesFamily(model, "gpt-6.1-sol")
 }
 
 // SupportsGPT6NoReasoning identifies GPT-6 variants documented to accept none.

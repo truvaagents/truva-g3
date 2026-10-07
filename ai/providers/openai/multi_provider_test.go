@@ -428,9 +428,9 @@ func TestPhase2_ModelAliasResolution(t *testing.T) {
 		expectedModel string
 		description   string
 	}{
-		// OpenAI aliases - GPT-5.6 family (August 2026)
-		{"openai", "default", "gpt-5.6-terra", "OpenAI default model"},
-		{"openai", "fast", "gpt-5.6-luna", "OpenAI fast model"},
+		// OpenAI aliases - Sol 6.1 default and Luna 6 fast tier.
+		{"openai", "default", "gpt-6.1-sol", "OpenAI default model"},
+		{"openai", "fast", "gpt-6-luna", "OpenAI fast model"},
 		{"openai", "smart", "gpt-5.6-sol", "OpenAI smart model"},
 		{"openai", "premium", "gpt-5.6-sol", "OpenAI premium model"},
 		{"openai", "code", "gpt-5.6-sol", "OpenAI code model"},

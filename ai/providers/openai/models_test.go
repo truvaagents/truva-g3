@@ -12,9 +12,9 @@ func TestResolveModel(t *testing.T) {
 		model         string
 		expected      string
 	}{
-		// Vanilla OpenAI - GPT-5.6 family (August 2026)
-		{"openai default", "openai", "default", "gpt-5.6-terra"},
-		{"openai fast", "openai", "fast", "gpt-5.6-luna"},
+		// Vanilla OpenAI - Sol 6.1 default and Luna 6 fast tier.
+		{"openai default", "openai", "default", "gpt-6.1-sol"},
+		{"openai fast", "openai", "fast", "gpt-6-luna"},
 		{"openai smart", "openai", "smart", "gpt-5.6-sol"},
 		{"openai premium", "openai", "premium", "gpt-5.6-sol"},
 		{"openai code", "openai", "code", "gpt-5.6-sol"},
@@ -22,7 +22,7 @@ func TestResolveModel(t *testing.T) {
 		{"openai pass-through", "openai", "gpt-4.1-nano", "gpt-4.1-nano"},
 
 		// Empty provider alias defaults to openai
-		{"empty alias fast", "", "fast", "gpt-5.6-luna"},
+		{"empty alias fast", "", "fast", "gpt-6-luna"},
 		{"empty alias smart", "", "smart", "gpt-5.6-sol"},
 
 		// DeepSeek - V3.2 family
@@ -46,7 +46,7 @@ func TestResolveModel(t *testing.T) {
 		// OpenRouter - router-backed semantic defaults and concrete pass-through
 		{"openrouter default", "openai.openrouter", "default", "openrouter/auto"},
 		{"openrouter smart", "openai.openrouter", "smart", "openrouter/auto"},
-		{"openrouter fast", "openai.openrouter", "fast", "openai/gpt-5.6-luna"},
+		{"openrouter fast", "openai.openrouter", "fast", "openai/gpt-6-luna"},
 		{"openrouter code", "openai.openrouter", "code", "openrouter/pareto-code"},
 		{"openrouter concrete pass-through", "openai.openrouter", "openai/gpt-5.6-sol", "openai/gpt-5.6-sol"},
 		{"openrouter free variant pass-through", "openai.openrouter", "liquid/lfm-2.5-2.6b:free", "liquid/lfm-2.5-2.6b:free"},

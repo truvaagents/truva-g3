@@ -49,11 +49,12 @@ func TestOpenRouterContractSnapshot(t *testing.T) {
 		nitro.JSONSchemaProbe != "intermittent_404" {
 		t.Fatal("router feature stop-rule evidence changed; re-run and review before adding positive capabilities")
 	}
+	// Historical August evidence, not an assertion about today's fast alias.
 	fast := snapshot.Models["fast_concrete_model"]
 	if fast.ID != "openai/gpt-5.6-luna" || !fast.Present || fast.LiveProbe != "pass" ||
 		!reflect.DeepEqual(fast.SupportedParameters, []string{"max_completion_tokens", "reasoning", "reasoning_effort", "response_format", "structured_outputs"}) ||
 		fast.ReasoningProbe != "pass" || fast.JSONModeProbe != "pass" || fast.JSONSchemaProbe != "pass" {
-		t.Fatal("concrete fast alias requires all Luna catalog and live proofs")
+		t.Fatal("historical concrete fast-model catalog and live proofs changed")
 	}
 	if snapshot.Models["openrouter/free"].LiveProbe != "privacy_404" ||
 		snapshot.Models["sample_free_variant"].LiveProbe != "privacy_404" {
