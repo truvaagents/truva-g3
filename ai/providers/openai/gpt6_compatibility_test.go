@@ -5,17 +5,19 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/truvaagents/truva-g3/ai"
+	"github.com/truvaagents/truva-g3/ai/internal/openaimodel"
 	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
 
 func TestGPT6FamilyRequestCompatibility(t *testing.T) {
-	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6-sol-2026-09-01", "gpt-6-astra-2026-09-01"} {
+	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6-sol-2026-09-01", "gpt-6-astra-2026-09-01", "gpt-6.1-sol", "gpt-6.1-sol-2026-09-29"} {
 		t.Run(model, func(t *testing.T) {
 			for _, tc := range []struct {
 				name, effort       string
@@ -40,7 +42,7 @@ func TestGPT6FamilyRequestCompatibility(t *testing.T) {
 							request.Generation.ReasoningEffort = core.SetAIParameter(tc.effort)
 						}
 						invocation, err := client.prepareInvocation(t.Context(), request, stream)
-						if tc.effort == "none" && (model == "gpt-6-astra" || model == "gpt-6-astra-2026-09-01") {
+						if tc.effort == "none" && !openaimodel.SupportsGPT6NoReasoning(model) {
 							if !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
 								t.Fatalf("Astra none effort: %v", err)
 							}
@@ -85,13 +87,13 @@ func TestGPT6FamilyRequestCompatibility(t *testing.T) {
 }
 
 func TestGPT6FamilyRecognitionAndProviderScope(t *testing.T) {
-	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", " GPT-6-LUNA ", "gpt-6-sol-2026-09-01", "gpt-6-future-variant"} {
+	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", " GPT-6-LUNA ", "gpt-6-sol-2026-09-01", "gpt-6-future-variant", "gpt-6.1-sol", "gpt-6.1-sol-2026-09-29"} {
 		caps := providers.LookupModelCapabilities("openai", model)
 		if !IsReasoningModel(model) || caps.ExactModel || caps.ReasoningStyle != "openai" || !caps.SupportsJSONMode || !caps.SupportsJSONSchema {
 			t.Fatalf("missing family capabilities for %q: %+v", model, caps)
 		}
 	}
-	for _, model := range []string{"gpt-60", "gpt-6ish", "vendor/gpt-6-sol", "custom-gpt-6", "gpt-7-sol"} {
+	for _, model := range []string{"gpt-60", "gpt-6ish", "vendor/gpt-6-sol", "custom-gpt-6", "gpt-7-sol", "gpt-6.1-solstice", "gpt-6.10-sol", "gpt-6.1-unknown"} {
 		if IsReasoningModel(model) || providers.LookupModelCapabilities("openai", model).ReasoningStyle != "" {
 			t.Fatalf("family recognition leaked to %q", model)
 		}
@@ -104,7 +106,7 @@ func TestGPT6FamilyRecognitionAndProviderScope(t *testing.T) {
 }
 
 func TestGPT6InvalidNativeParametersAndPolicyRecovery(t *testing.T) {
-	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
+	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"} {
 		for _, tc := range []struct {
 			name  string
 			value interface{}
@@ -230,7 +232,7 @@ func (f gpt6Transport) RoundTrip(request *http.Request) (*http.Response, error) 
 }
 
 func TestGPT6PublicClientOverridesAndStreaming(t *testing.T) {
-	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
+	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"} {
 		t.Run(model, func(t *testing.T) {
 			t.Setenv("TRUVAG3_OPENAI_MODEL_DEFAULT", model)
 			var captured map[string]interface{}
@@ -289,6 +291,98 @@ func TestGPT6PublicClientOverridesAndStreaming(t *testing.T) {
 			}
 			if calls != 2 {
 				t.Fatalf("invalid request reached transport: %d calls", calls)
+			}
+		})
+	}
+}
+
+func TestGPT61SolPublicStreaming(t *testing.T) {
+	for _, tc := range []struct {
+		alias, model string
+		wireTokens   int
+	}{
+		{alias: "openai", model: "gpt-6.1-sol", wireTokens: 246},
+		{alias: "openai", model: "default", wireTokens: 246},
+		{alias: "openai", model: "", wireTokens: 246},
+		{alias: openRouterProviderAlias, model: "openai/gpt-6.1-sol", wireTokens: 123},
+	} {
+		t.Run(tc.alias+"/"+tc.model, func(t *testing.T) {
+			wantModel := tc.model
+			if wantModel == "" || wantModel == "default" {
+				wantModel = "gpt-6.1-sol"
+			}
+			var captured map[string]interface{}
+			calls := 0
+			client, err := ai.NewRequestClient(
+				ai.WithProviderAlias(tc.alias), ai.WithAPIKey("synthetic"), ai.WithModel(tc.model),
+				ai.WithReasoningEffort("high"), ai.WithReasoningTokenMultiplier(2),
+				ai.WithHTTPClient(&http.Client{Transport: gpt6Transport(func(r *http.Request) (*http.Response, error) {
+					calls++
+					if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+						return nil, err
+					}
+					body := "data: {\"model\":\"" + wantModel + "\",\"choices\":[{\"delta\":{\"content\":\"{\\\"ok\\\":\"}}]}\n\n" +
+						"data: {\"choices\":[{\"delta\":{\"content\":\"true}\"},\"finish_reason\":\"stop\"}]}\n\n" +
+						"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":7,\"total_tokens\":12}}\n\n" +
+						"data: [DONE]\n\n"
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+				})}),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := core.NewAIRequest("Return a JSON answer", "stream-contract")
+			request.Generation.ReasoningEffort = core.SetAIParameter("low")
+			request.Generation.MaxTokens = core.SetAIParameter(123)
+			request.Generation.ResponseFormat = core.SetAIParameter("json")
+			request.Generation.Temperature = core.OmitAIParameter[float32]()
+			before, err := core.CloneAIRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var text strings.Builder
+			var finish string
+			result, err := core.StreamAI(t.Context(), client, request, func(chunk core.StreamChunk) error {
+				text.WriteString(chunk.Content)
+				if chunk.FinishReason != "" {
+					finish = chunk.FinishReason
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 || captured["model"] != wantModel || captured["stream"] != true || captured["max_completion_tokens"] != float64(tc.wireTokens) {
+				t.Fatalf("stream wire contract changed: calls=%d body=%#v", calls, captured)
+			}
+			if tc.alias == "openai" {
+				if captured["reasoning_effort"] != "low" || captured["reasoning"] != nil {
+					t.Fatal("native reasoning spelling changed")
+				}
+			} else {
+				if captured["reasoning"].(map[string]interface{})["effort"] != "low" || captured["reasoning_effort"] != nil {
+					t.Fatal("routed reasoning spelling changed")
+				}
+				provider := requireOpenRouterProviderObject(t, captured)
+				if provider["zdr"] != true || provider["data_collection"] != "deny" || provider["require_parameters"] != true {
+					t.Fatal("routed privacy/required parameters changed")
+				}
+			}
+			if _, present := captured["temperature"]; present {
+				t.Fatal("sampling omission lost")
+			}
+			if captured["response_format"].(map[string]interface{})["type"] != "json_object" || captured["stream_options"].(map[string]interface{})["include_usage"] != true {
+				t.Fatal("JSON/stream usage contract lost")
+			}
+			if text.String() != `{"ok":true}` || finish != "stop" || result.Response == nil || result.Response.Content != text.String() || result.Response.FinishReason != "stop" || result.Response.ContentSource != core.AIContentSourceFinal || result.Response.Usage.TotalTokens != 12 {
+				t.Fatalf("stream response facts lost: text=%q finish=%q response=%#v", text.String(), finish, result.Response)
+			}
+			report := result.RequestReport
+			if report == nil || report.ResolvedModel != wantModel || report.ProviderAlias != tc.alias || report.Operation != "stream" || !report.Stable || report.Fingerprint == "" || report.EffectiveMaxTokens != core.SetAIParameter(tc.wireTokens) || report.EffectiveTemperature.Mode != core.AIParameterOmit {
+				t.Fatalf("effective report mismatch: %#v", report)
+			}
+			if !reflect.DeepEqual(request, before) {
+				t.Fatal("streaming mutated caller input")
 			}
 		})
 	}

@@ -7,10 +7,10 @@ import (
 )
 
 func TestResolveUsesBuiltInAliasesOverridesAndPassThrough(t *testing.T) {
-	if got := modelcatalog.Resolve("", "default"); got != "gpt-5.6-terra" {
+	if got := modelcatalog.Resolve("", "default"); got != "gpt-6.1-sol" {
 		t.Fatalf("default provider default = %q", got)
 	}
-	if got := modelcatalog.Resolve("", "fast"); got != "gpt-5.6-luna" {
+	if got := modelcatalog.Resolve("", "fast"); got != "gpt-6-luna" {
 		t.Fatalf("default provider fast = %q", got)
 	}
 	if got := modelcatalog.Resolve("", "smart"); got != "gpt-5.6-sol" {
@@ -43,7 +43,7 @@ func TestResolveUsesBuiltInAliasesOverridesAndPassThrough(t *testing.T) {
 	if got := modelcatalog.Resolve("openai.openrouter", "smart"); got != "openrouter/auto" {
 		t.Fatalf("OpenRouter smart = %q", got)
 	}
-	if got := modelcatalog.Resolve("openai.openrouter", "fast"); got != "openai/gpt-5.6-luna" {
+	if got := modelcatalog.Resolve("openai.openrouter", "fast"); got != "openai/gpt-6-luna" {
 		t.Fatalf("OpenRouter fast = %q", got)
 	}
 	if got := modelcatalog.Resolve("openai.openrouter", "code"); got != "openrouter/pareto-code" {
@@ -65,6 +65,20 @@ func TestResolveUsesBuiltInAliasesOverridesAndPassThrough(t *testing.T) {
 	t.Setenv("TRUVAG3_OPENAI_MODEL_SMART", "semantic-override")
 	if got := modelcatalog.Resolve("openai", "smart"); got != "semantic-override" {
 		t.Fatalf("environment override = %q", got)
+	}
+}
+
+func TestOpenAIDefaultRemainsOverridable(t *testing.T) {
+	t.Setenv("TRUVAG3_OPENAI_MODEL_DEFAULT", "gpt-5.6-terra")
+	if got := modelcatalog.Resolve("openai", "default"); got != "gpt-5.6-terra" {
+		t.Fatalf("default environment override lost: %q", got)
+	}
+	if got := modelcatalog.Resolve("openai", "gpt-6.1-sol"); got != "gpt-6.1-sol" {
+		t.Fatalf("default override affected concrete model: %q", got)
+	}
+	t.Setenv("TRUVAG3_OPENAI_MODEL_DEFAULT", "")
+	if got := modelcatalog.Resolve("openai", "default"); got != "gpt-6.1-sol" {
+		t.Fatalf("empty override replaced built-in default: %q", got)
 	}
 }
 

@@ -34,7 +34,7 @@ func (d *gpt6Draft) Validate() error {
 		var ok bool
 		effort, ok = value.(string)
 		if !ok || !validGPT6Effort(d.Info().ResolvedModel, effort) {
-			return gpt6ParameterError("reasoning_effort", "use low, medium, high, xhigh or max; none is supported only by Sol and Luna")
+			return gpt6ParameterError("reasoning_effort", "use low, medium, high, xhigh or max; none is supported only by GPT-6 Sol and Luna, not GPT-6.1 Sol")
 		}
 	}
 	if effort != "none" {
@@ -45,7 +45,7 @@ func (d *gpt6Draft) Validate() error {
 		}
 		for _, name := range []string{"tools", "tool_choice", "functions", "function_call"} {
 			if _, present := d.Get("/" + name); present {
-				return gpt6ParameterError(name, "reasoning with native tools requires a Responses API adapter; Sol and Luna allow Chat Completions tools with reasoning_effort=none")
+				return gpt6ParameterError(name, "native tools require a Responses API adapter for GPT-6 Astra and GPT-6.1 Sol; original GPT-6 Sol and GPT-6 Luna allow Chat Completions tools only with reasoning_effort=none")
 			}
 		}
 	}

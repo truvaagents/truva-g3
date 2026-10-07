@@ -23,6 +23,7 @@ var modelCapabilities = []ModelCapabilities{
 	{ProviderAlias: "openai", ModelPrefix: "", ReasoningStyle: "", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai", ModelPrefix: "gpt-5", ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai", ModelPrefix: "gpt-6", MatchFamilyBoundary: true, ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
+	{ProviderAlias: "openai", ModelPrefix: "gpt-6.1-sol", MatchFamilyBoundary: true, ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai", ModelPrefix: "o1", ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai", ModelPrefix: "o3", ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai", ModelPrefix: "o4", ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
@@ -39,6 +40,9 @@ var modelCapabilities = []ModelCapabilities{
 	// OpenRouter endpoint metadata reviewed 2026-09-28. Required-parameter routing
 	// filters endpoints without JSON/schema support; this is not a live inference certification.
 	{ProviderAlias: "openai.openrouter", ModelPrefix: "openai/gpt-6-luna", ExactModel: true, ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
+	// Endpoint metadata and a JSON inference verified 2026-10-07. Routed model
+	// capabilities remain separate from native OpenAI family recognition.
+	{ProviderAlias: "openai.openrouter", ModelPrefix: "openai/gpt-6.1-sol", ExactModel: true, ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 
 	{ProviderAlias: "openai.groq", ModelPrefix: "", ReasoningStyle: "", SupportsJSONMode: false, SupportsJSONSchema: false, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai.groq", ModelPrefix: "gpt-oss", ReasoningStyle: "", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},

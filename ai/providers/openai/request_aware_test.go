@@ -16,14 +16,14 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
-func TestClientPrepareSemanticsResolvesBuiltInGPT56Aliases(t *testing.T) {
+func TestClientPrepareSemanticsResolvesBuiltInOpenAIAliases(t *testing.T) {
 	client := NewClient("test-key", "", "openai", &core.NoOpLogger{})
 	tests := []struct {
 		alias string
 		model string
 	}{
-		{alias: "default", model: "gpt-5.6-terra"},
-		{alias: "fast", model: "gpt-5.6-luna"},
+		{alias: "default", model: "gpt-6.1-sol"},
+		{alias: "fast", model: "gpt-6-luna"},
 		{alias: "smart", model: "gpt-5.6-sol"},
 		{alias: "premium", model: "gpt-5.6-sol"},
 		{alias: "code", model: "gpt-5.6-sol"},
@@ -44,6 +44,50 @@ func TestClientPrepareSemanticsResolvesBuiltInGPT56Aliases(t *testing.T) {
 				t.Fatalf("resolved model %q was not classified as a reasoning model", test.model)
 			}
 		})
+	}
+}
+
+func TestDefaultSolPreparationAndOverrides(t *testing.T) {
+	t.Setenv("TRUVAG3_OPENAI_MODEL_DEFAULT", "")
+	client := NewClient("synthetic", "", "openai", &core.NoOpLogger{})
+	client.DefaultModel = "default"
+	request := core.NewAIRequest("Return JSON", "planning")
+	request.Generation.MaxTokens = core.SetAIParameter(15000)
+	request.Generation.ResponseFormat = core.SetAIParameter("json")
+	invocation, err := client.prepareInvocation(t.Context(), request, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(invocation.Request.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["model"] != "gpt-6.1-sol" || body["reasoning_effort"] != nil || body["temperature"] != nil || body["max_completion_tokens"] != float64(15000) {
+		t.Fatalf("unexpected default wire request: %#v", body)
+	}
+	first := invocation.Request.Report.Fingerprint
+	client.ReasoningEffort = "none"
+	if _, err := client.prepareInvocation(t.Context(), request, false); !errors.Is(err, core.ErrAIRequestFeatureUnsupported) {
+		t.Fatalf("incompatible inherited effort was not rejected: %v", err)
+	}
+	request.Generation.ReasoningEffort = core.OmitAIParameter[string]()
+	if _, err := client.prepareInvocation(t.Context(), request, false); err != nil {
+		t.Fatalf("explicit omission did not repair inherited effort: %v", err)
+	}
+	client.ReasoningEffort = ""
+	request.Generation.ReasoningEffort = core.AIParameter[string]{}
+	t.Setenv("TRUVAG3_OPENAI_MODEL_DEFAULT", "gpt-5.6-terra")
+	invocation, err = client.prepareInvocation(t.Context(), request, false)
+	if err != nil || invocation.Request.Report.ResolvedModel != "gpt-5.6-terra" {
+		t.Fatalf("environment rollback failed: %v", err)
+	}
+	if first == "" || first == invocation.Request.Report.Fingerprint {
+		t.Fatal("resolved model change did not invalidate policy identity")
+	}
+	request.Generation.Model = "gpt-6.1-sol"
+	invocation, err = client.prepareInvocation(t.Context(), request, false)
+	if err != nil || invocation.Request.Report.ResolvedModel != "gpt-6.1-sol" {
+		t.Fatalf("concrete model overridden by default alias: %v", err)
 	}
 }
 

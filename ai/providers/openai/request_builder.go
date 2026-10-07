@@ -88,6 +88,12 @@ func newRequestPolicyEngineWithIntegration(
 				ProviderAlias: openRouterProviderAlias, Surface: "chat-completions", Model: "openai/gpt-6-luna",
 			},
 			Remove: []string{"/temperature"},
+		}, {
+			Name: "openrouter-sol-6.1-sampling", Version: "1",
+			Selector: core.AIProviderSelector{
+				ProviderAlias: openRouterProviderAlias, Surface: "chat-completions", Model: "openai/gpt-6.1-sol",
+			},
+			Remove: []string{"/temperature"},
 		}},
 		AppRules:   appRules,
 		Middleware: middleware,
@@ -503,6 +509,9 @@ func (c *Client) buildPolicyRequest(
 	var policyDraft requestpolicy.Draft = draft
 	if semantics.ProviderAlias == "openai" && openaimodel.IsGPT6(semantics.SemanticModel) {
 		policyDraft = &gpt6Draft{Draft: draft}
+	}
+	if semantics.ProviderAlias == openRouterProviderAlias && semantics.Capabilities.ModelPrefix == "openai/gpt-6.1-sol" {
+		policyDraft = &openRouterSolDraft{Draft: draft}
 	}
 	report, err := c.requestPolicy.Apply(ctx, policyDraft, request.Patches)
 	if report != nil {

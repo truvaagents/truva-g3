@@ -9,15 +9,15 @@ import (
 
 var defaultAliases = map[string]map[string]string{
 	"openai": {
-		"fast": "gpt-5.6-luna", "smart": "gpt-5.6-sol", "vision": "gpt-4.1",
-		"premium": "gpt-5.6-sol", "code": "gpt-5.6-sol", "default": "gpt-5.6-terra",
+		"fast": "gpt-6-luna", "smart": "gpt-5.6-sol", "vision": "gpt-4.1",
+		"premium": "gpt-5.6-sol", "code": "gpt-5.6-sol", "default": "gpt-6.1-sol",
 	},
 	"openai.deepseek": {
 		"fast": "deepseek-chat", "smart": "deepseek-reasoner",
 		"code": "deepseek-chat", "default": "deepseek-chat",
 	},
 	"openai.openrouter": {
-		"fast": "openai/gpt-5.6-luna", "smart": "openrouter/auto",
+		"fast": "openai/gpt-6-luna", "smart": "openrouter/auto",
 		"code": "openrouter/pareto-code", "default": "openrouter/auto",
 	},
 	"openai.groq": {
