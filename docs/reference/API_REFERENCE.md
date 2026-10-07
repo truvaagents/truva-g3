@@ -2450,25 +2450,51 @@ this built-in table. `LogInheritedEffortOmitted(ctx, logger, providerAlias, mode
 is an adapter-authoring Debug diagnostic; the adapter separately records the
 adjustment. It emits no degraded-translation event or warning metric.
 
-Native OpenAI's GPT-6 family uses `low`, `medium`, `high`, `xhigh` or `max`;
-Sol/Luna also allow `none`, Astra does not. Leaving effort unset inherits the
-client/chain default, if any. Explicit `OmitAIParameter[string]()` suppresses
+Native OpenAI's GPT-6 family, including `gpt-6.1-sol` and its hyphen-suffixed
+variants/snapshots, uses `low`, `medium`, `high`, `xhigh` or `max`. Only original GPT-6 Sol
+and GPT-6 Luna also allow `none`; GPT-6 Astra and GPT-6.1 Sol reject it.
+Leaving effort unset inherits the client/chain default, if any.
+Explicit `OmitAIParameter[string]()` suppresses
 that inheritance and the wire effort field; the provider chooses its default.
 Inherited active effort activates reasoning-token scaling on profiles that
 enable it; explicit omission does not.
 Active/default reasoning rejects sampling/logprob controls and native
-Chat Completions tools after application policy; Sol/Luna with `none` can use
-the non-reasoning Chat Completions tool path. These restrictions are native-route
-contracts, not rules automatically applied to every compatible endpoint.
+Chat Completions tools after application policy; original GPT-6 Sol/GPT-6 Luna
+with `none` can use the non-reasoning Chat Completions tool path. GPT-6.1 Sol
+native tools require a Responses API adapter, which this inclusion does not add.
+These restrictions are native-route contracts, not rules automatically applied
+to every compatible endpoint.
 
 Exact OpenRouter `deepseek/deepseek-v4.1-flash` and `z-ai/glm-5.3-flash` rows
-declare JSON object support. Exact `openai/gpt-5.6-luna` and `openai/gpt-6-luna`
-add JSON schema and OpenAI-style reasoning. GPT-6 Luna has a scoped built-in
-temperature-removal rule: Compatible mode reports adaptation; Strict mode
+declare JSON object support. Exact `openai/gpt-5.6-luna`, `openai/gpt-6-luna`
+and `openai/gpt-6.1-sol` add JSON schema and OpenAI-style reasoning. GPT-6 Luna
+and GPT-6.1 Sol each have a scoped built-in temperature-removal rule:
+Compatible mode reports adaptation; Strict mode
 requires application acknowledgement for a change to an explicit value.
-Protected privacy/required-parameter routing remains in effect. Unrelated
-models and alias defaults are unchanged; capability metadata is not a live
-availability guarantee.
+Protected privacy/required-parameter routing remains in effect. These capability
+rules do not change unrelated models. OpenRouter's fast-alias migration is
+documented under model alias resolution below; capability metadata is not a
+live availability guarantee.
+
+Routed `openai/gpt-6.1-sol` has a final validator separate from native OpenAI:
+it accepts `low`, `medium`, `high`, `xhigh` and `max` at `reasoning.effort`, or
+omitted effort, and rejects `none`, noncanonical keys, top-level
+`reasoning_effort`, and sampling/logprob controls left after policy. Native
+`reasoning` extras accept non-null JSON objects, including typed/named
+string-keyed Go maps and named string effort values, without rewriting them.
+`enabled` and `exclude` require boolean values; `enabled:false` is rejected,
+while `exclude:true` only hides reasoning text and remains allowed. Standalone
+`max_tokens` requires a positive integer JSON number; OpenRouter owns its
+budget-to-effort mapping. Supplying both `effort` and `max_tokens` in the final
+object is rejected, including an effort inherited from the client or inserted
+by policy. Application patches can remove the conflict before final validation.
+Its `openrouter-sol-6.1-v3` identity versions that validation contract for caches.
+The shared codec still validates before policy: an explicit sampling setting
+with active effort can fail before a removal rule runs. Use explicit temperature
+omission on the presence-aware API when appropriate. Native tool restrictions
+are not copied to this routed guard; OpenRouter owns its upstream translation.
+OpenRouter token budgets remain exact; native scaling profiles retain the
+configured reasoning multiplier. No automatic output-ceiling clamp is added.
 
 #### Provider factory extension contracts
 
@@ -2674,10 +2700,18 @@ codec. `BuildRequestBody` is a compatibility bridge for providers that adopted
 the earlier OpenAI reasoning helper; new provider integrations should use a
 `Codec`.
 
-`IsReasoningModel`, `BuildDraft` and `BuildRequestBody` recognize GPT-6 family
-names. The compatibility helpers select reasoning token/budget and sampling wire
-handling; they do not independently provide every native adapter model-contract
-check. Azure consumers of the shared classifier are affected as well.
+`IsReasoningModel`, `BuildDraft` and `BuildRequestBody` recognize `gpt-6` and
+`gpt-6-*`, plus `gpt-6.1-sol` and its hyphen-suffixed variants/snapshots. Recognition is
+case-insensitive and does not include unrelated `gpt-6.1-*`, `gpt-6.10-*`,
+`gpt-60` or vendor-prefixed names. The compatibility helpers select reasoning
+token/budget and sampling wire handling; they do not independently provide every native adapter model-contract
+check. Azure v1 selects its existing reasoning profile for matching resolved
+semantic models; Azure classic rejects them. This does not certify availability
+or effort support for a route-owned deployment.
+The matcher accepts any hyphen suffix, including `-pro`; it does not validate
+snapshot dates. Such variants inherit the matching family's wire rules without
+establishing a separately reviewed native endpoint contract. OpenRouter's exact
+model rows remain independent and do not extend to suffixed variants.
 
 The side-effect-free OpenAI-compatible semantic catalog is also public:
 
@@ -2968,6 +3002,19 @@ accepted by every entry.
 
 **Model alias resolution examples** (snapshot — see [ai/providers/openai/models.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/models.go) for the canonical mapping):
 
+OpenAI's general `default` resolves to `gpt-6.1-sol`. Planning and synthesis
+inherit it when no phase/client override selects another model. The `fast`
+aliases select `gpt-6-luna` (OpenAI) and `openai/gpt-6-luna` (OpenRouter);
+other alias mappings are unchanged. Override with a concrete model or a non-empty
+`TRUVAG3_OPENAI_MODEL_DEFAULT` (for example, `gpt-5.6-terra` to retain the prior
+default). Azure/shared-catalog endpoint resolvers also receive the new semantic
+default; route-owned deployment names are not automatically changed. GPT-6.1 Sol rejects
+inherited `none` effort, so use a supported effort or explicit omission rather
+than expecting the alias change to rewrite request settings. Fast-tier overrides
+use `TRUVAG3_OPENAI_MODEL_FAST` and `TRUVAG3_OPENROUTER_MODEL_FAST`; existing
+pins retain precedence. Fast selection does not change effort or token budgets.
+Azure/shared-catalog resolvers also receive Luna for the `fast` semantic model.
+
 ```go
 // "smart" resolves differently per provider
 ai.WithProviderAlias("openai")          // → gpt-5.6-sol
@@ -2976,7 +3023,8 @@ ai.WithProviderAlias("openai.groq")     // → openai/gpt-oss-120b
 ai.WithProviderAlias("openai.openrouter") // → openrouter/auto
 
 // "fast" for quick responses
-ai.WithProviderAlias("openai")          // → gpt-5.6-luna
+ai.WithProviderAlias("openai")          // → gpt-6-luna
+ai.WithProviderAlias("openai.openrouter") // → openai/gpt-6-luna
 ai.WithProviderAlias("openai.deepseek") // → deepseek-chat
 ai.WithProviderAlias("openai.groq")     // → llama-3.1-8b-instant
 

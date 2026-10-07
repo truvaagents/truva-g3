@@ -116,14 +116,29 @@ and [Titan Text Embeddings V2](https://docs.aws.amazon.com/bedrock/latest/usergu
 | Azure OpenAI v1 reasoning families | Uses `max_completion_tokens`, top-level `reasoning_effort`, and reasoning-restricted sampling |
 | Azure OpenAI classic | Ordinary `max_tokens` profile only; reasoning-family requests are rejected because no classic reasoning contract is verified |
 | Stock OpenAI reasoning families | Uses `max_completion_tokens`; the default reasoning token multiplier is 5 |
-| Native OpenAI GPT-6 family | Efforts `low`, `medium`, `high`, `xhigh`, `max`; `none` only for Sol/Luna. Active/default reasoning rejects sampling/logprob and native Chat Completions tool controls after policy |
+| Native OpenAI GPT-6 family, including GPT-6.1 Sol | Efforts `low`, `medium`, `high`, `xhigh`, `max`; `none` only for original GPT-6 Sol and GPT-6 Luna, not GPT-6.1 Sol. Active/default reasoning rejects sampling/logprob and native Chat Completions tool controls after policy |
 | Exact OpenRouter `openai/gpt-6-luna` | Built-in temperature removal; Compatible reports adaptation, Strict requires acknowledgement for explicit values. Exact model row declares JSON object/schema and OpenAI-style reasoning |
+| Exact OpenRouter `openai/gpt-6.1-sol` | JSON object/schema and OpenAI-style reasoning; scoped temperature removal with the same Compatible/Strict semantics. Final validation accepts `low`, `medium`, `high`, `xhigh`, `max` or omitted effort; rejects `none`, noncanonical keys and remaining sampling/logprob controls. Budget remains exact; native tool restrictions are not copied to this routed contract |
 | Exact OpenRouter DeepSeek v4.1 Flash / GLM 5.3 Flash | JSON object supported by adapter capability rows; schema and reasoning style not declared |
 | `openai.ollama` non-reasoning models | Retains `max_tokens` and ordinary sampling; nested reasoning effort is emitted only when effort is set |
 
 Compatible policy mode reports built-in adjustments. Strict mode rejects a
 built-in adjustment to explicit request-aware intent unless application policy
 acknowledges the affected path.
+
+GPT-6.1 Sol native matching also includes all hyphen-suffixed variants/snapshots;
+this includes `-pro` but does not certify its endpoint contract. Routed
+support is declared only for the exact OpenRouter ID above. Shared codec
+validation precedes policy, so explicit sampling with active effort can fail
+before the removal rule. Explicit effort omission suppresses inherited effort;
+merely switching models does not clear an incompatible chain default of `none`.
+The routed `openrouter-sol-6.1-v3` guard accepts non-null JSON-native reasoning
+objects without changing their values and versions this contract for caches.
+`enabled`/`exclude` require booleans; `enabled:false` fails, but `exclude:true`
+is allowed. Standalone `reasoning.max_tokens` requires a positive integer and
+is passed to OpenRouter for budget-to-effort mapping, not enforced as a local
+reasoning-token ceiling. Final `effort` plus `max_tokens` is rejected, including
+conflicts involving inherited effort. Application policy may remove a conflict.
 
 The default ×5 token multiplier applies only to a scaling reasoning profile
 with effective nonempty effort other than `none`, including client/chain

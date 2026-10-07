@@ -461,7 +461,7 @@ decoded semantic 429/503 can use the existing Retry-After wait handling.
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | **Implemented** | OpenRouter API base URL | [ai/providers/openai/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/factory.go) |
 
 Built-in aliases are `default=smart=openrouter/auto`,
-`fast=openai/gpt-5.6-luna`, and `code=openrouter/pareto-code`. Every alias can
+`fast=openai/gpt-6-luna`, and `code=openrouter/pareto-code`. Every alias can
 be overridden independently without code changes:
 
 ```bash
@@ -598,6 +598,18 @@ Model override variables change the semantic model selected for a portable
 alias. They do not rewrite route-owned Azure deployment names, Vertex
 publisher-model IDs, Bedrock `modelId` values, inference-profile IDs, or ARNs.
 Only a non-empty environment value overrides the built-in mapping.
+
+The OpenAI `default` alias maps to `gpt-6.1-sol`; this applies to all calls
+inheriting it, including planning and synthesis. Existing pins still win. Use
+`TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-5.6-terra` to retain the previous default.
+The `fast` aliases now map to `gpt-6-luna` (OpenAI) and `openai/gpt-6-luna`
+(OpenRouter). Pin the previous choices with
+`TRUVAG3_OPENAI_MODEL_FAST=gpt-5.6-luna` and
+`TRUVAG3_OPENROUTER_MODEL_FAST=openai/gpt-5.6-luna` if required. Other aliases
+are unchanged. Azure and other shared-catalog consumers resolve both new models;
+their application-owned deployment mappings must support it or use a pin.
+GPT-6.1 Sol does not accept reasoning effort `none`; this alias setting does not change
+effort, token budgets or phase-specific model overrides.
 
 | Provider/profile | Override pattern | Examples and route behavior |
 |---|---|---|

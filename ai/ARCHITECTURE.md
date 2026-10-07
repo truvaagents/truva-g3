@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.14
+**Version**: 1.17
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -118,7 +118,7 @@ old default-refill behavior. Inherited/set effort identities are unchanged.
 Native OpenAI Chat Completions supports the GPT-6 family for the module's
 portable text/JSON generation and streaming contract. A side-effect-free
 `internal/openaimodel` classifier is shared by capability lookup and wire-profile
-selection, so Astra, Sol, Luna and suffixed snapshot IDs use the same
+selection, so Astra, Sol, Luna and hyphen-suffixed variant/snapshot IDs use the same
 `max_completion_tokens` and reasoning/JSON handling. Capability rows declare
 `MatchFamilyBoundary` to match the family name or a hyphen-delimited suffix;
 the generic lookup has no GPT-6-specific branch. `ExactModel` takes precedence,
@@ -134,11 +134,21 @@ It is a wire-contract classification, not proof that an arbitrary future ID
 exists or that an account has access. Other providers' capability metadata
 remains independent; native support does not imply OpenRouter availability.
 
-Existing aliases/defaults are unchanged. Developers can select a concrete model
-with `ai.WithModel`, `AIOptions.Model` or `AIRequest.Generation.Model`, or map a
+The OpenAI catalog's general `default` now resolves to `gpt-6.1-sol` rather than
+`gpt-5.6-terra`. This changes any call inheriting that alias, including planning
+and synthesis; it is not an orchestration phase-routing change. Separately,
+OpenAI's `fast` alias resolves to `gpt-6-luna`, and OpenRouter's `fast` resolves
+to `openai/gpt-6-luna`. Other alias mappings are unchanged. Developers can select
+a concrete model with `ai.WithModel`, `AIOptions.Model` or `AIRequest.Generation.Model`, or map a
 semantic alias using `TRUVAG3_OPENAI_MODEL_<ALIAS>`. Alias resolution retains its
 existing environment-override precedence. Client options and presence-aware
 `Set`/`Omit` values still control reasoning, output format and token budgets.
+An existing explicit `none` effort is not silently repaired for the new default:
+use a supported effort, explicitly omit it, or pin the prior model. Consumers
+of the shared catalog, including Azure, resolve the same new default/fast models;
+application endpoint resolvers remain responsible for deployment mappings.
+Resolved model identity already participates in request fingerprints, so the
+default change does not require a new global policy version.
 The existing multiplier applies to effective nonempty reasoning effort other
 than `none`, including inherited client/chain defaults. A call that supplies no
 effort can therefore still trigger scaling. Empty effective effort and `none`
@@ -163,20 +173,23 @@ application rules, middleware and per-request patches. Its versioned contract
 participates in the policy fingerprint. Developers may repair inherited native
 settings at those seams; they cannot bypass the final provider contract:
 
-- All three documented variants accept `low`, `medium`, `high`, `xhigh`, `max`.
-  Only Sol and Luna accept `none`; the adapter does not silently replace it.
+- Original GPT-6 Astra, Sol and Luna, plus GPT-6.1 Sol, accept `low`, `medium`,
+  `high`, `xhigh`, `max`. Only original GPT-6 Sol and GPT-6 Luna accept `none`;
+  the adapter does not silently replace it.
 - Active/default reasoning rejects `temperature`, `top_p`, `logprobs` and
   `top_logprobs`. The existing codec omits inherited default temperature.
   Other incompatible native fields must be removed explicitly by the caller
   or its request policy. Case-variant restricted field names fail closed.
-- Reasoning with native tools requires a Responses API adapter. Sol and Luna
-  permit Chat Completions tool parameters only with `reasoning_effort=none`.
+- Reasoning with native tools requires a Responses API adapter. Original GPT-6
+  Sol and GPT-6 Luna permit Chat Completions tool parameters only with
+  `reasoning_effort=none`; GPT-6 Astra and GPT-6.1 Sol require Responses for tools.
   This change does not add a native tool-result lifecycle or Responses adapter.
   Framework orchestration's JSON plans are ordinary generation, not native
-  function-calling requests, and work for all three variants.
+  function-calling requests, and work for the supported GPT-6 variants.
 
-These guards are provider-local. No `core` contract, orchestration workflow,
-provider-chain order, default model alias, or application budget changes.
+These guards are provider-local. They change no `core` contract, orchestration
+workflow, provider-chain order or application budget; alias migrations are
+separately documented above.
 The native-SDK/custom-client escape hatch remains available for surfaces the
 built-in adapter does not implement. See the [GPT-6 migration contract](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra.md#migration-quickstart)
 and [agent-code examples](README.md#gpt-6-family-support).
@@ -196,13 +209,57 @@ all effort settings, arbitrary future IDs or output-ceiling behavior.
 
 ### Scoped OpenRouter Compatibility and Default Adaptation
 
+GPT-6.1 Sol is an explicit addition, not an expansion to arbitrary dotted GPT
+versions. Native `gpt-6.1-sol` and all hyphen-suffixed variants/snapshots use the shared native
+reasoning classifier, capability row and GPT-6 final validator. They accept
+active reasoning efforts but not `none`; unrelated `gpt-6.1-*` and `gpt-6.10-*`
+names remain unclassified. This also selects the existing reasoning wire profile
+for matching semantic models in shared-codec consumers, including Azure v1;
+it does not establish availability for a route-owned deployment.
+The suffix matcher is not a date parser: `gpt-6.1-sol-pro` inherits these rules,
+and the existing `gpt-6-sol-pro` match inherits original Sol's `none` allowance.
+These are family-classification facts, not verification of either native ID's
+endpoint/effort contract. The matcher is unchanged by this update. Separate
+OpenRouter `-pro` listings do not inherit the exact routed Sol capability row.
+
+OpenRouter independently declares the exact `openai/gpt-6.1-sol` model's
+reasoning and JSON/schema capabilities. Its `openrouter-sol-6.1-sampling@1` rule
+removes temperature using the existing Compatible/Strict policy semantics.
+A routed final validator rejects unsupported effort and sampling/logprob
+parameters, including policy reintroduction. Its `openrouter-sol-6.1-v3`
+identity prevents cache reuse across this contract change. Validation accepts
+JSON-equivalent typed and named string-keyed maps for a non-null `reasoning`
+object, including named string efforts, without rewriting caller-owned data.
+Null objects, invalid effort values and noncanonical recognized keys still fail.
+The recognized sibling controls `enabled` and `exclude` require booleans;
+`enabled:false` fails because reasoning is mandatory, while `exclude:true`
+only hides returned reasoning. A standalone `max_tokens` accepts positive
+integer JSON numbers and is passed through unchanged for OpenRouter to map to
+effort; it is not a locally enforced reasoning-token ceiling. A final object
+containing both `effort` and `max_tokens` fails, including conflicts formed by
+client defaults or patches. Application policy may remove either control before
+final validation. Other native extras remain provider-owned pass-through data.
+Native tool-call
+restrictions are not copied into the routed validator: OpenRouter owns upstream
+API translation. The shared codec's pre-policy validation remains unchanged.
+
+An inherited `none` is not silently translated into active reasoning. Applications
+select a supported effort or explicitly omit effort through the presence-aware
+request API. Native reasoning budgets still use the configured multiplier;
+OpenRouter budgets remain exact. Apart from the separately documented
+default/fast-alias changes, chain order, retries, token ceilings and orchestration flow
+are unchanged. The model's currently advertised
+128,000 output limit remains an application configuration responsibility.
+
 OpenRouter's exact `openai/gpt-6-luna` capability row is independent of native
 GPT-6 classification. Endpoint metadata reviewed on 2026-09-28 advertises
 reasoning and selected endpoints advertise JSON/schema support. Required-parameter
 routing filters unsuitable endpoints. A scoped `openrouter-luna-sampling@1`
 built-in rule removes `/temperature`, using the existing request-policy engine,
-Compatible/Strict semantics and adjustment reports. No global alias changes or
-generic capability engine are introduced. This metadata/offline validation is
+Compatible/Strict semantics and adjustment reports. The fast-alias migration
+reuses this rule without a new capability engine or reasoning-effort default.
+Existing explicit model and non-empty `TRUVAG3_OPENROUTER_MODEL_FAST` overrides
+retain precedence. This metadata/offline validation is
 not a live inference or current ZDR-endpoint availability certification.
 
 The codec validates both before policy evaluation and after it. Thus explicit
@@ -1957,6 +2014,9 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.17 | 2026-10-07 | Set native OpenAI and OpenRouter fast aliases to GPT-6 Luna; reuse existing compatibility policies, preserve explicit/environment overrides and budgets, cover shared Azure semantic resolution |
+| 1.16 | 2026-10-07 | Change only OpenAI's general default alias to GPT-6.1 Sol; preserve other roles/providers, environment and concrete overrides, and document inherited-call/Azure semantic-resolution impact |
+| 1.15 | 2026-10-07 | Native GPT-6.1 Sol family classification (hyphen-suffixed variants/snapshots) and independent exact OpenRouter contract; routed v3 guard preserves typed/named maps, validates reasoning siblings and rejects disabled reasoning/conflicting controls; preserve overrides, privacy, reports and unrelated provider behavior |
 | 1.14 | 2026-10-05 | Respect explicit reasoning-effort omission before codec-default budget/sampling preparation; version only omission identities and preserve final-wire budget reporting |
 | 1.13 | 2026-10-04 | Additive completion facts, separate final/reasoning channels by default, explicit legacy compatibility, response-policy fingerprints and reasoning-channel no-replay |
 | 1.12 | 2026-09-30 | Opt-in decoded-attempt composition shares one provider retry budget; OpenAI-compatible adoption, transport-only adapter compatibility, per-attempt usage/status and stream no-replay boundaries |

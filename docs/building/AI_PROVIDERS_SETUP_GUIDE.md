@@ -290,7 +290,7 @@ overrides are:
 |---|---|---|
 | `default` or an unspecified model | `openrouter/auto` | `TRUVAG3_OPENROUTER_MODEL_DEFAULT` |
 | `smart` | `openrouter/auto` | `TRUVAG3_OPENROUTER_MODEL_SMART` |
-| `fast` | `openai/gpt-5.6-luna` | `TRUVAG3_OPENROUTER_MODEL_FAST` |
+| `fast` | `openai/gpt-6-luna` | `TRUVAG3_OPENROUTER_MODEL_FAST` |
 | `code` | `openrouter/pareto-code` | `TRUVAG3_OPENROUTER_MODEL_CODE` |
 
 Set only the aliases you want to change. For example, this `.env` pins GPT as
@@ -329,7 +329,7 @@ fallback:
 ```go
 fastClient, err := ai.NewClient(
     ai.WithProviderAlias("openai.openrouter"),
-    ai.WithModel("fast"), // _FAST override, otherwise openai/gpt-5.6-luna
+    ai.WithModel("fast"), // _FAST override, otherwise openai/gpt-6-luna
 )
 ```
 
@@ -382,23 +382,46 @@ portable options. The current exact OpenRouter rows are:
 | `z-ai/glm-5.3-flash` | Yes | Not declared | Not declared |
 | `openai/gpt-5.6-luna` | Yes | Yes | OpenAI-style |
 | `openai/gpt-6-luna` | Yes | Yes | OpenAI-style |
+| `openai/gpt-6.1-sol` | Yes | Yes | OpenAI-style |
 
 An undeclared feature is not automatically granted to other model IDs or
 endpoints. Explicit unsupported portable options fail preparation; protected
 `require_parameters` filters upstream endpoint eligibility when used. The exact
-GPT-6 Luna route also has a built-in temperature-removal rule: default
+GPT-6 Luna and GPT-6.1 Sol routes each have a built-in temperature-removal rule:
+default
 `requestpolicy.CompatibilityCompatible` permits the adjustment (including
 explicit values) and reports it; `requestpolicy.CompatibilityStrict` requires
 application acknowledgement for an explicit value. This reuses the policy engine
 rather than changing caller prompts.
-Unsupported reasoning inherited only from a client/chain default is omitted
-with a recorded adjustment and Debug diagnostic; explicit unsupported requests
+
+For exact `openai/gpt-6.1-sol`, choose `low`, `medium`, `high`, `xhigh` or `max`,
+or omit effort through the presence-aware API to use the model default. `none`
+is rejected, including an inherited chain default. Its routed final validator
+also rejects unsupported sampling/logprob controls and noncanonical parameter
+names after policy. Shared codec validation still runs before policy, so explicit
+sampling with active effort can fail before the removal rule; use explicit
+temperature omission when constructing a presence-aware request. The routed
+contract is separate from native OpenAI's tool restrictions. OpenRouter owns
+upstream tool/API translation; this support does not add a native Responses
+adapter. See the [AI module's GPT-6.1 Sol setup and verification scope](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#gpt-6-family-support).
+
+For this routed Sol contract, `reasoning.enabled:false` is also rejected.
+`enabled` and `exclude` require booleans; `exclude:true` hides reasoning output
+without disabling reasoning. A standalone positive-integer `reasoning.max_tokens`
+is allowed for OpenRouter's budget-to-effort mapping, but combining it with
+`effort` is rejected after policy. This includes inherited effort: explicitly
+omit effort or remove the conflicting field through a request patch when using
+the budget form. Values are validated without silently changing caller data.
+
+For models without a declared OpenAI-style reasoning capability, effort inherited
+only from a client/chain default is omitted with a recorded adjustment and Debug
+diagnostic; explicit unsupported requests
 retain their error/warning contract. The capability table is an adapter
 contract, not a guarantee of current endpoint availability or live certification.
 
 The built-in `default`, `smart`, and `code` aliases resolve to routers, so
 requests using them are not AI-output-cache eligible. `fast` resolves to the
-live-verified concrete `openai/gpt-5.6-luna` model and can be cache-eligible
+concrete `openai/gpt-6-luna` model and can be cache-eligible
 when no native `models` fallback list is present. In a failover chain, one unstable
 OpenRouter entry makes the entire ordered chain cache-ineligible.
 
@@ -451,16 +474,45 @@ No code changes needed. The proxy gets all Groq traffic for logging/monitoring.
 ### The Model Name Problem
 
 Every AI provider has different model names:
-- OpenAI: `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`; native GPT-6 Astra/Sol/Luna are also supported explicitly
+
+- OpenAI: `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`; native GPT-6 Astra/Sol/Luna and GPT-6.1 Sol are also supported explicitly
 - Anthropic: `claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`
 - Groq: `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`
 
 If you hardcode model names, switching providers means changing code everywhere. And when providers release new models? More code changes.
 
-Native GPT-6 support does not change the existing alias defaults. See the
+OpenAI's general `default` alias now selects GPT-6.1 Sol. Its `fast` alias selects
+GPT-6 Luna, as does OpenRouter's `fast` alias (with the `openai/` prefix).
+Other alias mappings are unchanged. See the
 [AI module's family compatibility and override guide](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#gpt-6-family-support)
 for effort/sampling restrictions, explicit model selection and verification
 scope. Native OpenAI and OpenRouter are separate capability routes.
+
+The native OpenAI mapping is built in; the first assignment below is optional.
+OpenRouter still needs an explicit override to select Sol rather than its router:
+
+```bash
+# Native OpenAI (provider alias: openai; already the built-in default)
+TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-6.1-sol
+# OpenRouter (provider alias: openai.openrouter)
+TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-6.1-sol
+```
+
+Alternatively, supply the corresponding concrete ID with `ai.WithModel` or a
+per-request model. Native hyphen-suffixed Sol variants/snapshots are recognized; the
+OpenRouter row applies only to its exact reviewed ID. Alias selection does not
+clear an inherited reasoning effort: replace an incompatible `none` with a
+supported effort, or explicitly omit it through `AIRequest.Generation`.
+Native reasoning budgets retain the configured multiplier; OpenRouter budgets
+remain exact. No automatic model-output-limit clamp is applied.
+This default is shared by any call that inherits it, including planning and
+synthesis. Existing `.env` pins remain in force; set
+`TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-5.6-terra` to retain the previous model.
+Azure/shared-catalog resolvers also receive `gpt-6.1-sol` for `default`; update
+their semantic-model-to-deployment mapping or retain an explicit model pin.
+Suffix matching includes names such as `gpt-6.1-sol-pro`; this selects family
+wire rules, not verified support for that native model ID. OpenRouter's separate
+`openai/gpt-6.1-sol-pro` listing is not covered by the exact base-model row.
 
 **Model aliases solve this** by providing portable names:
 
@@ -476,8 +528,8 @@ client, _ := ai.NewClient(
 
 | Alias | Purpose | OpenAI | Anthropic | OpenRouter | Gemini | Groq | DeepSeek | Together |
 |-------|---------|--------|-----------|------------|--------|------|----------|----------|
-| `default` | General catalog choice | `gpt-5.6-terra` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` | `deepseek-ai/DeepSeek-V4-Flash-0731` |
-| `fast` | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `openai/gpt-5.6-luna` | `gemini-3.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` | `google/gemma-4-31B-it` |
+| `default` | General catalog choice | `gpt-6.1-sol` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` | `deepseek-ai/DeepSeek-V4-Flash-0731` |
+| `fast` | Latency-oriented catalog choice | `gpt-6-luna` | `claude-haiku-4-5` | `openai/gpt-6-luna` | `gemini-3.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` | `google/gemma-4-31B-it` |
 | `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-reasoner` | `moonshotai/Kimi-K3` |
 | `premium` | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | _(N/A)_ | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ |
 | `code` | Code-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-chat` | `moonshotai/Kimi-K3` |
@@ -1793,7 +1845,7 @@ OpenAI reasoning profiles (GPT-5, GPT-6, o1, o3 and o4) require model-specific
 translation:
 
 1. **Completion budget** — The OpenAI reasoning wire profile uses `max_completion_tokens`.
-2. **Sampling controls** — Active/default reasoning restricts sampling; support with effort `none` depends on the model. Native GPT-6 Sol/Luna support `none`, while Astra does not. Native GPT-6 validation and the exact OpenRouter Luna adaptation rule have separate contracts.
+2. **Sampling controls** — Active/default reasoning restricts sampling; support with effort `none` depends on the model. Original GPT-6 Sol and GPT-6 Luna support `none`; GPT-6 Astra and GPT-6.1 Sol do not. Native GPT-6 validation and the exact OpenRouter Luna/Sol adaptation rules have separate contracts.
 3. **Reasoning consumption** — Internal reasoning can consume the completion budget. Available provider-reported reasoning is returned separately as `ReasoningContent`; it is not automatically substituted for final answer text.
 
 The adapter selects the wire profile and validates supported controls. On a
@@ -1803,9 +1855,11 @@ effort. Empty effective effort and `none` do not multiply it. This is a budget
 allocation, not a guarantee of visible answer length or provider acceptance.
 
 The shared `openaiwire.IsReasoningModel` helper now recognizes names exactly at
-the GPT-6 family boundary (`gpt-6` or `gpt-6-*`, case-insensitive; not `gpt-60`
-or `vendor/gpt-6-sol`). Direct Azure adapters use it on the resolved **semantic
-model**. Azure v1 selects its reasoning completion/sampling profile; Azure
+the GPT-6 family boundary (`gpt-6` or `gpt-6-*`) plus `gpt-6.1-sol` and its
+hyphen-suffixed variants/snapshots. Matching is case-insensitive; unrelated `gpt-6.1-*`,
+`gpt-6.10-*`, `gpt-60` and `vendor/gpt-6-sol` do not match. Direct Azure adapters
+use it on the resolved **semantic model**. Azure v1 selects its reasoning
+completion/sampling profile; Azure
 classic rejects reasoning-model requests because it has no verified reasoning
 surface contract. Changing only the route's deployment name does not necessarily change
 the semantic model classification. This recognition does not certify that a

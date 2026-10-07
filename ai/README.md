@@ -661,7 +661,7 @@ sharing the wrong `OPENAI_API_KEY` or base URL.
 For OpenRouter, the minimal environment is `OPENROUTER_API_KEY=...`; the
 default URL is `https://openrouter.ai/api/v1`. Its built-in `default` and
 `smart` aliases use `openrouter/auto`, `fast` uses
-`openai/gpt-5.6-luna`, and `code` uses `openrouter/pareto-code`. Override the
+`openai/gpt-6-luna`, and `code` uses `openrouter/pareto-code`. Override the
 aliases independently when deterministic or task-specific model selection
 matters:
 
@@ -995,8 +995,8 @@ groq, _ := ai.NewClient(
 
 | Alias | Purpose | OpenAI | Anthropic | OpenRouter | Gemini | DeepSeek | Groq | Together | xAI | Qwen |
 |-------|---------|--------|-----------|------------|--------|----------|------|----------|-----|------|
-| **`default`** | General use, balanced | `gpt-5.6-terra` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `deepseek-ai/DeepSeek-V4-Flash-0731` | `grok-3-beta` | `qwen-plus` |
-| **`fast`** | Latency-oriented catalog choice | `gpt-5.6-luna` | `claude-haiku-4-5` | `openai/gpt-5.6-luna` | `gemini-3.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `google/gemma-4-31B-it` | `grok-2` | `qwen-turbo` |
+| **`default`** | General use, balanced | `gpt-6.1-sol` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `deepseek-ai/DeepSeek-V4-Flash-0731` | `grok-3-beta` | `qwen-plus` |
+| **`fast`** | Latency-oriented catalog choice | `gpt-6-luna` | `claude-haiku-4-5` | `openai/gpt-6-luna` | `gemini-3.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `google/gemma-4-31B-it` | `grok-2` | `qwen-turbo` |
 | **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-beta` | `qwen-max` |
 | **`premium`** | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | _(N/A)_ | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
 | **`code`** | Code generation & analysis | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `deepseek-chat` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-mini-beta` | `qwen3-coder-plus` |
@@ -1047,7 +1047,7 @@ You can override any model alias at runtime using environment variables, without
 ```bash
 # Pattern: TRUVAG3_{PROVIDER}_MODEL_{ALIAS}=actual-model-name
 
-# Override OpenAI aliases
+# Override OpenAI aliases (pin the previous default if needed)
 export TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-5.6-terra
 export TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol
 
@@ -1158,11 +1158,78 @@ response, _ := client.GenerateResponse(
 
 ### GPT-6 Family Support
 
+**GPT-6.1 Sol:** select `gpt-6.1-sol` for native OpenAI, or
+`openai/gpt-6.1-sol` through `openai.openrouter`. Native matching includes all
+hyphen-suffixed variants and snapshots, not only dated snapshots. Thus a suffix
+such as `-pro` inherits the family wire rules; recognition alone does not certify
+that native model ID, endpoint availability or variant-specific behavior.
+OpenRouter support is declared for the exact reviewed ID, not its `-pro` listing.
+Both support text/JSON generation and streaming. GPT-6.1 Sol accepts `low`,
+`medium`, `high`, `xhigh`, and `max`, but not `none`. Omit effort with the
+presence-aware request API to use the model default, or explicitly choose a
+supported effort. An inherited chain default of `none` is not silently replaced.
+
+OpenRouter uses the existing scoped temperature-removal policy (Compatible by
+default; Strict requires application acknowledgement for an explicit setting).
+Other invalid sampling/logprob controls or unsupported effort fail final
+validation. The shared codec may reject explicit sampling with active effort
+before application policy; prefer `OmitAIParameter[float32]()` for temperature
+in a presence-aware request. Existing `AIOptions` sampling is omitted by the
+reasoning profile. Native restrictions remain provider-local; OpenRouter owns
+upstream native-tool API translation.
+
+Native `reasoning` extras on the OpenRouter route accept non-null JSON objects,
+including typed or named string-keyed Go maps. Validation preserves those values;
+null/scalar objects, noncanonical keys and unsupported efforts are rejected.
+`enabled` and `exclude`, when present, must be booleans. `enabled:false` is
+rejected because Sol requires reasoning; `exclude:true` remains valid and only
+hides reasoning text. `max_tokens` must be a positive integer and is accepted
+only without `effort`, including effort inherited from the client. OpenRouter
+owns standalone budget-to-effort translation; this is not a hard reasoning-token
+ceiling enforced by the framework. Validation reads the final post-policy object,
+so application patches can remove conflicting controls. The guard's cache
+identity is `openrouter-sol-6.1-v3`. See [OpenRouter's reasoning controls](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+
+For native calls, `WithReasoningTokenMultiplier(1)` keeps the configured output
+budget exact; OpenRouter budgets are already exact. Configure at most 128,000
+output tokens for this model. The framework does not add automatic clamping.
+OpenAI's general `default` alias now selects `gpt-6.1-sol`; this affects planning,
+synthesis and other calls that inherit it, not just planning. Separately, `fast`
+now selects `gpt-6-luna` for OpenAI and `openai/gpt-6-luna` for OpenRouter.
+Other aliases are unchanged. Select a concrete ID or map an application alias
+with `TRUVAG3_OPENAI_MODEL_<ALIAS>` / `TRUVAG3_OPENROUTER_MODEL_<ALIAS>`.
+Existing non-empty overrides remain authoritative, including a pin to Terra.
+Azure resolvers using the shared OpenAI catalog also receive the new semantic
+default and must map it to a suitable deployment or pin their previous model.
+See [OpenAI's parameter contract](https://developers.openai.com/api/docs/guides/latest-model#gpt-6-astra-update-api-and-model-parameters)
+and [OpenRouter endpoint metadata](https://openrouter.ai/api/v1/models/openai/gpt-6.1-sol/endpoints).
+
+Live-verified on 2026-10-07 through the travel chat agent in Kind using native
+OpenAI: GPT-6.1 Sol selected a tool, generated the JSON plan and streamed the
+correct tool-grounded answer without retries or failover. Execution
+`orch-1791399666393661846` used native Sol for tool selection, JSON planning and
+streaming synthesis; the answer correctly identified Switzerland's currency
+using a discovered country-information tool. Six provider calls, including
+background memory processing, completed without retries. Skill activation still
+used the then-pinned GPT-5.6 Luna. This historical check predates the later
+validator hardening and alias changes, which have offline regression coverage;
+it does not certify those later changes live or exercise native function calling.
+
 The native OpenAI adapter supports `gpt-6-astra`, `gpt-6-sol` and `gpt-6-luna`
 for text/JSON generation and streaming. It recognizes the family and suffixed
 model IDs, selects `max_completion_tokens`, and advertises portable reasoning
-and JSON support. Existing aliases still select their current models; adding
-support does **not** opt existing agents into a more expensive model.
+and JSON support. The `default` and `fast` choices above are catalog defaults;
+family support itself does not change other role selections.
+
+Calls using `fast` (including skill selection when configured for that alias)
+inherit Luna; explicitly pinned calls retain their model. Use
+`TRUVAG3_OPENAI_MODEL_FAST=gpt-5.6-luna` or
+`TRUVAG3_OPENROUTER_MODEL_FAST=openai/gpt-5.6-luna` to retain the previous fast
+model. Reasoning effort and token budgets are not changed by this migration.
+The existing native compatibility checks and OpenRouter sampling rule still
+apply. In Strict mode, explicit sampling removal requires application-policy
+acknowledgment. Azure resolvers using the shared catalog also receive
+`gpt-6-luna` for `fast` and must map or override that semantic model.
 
 Use the same developer configuration paths as other models:
 
