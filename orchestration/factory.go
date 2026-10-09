@@ -1009,7 +1009,7 @@ func WithMaxConcurrency(max int) OrchestratorOption {
 }
 
 // WithStepTimeout configures the step allowance used to size delegated HTTP timeouts.
-// Default: 120s. It is not an independent per-step context deadline; HTTP-call,
+// Default: 15m. It is not an independent per-step context deadline; HTTP-call,
 // phase, and parent-context deadlines govern actual dispatch duration.
 func WithStepTimeout(timeout time.Duration) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
@@ -1020,7 +1020,7 @@ func WithStepTimeout(timeout time.Duration) OrchestratorOption {
 }
 
 // WithTotalTimeout configures the total HTTP client timeout for tool/agent calls.
-// Default: 600s. Controls how long the executor waits for individual HTTP responses.
+// Default: 20m. Controls how long the executor waits for individual HTTP responses.
 func WithTotalTimeout(timeout time.Duration) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
 		if timeout > 0 {

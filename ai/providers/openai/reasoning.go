@@ -13,17 +13,14 @@ func IsReasoningModel(model string) bool {
 	return openaiwire.IsReasoningModel(model)
 }
 
-// DefaultReasoningTokenMultiplier is the default factor by which max_tokens is increased
-// for reasoning models. Reasoning models (GPT-5, o1, o3, o4) count internal chain-of-thought
-// reasoning tokens against max_completion_tokens, but these tokens are NOT returned in the
-// response. Without this multiplier, complex prompts may exhaust all tokens on reasoning,
-// leaving nothing for the visible output (resulting in empty content).
+// DefaultReasoningTokenMultiplier defaults to 3. Reasoning and visible output
+// share the resulting budget; no portion is reserved for either. Explicit 1
+// keeps the configured budget exact.
 //
 // The multiplier is configurable via ai.WithReasoningTokenMultiplier() for single clients
 // or ai.WithChainReasoningTokenMultiplier() for chain clients.
 //
-// Example: If caller requests 2000 tokens, reasoning models get 2000 * 5 = 10000,
-// ensuring ~4000 for internal reasoning + ~6000 for visible output.
+// Example: an explicit multiplier of 5 turns 2000 into a 10000-token shared budget.
 const DefaultReasoningTokenMultiplier = openaiwire.DefaultReasoningTokenMultiplier
 
 // buildRequestBody constructs the request body for OpenAI chat completions API.
@@ -41,7 +38,7 @@ const DefaultReasoningTokenMultiplier = openaiwire.DefaultReasoningTokenMultipli
 //   - If reasoningEffort is set, a "reasoning": {"effort": value} object is included in the body
 //
 // The reasoningTokenMultiplier parameter allows callers to configure the multiplier.
-// Use DefaultReasoningTokenMultiplier (5) if no custom value is needed.
+// Use DefaultReasoningTokenMultiplier (3) if no custom value is needed.
 func buildRequestBody(model string, messages []map[string]string, maxTokens int, temperature float32, streaming bool, reasoningTokenMultiplier int, reasoningEffort string) map[string]interface{} {
 	return openaiwire.BuildRequestBody(
 		model,

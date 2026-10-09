@@ -97,22 +97,21 @@ type StreamUsage struct {
 
 // modelAliases maps portable names to Anthropic model IDs.
 // These aliases enable portable model names across providers when using Chain Client.
-// Updated August 2026 with Claude 5 family models.
+// Updated October 2026: Haiku 5.5 and Opus 5.5 lower standard token prices.
 //
-// Source: https://platform.claude.com/docs/en/about-claude/models
+// Sources: https://platform.claude.com/docs/en/models/overview
+// and https://platform.claude.com/docs/en/about-claude/pricing
 //
-// Available models:
-//   - claude-fable-5: Most capable widely released model for demanding agentic work (1M context)
-//   - claude-opus-5: Complex agentic coding and enterprise work (1M context)
-//   - claude-sonnet-5: Best balance of intelligence and speed (1M context)
-//   - claude-haiku-4-5: Convenience alias for the current Haiku 4.5 snapshot
+// Sonnet 5 and Fable 5 remain selected: their successors lower cache-read
+// prices, but not standard input/output prices. Explicit model IDs and
+// environment overrides let applications opt into those migrations separately.
 var modelAliases = map[string]string{
-	"default": "claude-sonnet-5",  // Sonnet 5: best balance of intelligence and speed
-	"fast":    "claude-haiku-4-5", // Haiku 4.5: provider-maintained convenience alias
-	"smart":   "claude-opus-5",    // Opus 5: complex analysis and agentic work
-	"premium": "claude-fable-5",   // Fable 5: most capable widely released model
-	"code":    "claude-opus-5",    // Opus 5: complex agentic coding
-	"vision":  "claude-opus-5",    // Opus 5: strongest vision in this catalog
+	"default": "claude-sonnet-5",  // Balanced general-purpose tier
+	"fast":    "claude-haiku-5-5", // Lower-cost fast tier
+	"smart":   "claude-opus-5-5",  // Complex analysis and agentic work
+	"premium": "claude-fable-5",   // Premium tier
+	"code":    "claude-opus-5-5",  // Complex agentic coding
+	"vision":  "claude-opus-5-5",  // Image understanding
 }
 
 // resolveModel returns the actual model name for an alias.

@@ -15,6 +15,12 @@ type memoryViewRecord struct {
 	text  string
 }
 
+// Event IDs are domain-scoped in storage, including custom caller-supplied IDs.
+type memoryViewEventKey struct {
+	domain string
+	id     string
+}
+
 type memoryViewSection struct {
 	kind    string
 	heading string
@@ -173,17 +179,20 @@ func encodeMemoryRecordFormat(record memoryViewRecord, limit int, compact bool) 
 // events, retrieval amounts and section order never participate in this choice.
 func compactMemoryDetails(sections []memoryViewSection) bool {
 	savings := 0
-	seen := make(map[string]bool)
+	seen := make(map[memoryViewEventKey]bool)
 	for _, section := range sections {
 		for _, record := range section.records {
 			if record.event == nil {
 				continue
 			}
 			event := *record.event
-			if event.EventID != "" && seen[event.EventID] {
+			key := memoryViewEventKey{domain: event.AgentDomain, id: event.EventID}
+			if key.id != "" && seen[key] {
 				continue
 			}
-			seen[event.EventID] = true
+			if key.id != "" {
+				seen[key] = true
+			}
 			event.Summary = "" // Summary encoding is identical in both forms.
 			metadata := memoryViewRecord{event: &event}
 			named, _ := encodeMemoryRecordFormat(metadata, int(^uint(0)>>1), false)
@@ -228,7 +237,7 @@ func renderMemoryView(sections []memoryViewSection, limit int) (string, memoryVi
 		return "", report
 	}
 	remaining := limit - reserved
-	seen := make(map[string]bool)
+	seen := make(map[memoryViewEventKey]bool)
 	var out strings.Builder
 	out.WriteString(historicalMemoryScopeNotice)
 	if compact {
@@ -240,11 +249,11 @@ func renderMemoryView(sections []memoryViewSection, limit int) (string, memoryVi
 		counts := memoryViewCounts{Kind: section.kind}
 		var lines strings.Builder
 		for _, record := range section.records {
-			id := ""
+			var key memoryViewEventKey
 			if record.event != nil {
-				id = record.event.EventID
+				key = memoryViewEventKey{domain: record.event.AgentDomain, id: record.event.EventID}
 			}
-			if id != "" && seen[id] {
+			if key.id != "" && seen[key] {
 				counts.Duplicates++
 				continue
 			}
@@ -262,8 +271,8 @@ func renderMemoryView(sections []memoryViewSection, limit int) (string, memoryVi
 				counts.Shortened++
 				report.Outcome = "partial"
 			}
-			if id != "" {
-				seen[id] = true
+			if key.id != "" {
+				seen[key] = true
 			}
 		}
 		marker, _ := json.Marshal(counts)

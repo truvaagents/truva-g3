@@ -41,8 +41,8 @@ func TestFastAliasesUseLunaContractAndPreserveOverrides(t *testing.T) {
 					}
 					body := decodePreparedOpenRouterBody(t, alias.Request.Body)
 					wantTokens := 512
-					if tc.provider == "openai" && effort == "high" {
-						wantTokens *= 5
+					if effort != "none" {
+						wantTokens *= 3
 					}
 					if body["model"] != tc.model || body["max_completion_tokens"] != float64(wantTokens) {
 						t.Fatalf("incorrect model/budget: %#v", body)

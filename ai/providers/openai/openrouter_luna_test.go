@@ -32,8 +32,12 @@ func TestOpenRouterLunaSamplingPolicy(t *testing.T) {
 			if _, exists := body["temperature"]; exists {
 				t.Fatal("routed Luna temperature survived")
 			}
-			if body["max_completion_tokens"] != float64(2500) {
-				t.Fatal("routed budget scaled")
+			wantBudget := 2500
+			if effort != "none" {
+				wantBudget *= 3
+			}
+			if body["max_completion_tokens"] != float64(wantBudget) {
+				t.Fatal("wrong routed reasoning allowance")
 			}
 			provider := requireOpenRouterProviderObject(t, body)
 			if provider["zdr"] != true || provider["data_collection"] != "deny" || provider["require_parameters"] != true || provider["allow_fallbacks"] != false || !reflect.DeepEqual(provider["only"], []interface{}{"openai"}) || !reflect.DeepEqual(provider["order"], []interface{}{"openai"}) {

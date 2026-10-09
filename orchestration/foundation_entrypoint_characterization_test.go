@@ -92,8 +92,8 @@ func TestFoundationCharacterization_PartialLegacyConfigKeepsExecutorDefaults(t *
 	if got := cap(orchestrator.executor.semaphore); got != 5 {
 		t.Fatalf("legacy partial-config concurrency = %d, want historical default 5", got)
 	}
-	if got := orchestrator.executor.httpClient.Timeout; got != 600*time.Second {
-		t.Fatalf("legacy partial-config HTTP timeout = %s, want 10m", got)
+	if got := orchestrator.executor.httpClient.Timeout; got != 20*time.Minute {
+		t.Fatalf("legacy partial-config HTTP timeout = %s, want 20m", got)
 	}
 	if got := orchestrator.executor.maxAttempts; got != 3 {
 		t.Fatalf("legacy partial-config max attempts = %d, want 3", got)

@@ -12,6 +12,8 @@ import (
 
 func TestClientPrepareRequest_OmitsSamplingForRestrictedFamilies(t *testing.T) {
 	models := []string{
+		"claude-haiku-5-5",
+		"claude-opus-5-5",
 		"claude-opus-5",
 		"claude-opus-4-7",
 		"claude-opus-4-8-20260701",
@@ -56,6 +58,7 @@ func TestClientPrepareRequest_PreservesSamplingForAllowedAndUnknownModels(t *tes
 		want  samplingPolicy
 	}{
 		{name: "allowed", model: "claude-sonnet-4-6", want: samplingAllowed},
+		{name: "previous fast pin", model: "claude-haiku-4-5", want: samplingAllowed},
 		{name: "unknown", model: "enterprise-claude-v1", want: samplingUnknown},
 	}
 

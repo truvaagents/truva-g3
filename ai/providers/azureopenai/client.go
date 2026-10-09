@@ -66,7 +66,7 @@ func newClient(
 	}
 	timeout := config.Timeout
 	if timeout <= 0 {
-		timeout = 180 * time.Second
+		timeout = 5 * time.Minute
 	}
 	base := providers.NewBaseClient(timeout, logger)
 	base.ProviderName = providerName

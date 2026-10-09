@@ -62,7 +62,7 @@ func TestDefaultSolPreparationAndOverrides(t *testing.T) {
 	if err := json.Unmarshal(invocation.Request.Body, &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["model"] != "gpt-6.1-sol" || body["reasoning_effort"] != nil || body["temperature"] != nil || body["max_completion_tokens"] != float64(15000) {
+	if body["model"] != "gpt-6.1-sol" || body["reasoning_effort"] != nil || body["temperature"] != nil || body["max_completion_tokens"] != float64(45000) {
 		t.Fatalf("unexpected default wire request: %#v", body)
 	}
 	first := invocation.Request.Report.Fingerprint
@@ -195,7 +195,7 @@ func TestReasoningTokenBudgetReportSurvivesDecodeFailure(t *testing.T) {
 	if err == nil || result == nil || result.RequestReport == nil {
 		t.Fatalf("Generate result=%#v error=%v", result, err)
 	}
-	want := 100 * 5
+	want := 100 * 3
 	if capturedBody["max_completion_tokens"] != float64(want) {
 		t.Fatalf("wire budget = %#v, want %d", capturedBody["max_completion_tokens"], want)
 	}

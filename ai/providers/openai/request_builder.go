@@ -415,12 +415,19 @@ func (c *Client) requestProfile(
 	_ resolvedRoute,
 ) (openaiwire.RequestProfile, error) {
 	profile := ordinaryProfile(semantics.SemanticModel)
+	budget := reviewedModelBudget(semantics.ProviderAlias, semantics.SemanticModel)
+	profile.ReasoningActiveByDefault = budget.reasoningActiveByDefault
+	profile.ReasoningHeadroomLimit = budget.outputLimit
 	if semantics.ProviderAlias == openRouterProviderAlias {
 		profile.TokenLimit = openaiwire.TokenLimitMaxCompletionTokens
 		profile.TokenBudget = openaiwire.TokenBudgetExact
 		profile.ReasoningEffort = openaiwire.ReasoningEffortNestedObject
 		if semantics.Options.ReasoningEffort != "" && semantics.Capabilities.ReasoningStyle == "openai" {
+			profile.TokenBudget = openaiwire.TokenBudgetScaleForReasoning
 			profile.Sampling = openaiwire.SamplingReasoningRestricted
+		}
+		if profile.ReasoningActiveByDefault {
+			profile.TokenBudget = openaiwire.TokenBudgetScaleForReasoning
 		}
 		return profile, profile.Validate()
 	}
@@ -513,7 +520,12 @@ func (c *Client) buildPolicyRequest(
 	if semantics.ProviderAlias == openRouterProviderAlias && semantics.Capabilities.ModelPrefix == "openai/gpt-6.1-sol" {
 		policyDraft = &openRouterSolDraft{Draft: draft}
 	}
-	report, err := c.requestPolicy.Apply(ctx, policyDraft, request.Patches)
+	policy, policyDraft, err := outputCeilingPolicy(c.requestPolicy, draft, policyDraft,
+		reviewedOutputLimit(semantics.ProviderAlias, semantics.SemanticModel))
+	if err != nil {
+		return prepared, err
+	}
+	report, err := policy.Apply(ctx, policyDraft, request.Patches)
 	if report != nil {
 		adjustments := append([]core.AIRequestAdjustment(nil), semantics.PreparationAdjustments...)
 		adjustments = append(adjustments, draft.Adjustments()...)

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/truvaagents/truva-g3/ai/internal/wirevalue"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -21,6 +22,22 @@ type Engine struct {
 	appRules   []compiledPatch
 	middleware []RequestMiddleware
 	mode       CompatibilityMode
+}
+
+// WithBuiltInRules derives an immutable engine with additional provider-owned
+// compatibility rules. It preserves application policy and mode precedence and
+// is safe to use for rules derived from a call-local capability snapshot.
+func (e *Engine) WithBuiltInRules(patches ...core.AIProviderPatch) (*Engine, error) {
+	if e == nil {
+		return nil, errors.New("request policy engine is nil")
+	}
+	rules, err := cloneAndValidatePatches(patches)
+	if err != nil {
+		return nil, fmt.Errorf("validate additional built-in request rules: %w", err)
+	}
+	derived := *e
+	derived.builtIns = append(append([]compiledPatch(nil), e.builtIns...), rules...)
+	return &derived, nil
 }
 
 // NewEngine validates and snapshots request rules before they can be used by
@@ -396,42 +413,7 @@ func reportFloat32(value interface{}) (float32, bool) {
 }
 
 func reportInt(value interface{}) (int, bool) {
-	var number int64
-	if jsonNumber, ok := value.(json.Number); ok {
-		parsed, err := jsonNumber.Int64()
-		if err != nil {
-			return 0, false
-		}
-		number = parsed
-	} else {
-		reflected := reflect.ValueOf(value)
-		if !reflected.IsValid() {
-			return 0, false
-		}
-		switch reflected.Kind() {
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			number = reflected.Int()
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			unsigned := reflected.Uint()
-			if unsigned > math.MaxInt64 {
-				return 0, false
-			}
-			number = int64(unsigned)
-		case reflect.Float32, reflect.Float64:
-			floating := reflected.Float()
-			if floating != math.Trunc(floating) || floating > math.MaxInt64 || floating < math.MinInt64 {
-				return 0, false
-			}
-			number = int64(floating)
-		default:
-			return 0, false
-		}
-	}
-	converted := int(number)
-	if int64(converted) != number {
-		return 0, false
-	}
-	return converted, true
+	return wirevalue.Int(value)
 }
 
 func (e *trackingEditor) finalReport() *core.AIRequestReport {

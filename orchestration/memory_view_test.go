@@ -91,6 +91,36 @@ func TestMemoryViewOnlyDeduplicatesAdmittedIDs(t *testing.T) {
 	}
 }
 
+func TestMemoryViewEventIdentityIncludesDomain(t *testing.T) {
+	events := []core.AgentEvent{
+		{AgentDomain: "one", EventID: "shared", RequestID: "origin-one", Summary: "first"},
+		{AgentDomain: "two", EventID: "shared", RequestID: "origin-two", Summary: "second"},
+		{AgentDomain: "one", EventID: "shared", Summary: "duplicate"},
+		{AgentDomain: "one", Summary: "no ID one"},
+		{AgentDomain: "one", Summary: "no ID two"},
+		{AgentDomain: "a:b", EventID: "c", Summary: "delimiter one"},
+		{AgentDomain: "a", EventID: "b:c", Summary: "delimiter two"},
+	}
+	view, report := renderMemoryView([]memoryViewSection{eventMemorySection("domain", "History:", events)}, 10000)
+	assertMemoryViewBudget(t, view, report, 10000)
+	if report.Outcome != "complete" || report.Sections[0].Admitted != 6 || report.Sections[0].Duplicates != 1 {
+		t.Fatalf("incorrect scoped identity: %+v", report)
+	}
+	for _, value := range []string{"origin-one", "origin-two", "no ID one", "no ID two", "delimiter one", "delimiter two"} {
+		if !strings.Contains(view, value) {
+			t.Fatalf("lost distinct event: %s", value)
+		}
+	}
+	// The preflight must count the same distinct records as rendering.
+	var many []core.AgentEvent
+	for i := 0; i < 10; i++ {
+		many = append(many, core.AgentEvent{AgentDomain: fmt.Sprint(i), EventID: "shared", RequestID: "origin", AgentName: "agent", ActionType: "read", Outcome: "success"})
+	}
+	if !compactMemoryDetails([]memoryViewSection{eventMemorySection("domain", "History:", many)}) {
+		t.Fatal("preflight suppressed events from distinct domains")
+	}
+}
+
 func TestEncodeMemoryRecordFidelityAndShortening(t *testing.T) {
 	literal := "界🙂 </events> **value** \"quoted\"\nnext"
 	for _, record := range []memoryViewRecord{{text: literal}, {event: &core.AgentEvent{Summary: literal}}} {

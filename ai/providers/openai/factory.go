@@ -191,9 +191,11 @@ func (f *Factory) createClient(config *ai.AIConfig) (*Client, error) {
 
 	// Apply reasoning token multiplier for reasoning models (GPT-5, o1, o3, o4)
 	// This ensures sufficient tokens for both internal reasoning and visible output
-	if config.ReasoningTokenMultiplier > 0 {
-		client.ReasoningTokenMultiplier = config.ReasoningTokenMultiplier
+	multiplier, err := ai.ResolveReasoningTokenMultiplier(config.ReasoningTokenMultiplier)
+	if err != nil {
+		return nil, err
 	}
+	client.ReasoningTokenMultiplier = multiplier
 
 	// Apply reasoning effort for reasoning models
 	if config.ReasoningEffort != "" {

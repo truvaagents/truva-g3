@@ -1833,7 +1833,7 @@ Respond with ONLY the corrected JSON parameters object. No explanation, no markd
 	if err != nil {
 		// LLM Debug: Record failed correction attempt
 		errModel, errProvider := effectiveAIIdentity(invocationResult, response, err)
-		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:         "correction",
 			Timestamp:    llmStartTime,
 			DurationMs:   llmDuration.Milliseconds(),
@@ -1846,13 +1846,13 @@ Respond with ONLY the corrected JSON parameters object. No explanation, no markd
 			Success:      false,
 			Error:        err.Error(),
 			Attempt:      1,
-		}, response))
+		}, invocationResult, invocation, response, err))
 		return nil, fmt.Errorf("LLM correction request failed: %w", err)
 	}
 
 	// LLM Debug: Record successful correction attempt
 	model, provider := effectiveAIIdentity(invocationResult, response, nil)
-	o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+	o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "correction",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
@@ -1868,7 +1868,7 @@ Respond with ONLY the corrected JSON parameters object. No explanation, no markd
 		TotalTokens:      response.Usage.TotalTokens,
 		Success:          true,
 		Attempt:          1,
-	}, response))
+	}, invocationResult, invocation, response, err))
 
 	// Extract JSON from response (handle potential markdown wrapping)
 	content := response.Content
@@ -3240,16 +3240,23 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 		aiResponse = invocationResult.Response
 	}
 	effective := effectiveAIRequestForDebug(invocationResult, invocation)
-	if err == nil || err == core.ErrStreamPartiallyCompleted {
+	if aiResponse != nil && (err == nil || errors.Is(err, core.ErrStreamPartiallyCompleted)) {
 		core.RecordTokenUsage(ctx, "synthesis", aiResponse.Usage)
 	}
 
 	// Handle streaming errors
 	if err != nil {
-		if err == core.ErrStreamPartiallyCompleted {
+		if errors.Is(err, core.ErrStreamPartiallyCompleted) && aiResponse != nil {
+			interruptionReason := "interrupted"
+			switch {
+			case errors.Is(err, context.Canceled):
+				interruptionReason = "cancelled"
+			case errors.Is(err, context.DeadlineExceeded):
+				interruptionReason = "deadline_exceeded"
+			}
 			// LLM Debug: Record partial streaming synthesis (interrupted but has content)
 			model, provider := effectiveAIIdentity(invocationResult, aiResponse, err)
-			o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+			o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 				Type:             "synthesis_streaming",
 				Timestamp:        synthesisStart,
 				DurationMs:       time.Since(synthesisStart).Milliseconds(),
@@ -3263,12 +3270,16 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 				PromptTokens:     aiResponse.Usage.PromptTokens,     // May be partial
 				CompletionTokens: aiResponse.Usage.CompletionTokens, // May be partial
 				TotalTokens:      aiResponse.Usage.TotalTokens,      // May be partial
-				Success:          true,                              // Partial success - we have content
-				Error:            "stream partially completed",
+				Success:          false,
+				Error:            err.Error(),
 				Attempt:          1,
-			}, aiResponse))
+			}, invocationResult, invocation, aiResponse, err))
 
 			if synthesisSpan != nil {
+				// Keep the exact provider cause in the response/debug record;
+				// the span records only bounded interruption evidence.
+				synthesisSpan.RecordError(core.ErrStreamPartiallyCompleted)
+				synthesisSpan.SetAttribute("synthesis.interruption_reason", interruptionReason)
 				synthesisSpan.SetAttribute("synthesis.partial", true)
 				synthesisSpan.SetAttribute("synthesis.chunks_sent", chunkIndex)
 				synthesisSpan.SetAttribute("synthesis.response_length", fullContent.Len())
@@ -3289,7 +3300,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 					ExecutionTime:   time.Since(startTime),
 					AgentsInvolved:  agentsInvolved,
 					Metadata:        mergeEnrichments(state.Pipeline.Metadata, core.GetPipelineEnrichments(ctx)),
-					Errors:          []string{"stream partially completed"},
+					Errors:          []string{err.Error()},
 					Confidence:      0.7,
 					Steps:           loopResult.CombinedResult.Steps,
 					Usage:           &partialUsage,
@@ -3300,13 +3311,13 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 				StreamCompleted: false,
 				PartialContent:  true,
 				StepResults:     loopResult.CombinedResult.Steps,
-				FinishReason:    "cancelled",
+				FinishReason:    interruptionReason,
 			}, nil
 		}
 
 		// LLM Debug: Record failed streaming synthesis
 		errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:         "synthesis_streaming",
 			Timestamp:    synthesisStart,
 			DurationMs:   time.Since(synthesisStart).Milliseconds(),
@@ -3319,7 +3330,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 			Success:      false,
 			Error:        err.Error(),
 			Attempt:      1,
-		}, aiResponse))
+		}, invocationResult, invocation, aiResponse, err))
 
 		if synthesisSpan != nil {
 			synthesisSpan.RecordError(err)
@@ -3332,7 +3343,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 	// Record the completed model call before application hooks can panic.
 	// LLM Debug: Record successful streaming synthesis
 	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-	o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+	o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "synthesis_streaming",
 		Timestamp:        synthesisStart,
 		DurationMs:       time.Since(synthesisStart).Milliseconds(),
@@ -3348,7 +3359,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 		TotalTokens:      aiResponse.Usage.TotalTokens,
 		Success:          true,
 		Attempt:          1,
-	}, aiResponse))
+	}, invocationResult, invocation, aiResponse, err))
 
 	// --- Pipeline hooks: after synthesis (streaming path) ---
 	// Note: tokens were already streamed to the client. AfterSynthesis hooks
@@ -3690,7 +3701,7 @@ func (o *AIOrchestrator) buildPreparedSynthesisPrompt(
 func (o *AIOrchestrator) synthesisAIOptions(systemPrompt string) *core.AIOptions {
 	base := &core.AIOptions{
 		Temperature:  0.5,
-		MaxTokens:    5000,
+		MaxTokens:    defaultSynthesisMaxTokens,
 		SystemPrompt: systemPrompt,
 	}
 	return mergeAIOptions(base, o.config.SynthesisAIOptions)
@@ -3700,7 +3711,7 @@ func (o *AIOrchestrator) synthesisAIOptions(systemPrompt string) *core.AIOptions
 func (o *AIOrchestrator) planAIOptions(temperature float32, systemPrompt string) *core.AIOptions {
 	base := &core.AIOptions{
 		Temperature:  temperature,
-		MaxTokens:    15000,
+		MaxTokens:    defaultPlanMaxTokens,
 		SystemPrompt: systemPrompt,
 	}
 	return mergeAIOptions(base, o.config.PlanAIOptions)
@@ -3850,7 +3861,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 
 			// LLM Debug: Record the actual prepared request, even on failure.
 			errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-			o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+			o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 				Type:         "plan_generation",
 				Timestamp:    llmStartTime,
 				DurationMs:   llmDuration.Milliseconds(),
@@ -3863,7 +3874,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 				Success:      false,
 				Error:        err.Error(),
 				Attempt:      attempt,
-			}, aiResponse))
+			}, invocationResult, invocation, aiResponse, err))
 
 			if o.logger != nil {
 				o.logger.ErrorWithContext(ctx, "Plan generation failed", map[string]interface{}{
@@ -3903,7 +3914,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 
 		// LLM Debug: Record successful interaction with full prompt and response
 		model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:             "plan_generation",
 			Timestamp:        llmStartTime,
 			DurationMs:       llmDuration.Milliseconds(),
@@ -3919,7 +3930,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 			TotalTokens:      aiResponse.Usage.TotalTokens,
 			Success:          true,
 			Attempt:          attempt,
-		}, aiResponse))
+		}, invocationResult, invocation, aiResponse, err))
 
 		if o.logger != nil {
 			o.logger.DebugWithContext(ctx, "LLM response received", map[string]interface{}{
@@ -4180,7 +4191,7 @@ STRICT RULES FOR THIS RETRY:
 
 						// LLM Debug: Record failed hallucination retry plan generation
 						retryErrModel, retryErrProvider := effectiveAIIdentity(retryInvocationResult, retryResponse, retryErr)
-						o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+						o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 							Type:         "plan_generation",
 							Timestamp:    retryLLMStartTime,
 							DurationMs:   retryLLMDuration.Milliseconds(),
@@ -4193,14 +4204,14 @@ STRICT RULES FOR THIS RETRY:
 							Success:      false,
 							Error:        fmt.Sprintf("hallucination_retry (attempt %d): %s", hallRetry+1, retryErr.Error()),
 							Attempt:      attempt, // Keep original attempt, error indicates it's a hallucination retry
-						}, retryResponse))
+						}, retryInvocationResult, retryInvocation, retryResponse, retryErr))
 
 						return nil, fmt.Errorf("plan regeneration failed: %w", retryErr)
 					}
 
 					// LLM Debug: Record successful hallucination retry plan generation
 					retryModel, retryProvider := effectiveAIIdentity(retryInvocationResult, retryResponse, nil)
-					o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+					o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 						Type:             "plan_generation",
 						Timestamp:        retryLLMStartTime,
 						DurationMs:       retryLLMDuration.Milliseconds(),
@@ -4216,7 +4227,7 @@ STRICT RULES FOR THIS RETRY:
 						TotalTokens:      retryResponse.Usage.TotalTokens,
 						Success:          true,
 						Attempt:          attempt, // Original attempt number; hallRetry context in prompt
-					}, retryResponse))
+					}, retryInvocationResult, retryInvocation, retryResponse, retryErr))
 
 					// Parse the retry response
 					planAttemptFromContext(ctx).rememberOutput(retryResponse.Content)
@@ -4577,7 +4588,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 
 			// Debug store: record the actual prepared request on failure.
 			errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-			o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+			o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 				Type:            "continuation_plan_generation",
 				PhaseNumber:     phaseNumber,
 				Timestamp:       llmStartTime,
@@ -4592,7 +4603,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 				Error:           err.Error(),
 				Attempt:         attempt,
 				CallDescription: fmt.Sprintf("Phase %d continuation plan generation", phaseNumber),
-			}, aiResponse))
+			}, invocationResult, invocation, aiResponse, err))
 
 			if o.logger != nil {
 				o.logger.ErrorWithContext(ctx, "Continuation plan LLM call failed", map[string]interface{}{
@@ -4644,7 +4655,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 
 		// Debug store: record successful LLM call
 		model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:             "continuation_plan_generation",
 			PhaseNumber:      phaseNumber,
 			Timestamp:        llmStartTime,
@@ -4662,7 +4673,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 			Success:          true,
 			Attempt:          attempt,
 			CallDescription:  fmt.Sprintf("Phase %d continuation plan generation", phaseNumber),
-		}, aiResponse))
+		}, invocationResult, invocation, aiResponse, err))
 
 		// Parse the plan
 		planAttemptFromContext(ctx).rememberOutput(responseContent)
@@ -4941,7 +4952,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 
 		// Debug store: record failed LLM call
 		errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:            "continuation_plan_regeneration",
 			PhaseNumber:     phaseNumber,
 			Timestamp:       llmStartTime,
@@ -4956,7 +4967,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 			Error:           err.Error(),
 			Attempt:         1,
 			CallDescription: fmt.Sprintf("Phase %d continuation plan REGENERATION (trigger: %s)", phaseNumber, truncateString(validationErr.Error(), 200)),
-		}, aiResponse))
+		}, invocationResult, invocation, aiResponse, err))
 
 		if o.logger != nil {
 			o.logger.ErrorWithContext(ctx, "Continuation plan regeneration LLM call failed", map[string]interface{}{
@@ -5008,7 +5019,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 
 	// Debug store: record successful LLM call
 	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-	o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+	o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "continuation_plan_regeneration",
 		PhaseNumber:      phaseNumber,
 		Timestamp:        llmStartTime,
@@ -5026,7 +5037,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 		Success:          true,
 		Attempt:          1,
 		CallDescription:  fmt.Sprintf("Phase %d continuation plan REGENERATION (trigger: %s)", phaseNumber, truncateString(validationErr.Error(), 200)),
-	}, aiResponse))
+	}, invocationResult, invocation, aiResponse, err))
 
 	phaseAttempt.rememberOutput(aiResponse.Content)
 	plan, err := o.parsePlan(aiResponse.Content)
@@ -5550,7 +5561,7 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 
 	totalBudget := o.config.ContinuationResultMaxTotalChars
 	if totalBudget <= 0 {
-		totalBudget = 32768 // safety fallback (matches DefaultConfig)
+		totalBudget = defaultContinuationTotalBytes // safety fallback (matches DefaultConfig)
 	}
 
 	// B: per-step decision digests (valid-JSON skeletons; non-JSON → structural-floor body + C mark).
@@ -6981,7 +6992,7 @@ func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, req
 
 	if err != nil {
 		errModel, errProvider := effectiveAIIdentity(invocationResult, aiResponse, err)
-		o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+		o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 			Type:         "plan_regeneration_fallback",
 			Timestamp:    llmStartTime,
 			DurationMs:   llmDuration.Milliseconds(),
@@ -6993,13 +7004,13 @@ func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, req
 			Provider:     errProvider,
 			Success:      false,
 			Error:        err.Error(),
-		}, aiResponse))
+		}, invocationResult, invocation, aiResponse, err))
 		return nil, err
 	}
 	core.RecordTokenUsage(ctx, "correction", aiResponse.Usage)
 
 	model, provider := effectiveAIIdentity(invocationResult, aiResponse, nil)
-	o.recordDebugInteraction(ctx, requestID, withAICompletionFacts(LLMInteraction{
+	o.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{
 		Type:             "plan_regeneration_fallback",
 		Timestamp:        llmStartTime,
 		DurationMs:       llmDuration.Milliseconds(),
@@ -7014,7 +7025,7 @@ func (o *AIOrchestrator) regeneratePlan(ctx context.Context, request string, req
 		CompletionTokens: aiResponse.Usage.CompletionTokens,
 		TotalTokens:      aiResponse.Usage.TotalTokens,
 		Success:          true,
-	}, aiResponse))
+	}, invocationResult, invocation, aiResponse, err))
 
 	phaseAttempt.rememberOutput(aiResponse.Content)
 	plan, err := o.parsePlan(aiResponse.Content)

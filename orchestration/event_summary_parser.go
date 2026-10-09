@@ -12,18 +12,33 @@ import (
 // Call-local metadata for the built-in summarizer. Custom implementations keep
 // the public core.EventSummarizer contract and do not fabricate this observation.
 type summaryParseOutcome struct {
-	Valid            map[string]core.StepSummary `json:"-"`
-	Expected         int                         `json:"expected"`
-	Accepted         int                         `json:"accepted"`
-	Rejected         int                         `json:"rejected_entries"`
-	EntitiesRejected int                         `json:"rejected_entities"`
-	CompleteArray    bool                        `json:"complete_array"`
-	Truncated        bool                        `json:"truncated"`
-	Outcome          string                      `json:"outcome"`
-	EntityFields     summaryEntityCoverage       `json:"entity_fields"`
-	BatchExcluded    int                         `json:"batch_excluded"`
-	batchExcludedIDs map[string]bool
-	entityFields     map[string]entityFieldObservation
+	Valid              map[string]core.StepSummary `json:"-"`
+	Expected           int                         `json:"expected"`
+	Accepted           int                         `json:"accepted"`
+	Rejected           int                         `json:"rejected_entries"`
+	EntitiesRejected   int                         `json:"rejected_entities"`
+	CompleteArray      bool                        `json:"complete_array"`
+	Truncated          bool                        `json:"truncated"`
+	Outcome            string                      `json:"outcome"`
+	EntityFields       summaryEntityCoverage       `json:"entity_fields"`
+	BatchExcluded      int                         `json:"batch_excluded"`
+	SummariesShortened int                         `json:"summaries_shortened"`
+	batchExcludedIDs   map[string]bool
+	entityFields       map[string]entityFieldObservation
+}
+
+// Only the derived prose is shortened. Raw completion evidence is retained by
+// the debug recorder before parsing, and structured entities keep exact IDs.
+func (result *summaryParseOutcome) boundSummaryProse(maxBytes int) {
+	const marker = " [shortened]"
+	for id, entry := range result.Valid {
+		if len(entry.Summary) <= maxBytes {
+			continue
+		}
+		entry.Summary = boundedSummaryResponse(entry.Summary, maxBytes-len(marker)) + marker
+		result.Valid[id] = entry
+		result.SummariesShortened++
+	}
 }
 
 // Entity field coverage describes retained summaries, not entity grounding or

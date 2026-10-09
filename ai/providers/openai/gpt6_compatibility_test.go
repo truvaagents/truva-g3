@@ -27,12 +27,16 @@ func TestGPT6FamilyRequestCompatibility(t *testing.T) {
 				{"planning-default-effort", "", 30000, 30000, false},
 				{"synthesis-default-effort", "", 10000, 10000, false},
 				{"explicit-none", "none", 100, 100, true},
-				{"explicit-medium", "medium", 100, 500, false},
-				{"explicit-low", "low", 100, 500, false},
-				{"explicit-high", "high", 100, 500, false},
-				{"explicit-xhigh", "xhigh", 100, 500, false},
-				{"explicit-max", "max", 100, 500, false},
+				{"explicit-medium", "medium", 100, 300, false},
+				{"explicit-low", "low", 100, 300, false},
+				{"explicit-high", "high", 100, 300, false},
+				{"explicit-xhigh", "xhigh", 100, 300, false},
+				{"explicit-max", "max", 100, 300, false},
 			} {
+				// Exact reviewed IDs reason by default; snapshot defaults remain unknown.
+				if tc.effort == "" && (model == "gpt-6-astra" || model == "gpt-6-sol" || model == "gpt-6-luna" || model == "gpt-6.1-sol") {
+					tc.wireTokens *= 3
+				}
 				t.Run(tc.name, func(t *testing.T) {
 					for _, stream := range []bool{false, true} {
 						client := NewClient("synthetic-key", "", "openai", &core.NoOpLogger{})
@@ -304,7 +308,7 @@ func TestGPT61SolPublicStreaming(t *testing.T) {
 		{alias: "openai", model: "gpt-6.1-sol", wireTokens: 246},
 		{alias: "openai", model: "default", wireTokens: 246},
 		{alias: "openai", model: "", wireTokens: 246},
-		{alias: openRouterProviderAlias, model: "openai/gpt-6.1-sol", wireTokens: 123},
+		{alias: openRouterProviderAlias, model: "openai/gpt-6.1-sol", wireTokens: 246},
 	} {
 		t.Run(tc.alias+"/"+tc.model, func(t *testing.T) {
 			wantModel := tc.model

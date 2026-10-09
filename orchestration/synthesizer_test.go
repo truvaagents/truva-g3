@@ -441,8 +441,8 @@ func TestNewAISynthesizer_Defaults(t *testing.T) {
 	if s.synthesisTemperature != 0.5 {
 		t.Errorf("Expected default synthesisTemperature=0.5, got %f", s.synthesisTemperature)
 	}
-	if s.synthesisMaxTokens != 5000 {
-		t.Errorf("Expected default synthesisMaxTokens=5000, got %d", s.synthesisMaxTokens)
+	if s.synthesisMaxTokens != 30000 {
+		t.Errorf("Expected default synthesisMaxTokens=30000, got %d", s.synthesisMaxTokens)
 	}
 	if s.strategy != StrategyLLM {
 		t.Errorf("Expected default strategy=StrategyLLM, got %s", s.strategy)
@@ -516,8 +516,8 @@ func TestAISynthesizer_SetSynthesisMaxTokens(t *testing.T) {
 		{"valid_3000", 3000, 3000},
 		{"valid_1", 1, 1},
 		{"valid_100000", 100000, 100000},
-		{"zero_ignored", 0, 5000},      // stays at constructor default
-		{"negative_ignored", -1, 5000}, // stays at constructor default
+		{"zero_ignored", 0, 30000},      // stays at constructor default
+		{"negative_ignored", -1, 30000}, // stays at constructor default
 	}
 
 	for _, tt := range tests {

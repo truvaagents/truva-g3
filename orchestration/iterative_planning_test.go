@@ -144,14 +144,14 @@ func TestDefaultConfigIterativePlanning(t *testing.T) {
 		if !config.IterativePlanning.Enabled {
 			t.Error("expected iterative planning enabled by default")
 		}
-		if config.IterativePlanning.MaxPhases != 5 {
-			t.Errorf("expected MaxPhases=5, got %d", config.IterativePlanning.MaxPhases)
+		if config.IterativePlanning.MaxPhases != 20 {
+			t.Errorf("expected MaxPhases=20, got %d", config.IterativePlanning.MaxPhases)
 		}
 		if config.IterativePlanning.MaxTotalSteps != 200 {
 			t.Errorf("expected MaxTotalSteps=200, got %d", config.IterativePlanning.MaxTotalSteps)
 		}
-		if config.IterativePlanning.PhaseTimeout != 180*time.Second {
-			t.Errorf("expected PhaseTimeout=180s, got %v", config.IterativePlanning.PhaseTimeout)
+		if config.IterativePlanning.PhaseTimeout != 25*time.Minute {
+			t.Errorf("expected PhaseTimeout=25m, got %v", config.IterativePlanning.PhaseTimeout)
 		}
 	})
 
@@ -190,8 +190,8 @@ func TestDefaultConfigIterativePlanning(t *testing.T) {
 		defer os.Unsetenv("TRUVAG3_ITERATIVE_MAX_PHASES")
 
 		config := DefaultConfig()
-		if config.IterativePlanning.MaxPhases != 5 {
-			t.Errorf("expected MaxPhases=5 (default), got %d", config.IterativePlanning.MaxPhases)
+		if config.IterativePlanning.MaxPhases != 20 {
+			t.Errorf("expected MaxPhases=20 (default), got %d", config.IterativePlanning.MaxPhases)
 		}
 	})
 
@@ -200,8 +200,8 @@ func TestDefaultConfigIterativePlanning(t *testing.T) {
 		defer os.Unsetenv("TRUVAG3_ITERATIVE_MAX_PHASES")
 
 		config := DefaultConfig()
-		if config.IterativePlanning.MaxPhases != 5 {
-			t.Errorf("expected MaxPhases=5 (default for 0), got %d", config.IterativePlanning.MaxPhases)
+		if config.IterativePlanning.MaxPhases != 20 {
+			t.Errorf("expected MaxPhases=20 (default for 0), got %d", config.IterativePlanning.MaxPhases)
 		}
 	})
 
@@ -210,8 +210,8 @@ func TestDefaultConfigIterativePlanning(t *testing.T) {
 		defer os.Unsetenv("TRUVAG3_ITERATIVE_MAX_PHASES")
 
 		config := DefaultConfig()
-		if config.IterativePlanning.MaxPhases != 5 {
-			t.Errorf("expected MaxPhases=5 (default for negative), got %d", config.IterativePlanning.MaxPhases)
+		if config.IterativePlanning.MaxPhases != 20 {
+			t.Errorf("expected MaxPhases=20 (default for negative), got %d", config.IterativePlanning.MaxPhases)
 		}
 	})
 
@@ -240,8 +240,8 @@ func TestDefaultConfigIterativePlanning(t *testing.T) {
 		defer os.Unsetenv("TRUVAG3_ITERATIVE_PHASE_TIMEOUT")
 
 		config := DefaultConfig()
-		if config.IterativePlanning.PhaseTimeout != 180*time.Second {
-			t.Errorf("expected PhaseTimeout=180s (default), got %v", config.IterativePlanning.PhaseTimeout)
+		if config.IterativePlanning.PhaseTimeout != 25*time.Minute {
+			t.Errorf("expected PhaseTimeout=25m (default), got %v", config.IterativePlanning.PhaseTimeout)
 		}
 	})
 
@@ -250,8 +250,8 @@ func TestDefaultConfigIterativePlanning(t *testing.T) {
 		defer os.Unsetenv("TRUVAG3_ITERATIVE_PHASE_TIMEOUT")
 
 		config := DefaultConfig()
-		if config.IterativePlanning.PhaseTimeout != 180*time.Second {
-			t.Errorf("expected PhaseTimeout=180s (default for negative), got %v", config.IterativePlanning.PhaseTimeout)
+		if config.IterativePlanning.PhaseTimeout != 25*time.Minute {
+			t.Errorf("expected PhaseTimeout=25m (default for negative), got %v", config.IterativePlanning.PhaseTimeout)
 		}
 	})
 }

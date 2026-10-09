@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/truvaagents/truva-g3/ai/internal/openaimodel"
+	"github.com/truvaagents/truva-g3/ai/internal/wirevalue"
 	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
@@ -22,9 +24,9 @@ const (
 	// DefaultSurfaceVersion is the versioned identity of the stock chat
 	// completions adapter.
 	DefaultSurfaceVersion = "openai-chat-completions-v2"
-	// DefaultReasoningTokenMultiplier reserves room for reasoning tokens while
-	// retaining the legacy OpenAI provider behavior.
-	DefaultReasoningTokenMultiplier = 5
+	// DefaultReasoningTokenMultiplier leaves room for reasoning as well as an
+	// answer on scaling profiles. Explicit 1 keeps the configured budget exact.
+	DefaultReasoningTokenMultiplier = 3
 	// DefaultMaxSSEEventBytes bounds one decoded server-sent event to 1 MiB.
 	DefaultMaxSSEEventBytes = 1 << 20
 	maxWireErrorTypeBytes   = 64
@@ -92,7 +94,10 @@ func newConfiguredCodec(config Config) (*codec, error) {
 		return nil, errors.New("OpenAI wire surface version is empty")
 	}
 	multiplier := config.ReasoningTokenMultiplier
-	if multiplier <= 0 {
+	if multiplier < 0 {
+		return nil, errors.New("reasoning token multiplier must be positive or zero (unset)")
+	}
+	if multiplier == 0 {
 		multiplier = DefaultReasoningTokenMultiplier
 	}
 	maxSSEEventBytes := config.MaxSSEEventBytes
@@ -380,6 +385,17 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 	} else if reasoningEffort == "" {
 		reasoningEffort = c.defaultReasoningEffort
 	}
+	modelDefaultReasoning := profile.ReasoningActiveByDefault && reasoningEffort == "" &&
+		request.Generation.ReasoningEffort.Mode != core.AIParameterOmit &&
+		!hasKeyFold(options.Extra, "reasoning") && !hasKeyFold(options.Extra, "reasoning_effort")
+	reasoningActive := (reasoningEffort != "" && reasoningEffort != "none") || modelDefaultReasoning
+	boundedHeadroom := headroomExceedsLimit(maxTokens, c.reasoningTokenMultiplier, profile.ReasoningHeadroomLimit)
+	if request.Generation.MaxTokens.Mode != core.AIParameterOmit &&
+		profile.TokenBudget == TokenBudgetScaleForReasoning &&
+		reasoningActive && !boundedHeadroom &&
+		maxTokens > math.MaxInt/c.reasoningTokenMultiplier {
+		return nil, errors.New("reasoning output budget overflows; reduce max tokens or multiplier")
+	}
 	legacySystemPrompt := options.SystemPrompt
 	if request.Generation.SystemPrompt.Mode == core.AIParameterOmit {
 		systemPrompt = ""
@@ -399,6 +415,7 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 		stream,
 		c.reasoningTokenMultiplier,
 		reasoningEffort,
+		reasoningActive,
 	)
 	nativeReasoningOverridden := false
 	if profile.ReasoningEffort == ReasoningEffortNestedObject &&
@@ -433,6 +450,24 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 	}
 
 	adjustments := make([]core.AIRequestAdjustment, 0, 8)
+	if request.Generation.MaxTokens.Mode != core.AIParameterOmit && maxTokens > 0 &&
+		profile.TokenBudget == TokenBudgetScaleForReasoning && c.reasoningTokenMultiplier > 1 &&
+		reasoningActive {
+		rule, reason := "reasoning-headroom-v1", "shared reasoning and answer allowance"
+		if modelDefaultReasoning {
+			rule, reason = "model-default-reasoning-headroom-v1", "reviewed model default uses shared reasoning and answer allowance"
+		}
+		adjustments = append(adjustments, core.AIRequestAdjustment{
+			Source: "wire-profile", Rule: rule, Path: tokenLimitPath(profile.TokenLimit),
+			Action: "scale", Reason: reason,
+		})
+		if boundedHeadroom {
+			adjustments = append(adjustments, core.AIRequestAdjustment{
+				Source: "wire-profile", Rule: "reasoning-headroom-ceiling-v1", Path: tokenLimitPath(profile.TokenLimit),
+				Action: "cap", Reason: "derived reasoning headroom bounded by reviewed model capacity",
+			})
+		}
+	}
 	if nativeReasoningOverridden {
 		adjustments = append(adjustments, core.AIRequestAdjustment{
 			Source: "portable", Rule: "generation-precedence", Path: "/reasoning/effort",
@@ -502,9 +537,21 @@ func (c *codec) BuildDraftWithProfile(request *core.AIRequest, profile RequestPr
 		adjustments:     adjustments,
 		headerConflicts: headerConflicts,
 	}
+	if profile.TokenBudget == TokenBudgetScaleForReasoning && reasoningActive {
+		// This is a policy identity, not a hash of the prompt or token count.
+		// Include it even when MaxTokens is absent so cache preflight and the
+		// later invocation agree. Explicit reasoning omission stays exact.
+		draft.profileIdentity += fmt.Sprintf(":reasoning-budget-v1:multiplier=%d", c.reasoningTokenMultiplier)
+		if profile.ReasoningHeadroomLimit > 0 {
+			draft.profileIdentity += fmt.Sprintf(":reasoning-headroom-ceiling-v1=%d", profile.ReasoningHeadroomLimit)
+		}
+		if modelDefaultReasoning {
+			draft.profileIdentity += ":model-default-reasoning-v1"
+		}
+	}
 	if request.Generation.ReasoningEffort.Mode == core.AIParameterOmit {
 		// Invalidate cached output prepared under the old omission semantics
-		// without changing identities for inherited or explicitly set effort.
+		// with an additional marker specific to explicit omission.
 		draft.profileIdentity += ":reasoning-omission-v1"
 	}
 	if err := draft.Validate(); err != nil {
@@ -706,6 +753,8 @@ func IsReasoningModel(model string) bool {
 
 // BuildRequestBody is retained as a small public bridge for providers that
 // adopted the earlier OpenAI reasoning helper before using Codec directly.
+// Its map-only API saturates overflowing multiplication at math.MaxInt; that
+// is not a model capacity guarantee. Use Codec for error-returning validation.
 func BuildRequestBody(
 	model string,
 	messages []map[string]string,
@@ -742,7 +791,7 @@ func buildBody(
 			if maxTokens > 0 {
 				budget := maxTokens
 				if reasoningEffort != "" {
-					budget *= reasoningTokenMultiplier
+					budget = saturatedTokenProduct(budget, reasoningTokenMultiplier)
 				}
 				body["max_completion_tokens"] = budget
 			}
@@ -774,6 +823,7 @@ func buildProfiledBody(
 	stream bool,
 	reasoningTokenMultiplier int,
 	reasoningEffort string,
+	reasoningActive bool,
 ) map[string]interface{} {
 	body := map[string]interface{}{"messages": messages}
 	if profile.ModelField == ModelFieldRequired {
@@ -786,8 +836,13 @@ func buildProfiledBody(
 		case TokenLimitMaxCompletionTokens:
 			budget := maxTokens
 			if profile.TokenBudget == TokenBudgetScaleForReasoning &&
-				reasoningEffort != "" && reasoningEffort != "none" {
-				budget *= reasoningTokenMultiplier
+				reasoningActive {
+				if headroomExceedsLimit(budget, reasoningTokenMultiplier, profile.ReasoningHeadroomLimit) {
+					budget = profile.ReasoningHeadroomLimit
+				} else {
+					// The draft path rejects overflow when no reviewed limit bounds it.
+					budget = saturatedTokenProduct(budget, reasoningTokenMultiplier)
+				}
 			}
 			body["max_completion_tokens"] = budget
 		}
@@ -803,6 +858,21 @@ func buildProfiledBody(
 		body["stream_options"] = map[string]interface{}{"include_usage": true}
 	}
 	return body
+}
+
+// Only added headroom is bounded here. Over-limit caller budgets remain visible
+// to the adapter's capacity policy, which owns Compatible/Strict behavior.
+// Division avoids overflow even for a very large configured multiplier.
+func headroomExceedsLimit(budget, multiplier, limit int) bool {
+	return budget > 0 && limit > 0 && budget <= limit && multiplier > limit/budget
+}
+
+// Both map-building paths supply positive budgets and resolved multipliers.
+func saturatedTokenProduct(budget, multiplier int) int {
+	if budget > math.MaxInt/multiplier {
+		return math.MaxInt
+	}
+	return budget * multiplier
 }
 
 func applyReasoningEffort(body map[string]interface{}, style ReasoningEffortStyle, effort string) {
@@ -1071,32 +1141,8 @@ func includesUsage(value interface{}) bool {
 }
 
 func validatePositiveInteger(path string, value interface{}) error {
-	valid := false
-	switch number := value.(type) {
-	case int:
-		valid = number > 0
-	case int8:
-		valid = number > 0
-	case int16:
-		valid = number > 0
-	case int32:
-		valid = number > 0
-	case int64:
-		valid = number > 0
-	case uint:
-		valid = number > 0
-	case uint8:
-		valid = number > 0
-	case uint16:
-		valid = number > 0
-	case uint32:
-		valid = number > 0
-	case uint64:
-		valid = number > 0
-	case float64:
-		valid = number > 0 && number == float64(int64(number))
-	}
-	if !valid {
+	number, valid := wirevalue.Int(value)
+	if !valid || number <= 0 {
 		return fmt.Errorf("%s must be a positive integer", strings.TrimPrefix(path, "/"))
 	}
 	return nil

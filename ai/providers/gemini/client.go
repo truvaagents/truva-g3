@@ -36,7 +36,7 @@ func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
-	const timeout = 180 * time.Second
+	const timeout = 5 * time.Minute
 	base := providers.NewBaseClient(timeout, logger)
 	base.ProviderName = "gemini"
 	base.DefaultModel = "default"

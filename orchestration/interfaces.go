@@ -405,9 +405,9 @@ func GetStepCallback(ctx context.Context) StepCompleteCallback {
 type ExecutionOptions struct {
 	// Default: 25 | Env: TRUVAG3_EXECUTION_MAX_CONCURRENCY
 	MaxConcurrency int `json:"max_concurrency"`
-	// Default: 120s | Env: TRUVAG3_EXECUTION_STEP_TIMEOUT
+	// Default: 15m | Env: TRUVAG3_EXECUTION_STEP_TIMEOUT
 	StepTimeout time.Duration `json:"step_timeout"`
-	// Default: 600s | Env: TRUVAG3_ORCHESTRATION_TIMEOUT
+	// Default: 20m | Env: TRUVAG3_ORCHESTRATION_TIMEOUT
 	TotalTimeout     time.Duration `json:"total_timeout"`
 	RetryAttempts    int           `json:"retry_attempts"`
 	RetryDelay       time.Duration `json:"retry_delay"`
@@ -607,7 +607,7 @@ type OrchestratorConfig struct {
 	// newest-first until this budget is spent, and older steps that don't fit are evicted (an N-of-M
 	// note is emitted). ~32 KB is a starting ceiling to tune on measurement; a typical run fits well
 	// under it (measured ~268 B/digest -> ~122 steps in 32 KB).
-	// Env: TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS (default: 32768)
+	// Env: TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS (default: 196608)
 	ContinuationResultMaxTotalChars int `json:"continuation_result_max_total_chars,omitempty"`
 
 	// ContinuationMaxEscalations caps how many non-JSON step results may escalate to the continuation
@@ -777,7 +777,7 @@ type IterativePlanConfig struct {
 	// MaxPhases is the maximum number of planning phases allowed per request.
 	// If reached without a terminal plan, the orchestrator forces termination
 	// and synthesizes with available results.
-	// Default: 5
+	// Default: 20
 	MaxPhases int `json:"max_phases"`
 
 	// MaxTotalSteps is the maximum total steps across all phases.
@@ -790,7 +790,7 @@ type IterativePlanConfig struct {
 	// The parent context may end it earlier. ExecutionOptions.TotalTimeout is a
 	// base HTTP-call timeout, not an entire-request deadline. A phase timeout fails
 	// the phase; retained partial execution evidence does not guarantee synthesis.
-	// Default: 180s
+	// Default: 25m
 	// Env: TRUVAG3_ITERATIVE_PHASE_TIMEOUT
 	PhaseTimeout time.Duration `json:"phase_timeout"`
 

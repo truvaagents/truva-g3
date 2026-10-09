@@ -167,7 +167,7 @@ func TestAzureV1StaticAPIKeyReasoningContract(t *testing.T) {
 	if request.headers.Get("api-key") != "static-secret" || request.headers.Get("Authorization") != "" {
 		t.Fatalf("request headers = %#v", request.headers)
 	}
-	if request.body["model"] != "prod-o3-west" || request.body["reasoning_effort"] != "high" || request.body["max_completion_tokens"] != float64(500) {
+	if request.body["model"] != "prod-o3-west" || request.body["reasoning_effort"] != "high" || request.body["max_completion_tokens"] != float64(300) {
 		t.Fatalf("request body = %#v", request.body)
 	}
 	responseFormat, ok := request.body["response_format"].(map[string]interface{})
@@ -184,8 +184,8 @@ func TestAzureV1StaticAPIKeyReasoningContract(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	if result.RequestReport.EffectiveMaxTokens.Mode != core.AIParameterSet ||
-		result.RequestReport.EffectiveMaxTokens.Value != 500 {
-		t.Fatalf("effective max tokens = %#v, want 500", result.RequestReport.EffectiveMaxTokens)
+		result.RequestReport.EffectiveMaxTokens.Value != 300 {
+		t.Fatalf("effective max tokens = %#v, want 300", result.RequestReport.EffectiveMaxTokens)
 	}
 	encodedReport, _ := json.Marshal(result.RequestReport)
 	if bytes.Contains(encodedReport, []byte("prod-o3-west")) || bytes.Contains(encodedReport, []byte("static-secret")) {

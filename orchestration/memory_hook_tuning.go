@@ -23,6 +23,16 @@ type memoryHookTuning struct {
 
 func resolveMemoryHookTuning() (memoryHookTuning, error) {
 	tuning := memoryHookTuning{maxInPrompt: 10}
+	if err := readMemoryHookInt("TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_SUMMARY_MAX_BYTES", func(n int) error {
+		opt := WithSummarizerSummaryMaxBytes(n)
+		if err := opt(&LLMEventSummarizer{}); err != nil {
+			return err
+		}
+		tuning.summarizer = append(tuning.summarizer, opt)
+		return nil
+	}); err != nil {
+		return memoryHookTuning{}, err
+	}
 	if err := readMemoryHookInt("TRUVAG3_SHARED_MEMORY_RECORD_FAILURE_CAUSE_MAX_BYTES", func(n int) error {
 		opt := WithRecordFailureCauseMaxBytes(n)
 		if err := opt(&MemoryRecordHook{}); err != nil {

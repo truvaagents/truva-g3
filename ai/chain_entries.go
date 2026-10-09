@@ -3,6 +3,7 @@ package ai
 import (
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -200,7 +201,9 @@ func materializeEntry(entry ChainEntry) (ChainEntry, error) {
 
 func withDefaultRequestTimeout(timeout time.Duration) AIOption {
 	return func(config *AIConfig) {
-		if config.Timeout <= 0 {
+		// Leave a present environment override for the root constructor to
+		// validate and resolve. A chain fallback must not mask that setting.
+		if _, present := os.LookupEnv(requestTimeoutEnv); !present && config.Timeout <= 0 {
 			config.Timeout = timeout
 		}
 	}

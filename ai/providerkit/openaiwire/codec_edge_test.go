@@ -33,7 +33,7 @@ func TestBuildRequestBodyCompatibilityBridge(t *testing.T) {
 			name:  "reasoning model uses default multiplier",
 			model: "o3", maxTokens: 20, temperature: 0.25, multiplier: 0, effort: "high",
 			want: map[string]interface{}{
-				"model": "o3", "messages": messages, "max_completion_tokens": 100,
+				"model": "o3", "messages": messages, "max_completion_tokens": 60,
 				"reasoning": map[string]interface{}{"effort": "high"},
 			},
 			absent: []string{"max_tokens", "temperature"},

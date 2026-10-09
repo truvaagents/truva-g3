@@ -63,8 +63,12 @@ func (attempt *phasePlanAttempt) rememberError(err error) {
 		return
 	}
 	value := err.Error()
-	for _, existing := range attempt.errors {
+	for i, existing := range attempt.errors {
 		if existing == value {
+			// Prompt assembly treats the final entry as the current error.
+			// Refresh recency without losing a different earlier failure.
+			copy(attempt.errors[i:], attempt.errors[i+1:])
+			attempt.errors[len(attempt.errors)-1] = value
 			return
 		}
 	}
