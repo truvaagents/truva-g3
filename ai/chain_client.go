@@ -41,6 +41,16 @@ func NewChainClient(opts ...ChainOption) (*ChainClient, error) {
 	for _, opt := range opts {
 		opt(config)
 	}
+	multiplier, err := ResolveReasoningTokenMultiplier(config.ReasoningTokenMultiplier)
+	if err != nil {
+		return nil, err
+	}
+	config.ReasoningTokenMultiplier = multiplier
+	timeout, err := resolveRequestTimeoutOverride(config.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	config.Timeout = timeout
 
 	// Auto-detect path: when no explicit chain is provided, discover available providers
 	// from the environment. This is the chain client counterpart of single client's auto-detect.
@@ -117,7 +127,7 @@ func NewChainClient(opts ...ChainOption) (*ChainClient, error) {
 			opts = append(opts, WithCircuitBreaker(breaker))
 		}
 		// Apply an explicit chain timeout when configured. Otherwise the
-		// materializer supplies the framework's failover-safe 180s default.
+		// materializer supplies the framework's five-minute default.
 		if config.Timeout > 0 {
 			opts = append(opts, WithTimeout(config.Timeout))
 		}
@@ -336,10 +346,10 @@ type ChainConfig struct {
 	Logger          core.Logger
 	Telemetry       core.Telemetry
 	// Timeout is a positive request deadline override. Zero or a negative value
-	// means unset; framework-managed entries then use the failover-safe 180s
+	// means unset; framework-managed entries then use the five-minute
 	// framework default rather than a provider's longer standalone default.
 	Timeout                  time.Duration
-	ReasoningTokenMultiplier int    // Token multiplier for reasoning models (0 = use default 5x)
+	ReasoningTokenMultiplier int    // Token multiplier for scaling profiles (0 = env, then default 3x)
 	ReasoningEffort          string // Default reasoning effort: "none", "low", "medium", "high", "xhigh" (empty = model default)
 	ReasoningContentFallback bool
 	// CircuitBreakerFactory constructs an independent breaker for each requested
@@ -401,8 +411,8 @@ func WithChainCircuitBreakerFactory(factory CircuitBreakerFactory) ChainOption {
 // WithChainTimeout sets the request timeout for AI requests in the chain.
 // This is important for reasoning models (GPT-5, o1, o3, o4) that need longer
 // processing time for chain-of-thought responses.
-// If not set, framework-managed entries use the failover-safe 180-second
-// framework default rather than a provider's longer standalone default.
+// If not set, TRUVAG3_AI_TIMEOUT applies, then framework-managed entries use
+// five minutes rather than a provider's longer standalone default.
 // Zero and negative durations are treated as unset, not as an unbounded mode.
 func WithChainTimeout(timeout time.Duration) ChainOption {
 	return func(c *ChainConfig) {
@@ -413,11 +423,12 @@ func WithChainTimeout(timeout time.Duration) ChainOption {
 // WithChainReasoningTokenMultiplier sets the token multiplier for reasoning models
 // in all providers within the chain. Reasoning models (GPT-5, o1, o3, o4) count
 // internal chain-of-thought tokens against max_completion_tokens but don't return
-// them in the response. Without a multiplier, complex prompts exhaust tokens on
+// them in the response. Complex prompts can exhaust the budget on
 // reasoning, leaving nothing for visible output.
 //
-// Default is 5 (5x multiplier). Set to a lower value (e.g., 3) for cost optimization
-// if responses are simpler, or higher (e.g., 8) for very complex reasoning tasks.
+// Default is 3; explicit 1 keeps budgets exact. Scaling applies to reviewed
+// profiles with active effective effort, including supported OpenRouter models.
+// Reasoning and final output share the cap.
 func WithChainReasoningTokenMultiplier(multiplier int) ChainOption {
 	return func(c *ChainConfig) {
 		c.ReasoningTokenMultiplier = multiplier

@@ -45,7 +45,7 @@ func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
 		baseURL = DefaultBaseURL
 	}
 
-	base := providers.NewBaseClient(180*time.Second, logger) // 3 minutes default for reasoning models
+	base := providers.NewBaseClient(5*time.Minute, logger) // Generous request deadline; callers can override.
 	base.ProviderName = "anthropic"
 	// Use "default" alias so resolveModel() is always called, enabling env var overrides
 	// The actual model is resolved at request-time via modelAliases["default"]
@@ -59,7 +59,7 @@ func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
 		baseURL:        baseURL,
 		providerAlias:  "anthropic",
 		requestPolicy:  newRequestPolicyEngine(),
-		requestTimeout: 180 * time.Second,
+		requestTimeout: 5 * time.Minute,
 	}
 }
 

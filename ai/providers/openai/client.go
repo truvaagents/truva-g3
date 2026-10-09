@@ -40,7 +40,7 @@ func NewClient(apiKey, baseURL, providerAlias string, logger core.Logger) *Clien
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
-	base := providers.NewBaseClient(180*time.Second, logger)
+	base := providers.NewBaseClient(5*time.Minute, logger)
 	base.ProviderName = "openai"
 	base.DefaultModel = "default"
 	return &Client{
@@ -49,7 +49,7 @@ func NewClient(apiKey, baseURL, providerAlias string, logger core.Logger) *Clien
 		baseURL:          strings.TrimRight(baseURL, "/"),
 		providerAlias:    providerAlias,
 		requestPolicy:    newRequestPolicyEngine(),
-		requestTimeout:   180 * time.Second,
+		requestTimeout:   5 * time.Minute,
 		sseEventMaxBytes: openaiwire.DefaultMaxSSEEventBytes,
 	}
 }

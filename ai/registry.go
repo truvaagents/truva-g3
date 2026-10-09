@@ -42,8 +42,8 @@ type RequestProviderFactory interface {
 
 // ProviderRequestTimeoutFactory optionally declares the request timeout used
 // for explicitly selected standalone clients when the application does not
-// supply WithTimeout. Auto-detected clients and framework-managed chain entries
-// retain the framework's failover-safe 180-second default.
+// supply a positive WithTimeout or TRUVAG3_AI_TIMEOUT override. Auto-detected
+// clients and framework-managed chain entries otherwise use five minutes.
 type ProviderRequestTimeoutFactory interface {
 	ProviderFactory
 	DefaultRequestTimeout() time.Duration

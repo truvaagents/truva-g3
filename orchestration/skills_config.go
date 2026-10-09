@@ -35,7 +35,7 @@ func defaultSkillRuntimeLimits() SkillRuntimeLimits {
 		MaxResourcesPerExecution:   8,
 		ResolutionMaxTokens:        512,
 		RegistryReadTimeout:        5 * time.Second,
-		SynthesisTokenBudget:       2048,
+		SynthesisTokenBudget:       defaultSynthesisSkillTokens,
 		EffectiveInputTokenBudget:  0,
 	}
 }

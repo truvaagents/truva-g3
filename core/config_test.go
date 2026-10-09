@@ -25,7 +25,8 @@ func TestDefaultConfig(t *testing.T) {
 
 	// HTTP defaults
 	assert.Equal(t, 300*time.Second, cfg.HTTP.ReadTimeout)
-	assert.Equal(t, 300*time.Second, cfg.HTTP.WriteTimeout)
+	assert.Equal(t, 35*time.Minute, cfg.HTTP.WriteTimeout)
+	assert.Equal(t, 5*time.Minute, cfg.AI.Timeout)
 	assert.Equal(t, 120*time.Second, cfg.HTTP.IdleTimeout)
 	assert.True(t, cfg.HTTP.EnableHealthCheck)
 	assert.Equal(t, "/health", cfg.HTTP.HealthCheckPath)

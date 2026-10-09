@@ -97,9 +97,9 @@ const configFallbackMetric = "orchestration.config.fallback"
 // NewDefaultOrchestratorConfig returns deterministic framework defaults and
 // never reads process environment.
 func NewDefaultOrchestratorConfig() *OrchestratorConfig {
-	planMaxTokens := 15000
+	planMaxTokens := defaultPlanMaxTokens
 	synthesisTemp := float32(0.5)
-	synthesisMaxTokens := 5000
+	synthesisMaxTokens := defaultSynthesisMaxTokens
 	microMaxTokens := 2000
 
 	return &OrchestratorConfig{
@@ -114,8 +114,8 @@ func NewDefaultOrchestratorConfig() *OrchestratorConfig {
 		CacheTTL:                         5 * time.Minute,
 		ExecutionOptions: ExecutionOptions{
 			MaxConcurrency:            25,
-			StepTimeout:               120 * time.Second,
-			TotalTimeout:              600 * time.Second,
+			StepTimeout:               defaultStepTimeout,
+			TotalTimeout:              defaultOutboundHTTPTimeout,
 			RetryAttempts:             3,
 			RetryDelay:                2 * time.Second,
 			CircuitBreaker:            true,
@@ -148,9 +148,9 @@ func NewDefaultOrchestratorConfig() *OrchestratorConfig {
 		},
 		IterativePlanning: IterativePlanConfig{
 			Enabled:                      true,
-			MaxPhases:                    5,
+			MaxPhases:                    defaultMaxPhases,
 			MaxTotalSteps:                200,
-			PhaseTimeout:                 180 * time.Second,
+			PhaseTimeout:                 defaultPhaseTimeout,
 			MaxValidationRounds:          defaultMaxValidationRounds,
 			RegenerationFeedbackMaxBytes: defaultRegenerationFeedbackMaxBytes,
 		},
@@ -164,14 +164,14 @@ func NewDefaultOrchestratorConfig() *OrchestratorConfig {
 		HITL:     DefaultHITLConfig(),
 		ResultTrim: ResultTrimConfig{
 			Enabled:                      true,
-			MaxResultBytes:               16384,
-			MaxTotalPromptBytes:          32768,
+			MaxResultBytes:               defaultResultMaxBytes,
+			MaxTotalPromptBytes:          defaultResultTotalBytes,
 			MaxMicroResolutionBytes:      65536,
 			MaxAgentInputBytes:           0,
 			SchemaGuidedMappingThreshold: 16384,
 		},
 		ContinuationResultMaxChars:            10000,
-		ContinuationResultMaxTotalChars:       32768,
+		ContinuationResultMaxTotalChars:       defaultContinuationTotalBytes,
 		ContinuationMaxEscalations:            8,
 		ContinuationDigestArraySample:         defaultDigestSampleN,
 		ContinuationDigestScalarMax:           defaultDigestScalarMax,

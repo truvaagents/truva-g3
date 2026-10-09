@@ -35,9 +35,8 @@ type WorkflowHTTPClient struct {
 func NewWorkflowHTTPClient() *WorkflowHTTPClient {
 	tracedClient := telemetry.NewTracedHTTPClient(nil)
 
-	// Configurable timeout: TRUVAG3_ORCHESTRATION_TIMEOUT (default: 120s)
-	// For long-running AI workflows, set to higher values (e.g., "5m", "10m")
-	timeout := 120 * time.Second
+	// Configurable per-call timeout: TRUVAG3_ORCHESTRATION_TIMEOUT (default: 20m).
+	timeout := defaultOutboundHTTPTimeout
 	if envTimeout := os.Getenv("TRUVAG3_ORCHESTRATION_TIMEOUT"); envTimeout != "" {
 		if parsed, err := time.ParseDuration(envTimeout); err == nil {
 			timeout = parsed

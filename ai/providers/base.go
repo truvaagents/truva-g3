@@ -361,6 +361,27 @@ func (b *BaseClient) logInfoWithContext(ctx context.Context, message string, fie
 	b.Logger.InfoWithContext(ctx, message, fields)
 }
 
+// logAttemptSuccess reports only the successful attempt's duration, not retry
+// waits or earlier attempts. Decode-aware callers include response consumption.
+func (b *BaseClient) logAttemptSuccess(ctx context.Context, attempt, statusCode int, duration time.Duration) {
+	if attempt > 0 {
+		b.logInfoWithContext(ctx, "AI request succeeded after retry", map[string]interface{}{
+			"operation":          "ai_request_recovery",
+			"status":             "recovered",
+			"successful_attempt": attempt + 1,
+			"total_attempts":     attempt + 1,
+			"duration_ms":        duration.Milliseconds(),
+		})
+		return
+	}
+	b.logDebugWithContext(ctx, "AI HTTP request completed", map[string]interface{}{
+		"operation":   "ai_http_success",
+		"status":      "success",
+		"status_code": statusCode,
+		"duration_ms": duration.Milliseconds(),
+	})
+}
+
 func (b *BaseClient) logWarnWithContext(ctx context.Context, message string, fields map[string]interface{}) {
 	if b == nil || b.Logger == nil {
 		return
@@ -531,7 +552,8 @@ func (b *BaseClient) executeWithRetry(
 			decoded.result = outcome.Result
 			closeResponse(resp)
 			attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
-			attemptSpan.SetAttribute("ai.attempt_duration_ms", time.Since(attemptStart).Milliseconds())
+			attemptDuration = time.Since(attemptStart)
+			attemptSpan.SetAttribute("ai.attempt_duration_ms", attemptDuration.Milliseconds())
 			recordAttemptUsage(attemptSpan, outcome.Result)
 			if len(outcome.ProviderRequestID) > 0 && len(outcome.ProviderRequestID) <= 128 {
 				attemptSpan.SetAttribute("ai.provider_request_id", outcome.ProviderRequestID)
@@ -539,12 +561,7 @@ func (b *BaseClient) executeWithRetry(
 			if outcome.Err == nil {
 				attemptSpan.SetAttribute("ai.attempt_status", "success")
 				attemptSpan.End()
-				if attempt > 0 && b.Logger != nil {
-					b.logInfoWithContext(ctx, "AI request succeeded after retry", map[string]interface{}{
-						"operation": "ai_request_recovery", "status": "recovered",
-						"successful_attempt": attempt + 1, "total_attempts": attempt + 1,
-					})
-				}
+				b.logAttemptSuccess(ctx, attempt, resp.StatusCode, attemptDuration)
 				return resp, nil
 			}
 			lastErr = outcome.Err
@@ -572,26 +589,7 @@ func (b *BaseClient) executeWithRetry(
 			attemptSpan.SetAttribute("http.status_code", resp.StatusCode)
 			attemptSpan.End()
 
-			if b.Logger != nil {
-				if attempt > 0 {
-					// Retry recovery - log at INFO level
-					b.logInfoWithContext(ctx, "AI request succeeded after retry", map[string]interface{}{
-						"operation":          "ai_request_recovery",
-						"status":             "recovered",
-						"successful_attempt": attempt + 1,
-						"total_attempts":     attempt + 1,
-						"duration_ms":        attemptDuration.Milliseconds(),
-					})
-				} else {
-					// First attempt success - log at DEBUG level
-					b.logDebugWithContext(ctx, "AI HTTP request completed", map[string]interface{}{
-						"operation":   "ai_http_success",
-						"status":      "success",
-						"status_code": resp.StatusCode,
-						"duration_ms": attemptDuration.Milliseconds(),
-					})
-				}
-			}
+			b.logAttemptSuccess(ctx, attempt, resp.StatusCode, attemptDuration)
 			return resp, nil
 		}
 

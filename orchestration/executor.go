@@ -160,7 +160,7 @@ func NewSmartExecutor(catalog *AgentCatalog) *SmartExecutor {
 	if value, set, _ := resolver.integer("TRUVAG3_STEP_RETRY_MAX_ATTEMPTS", 1); set {
 		maxAttempts = value
 	}
-	timeout := 600 * time.Second
+	timeout := defaultOutboundHTTPTimeout
 	if value, set, _ := resolver.duration("TRUVAG3_ORCHESTRATION_TIMEOUT", true); set {
 		timeout = value
 	}
@@ -186,7 +186,7 @@ func newSmartExecutor(
 		maxConcurrency = 5
 	}
 	if timeout <= 0 {
-		timeout = 600 * time.Second
+		timeout = defaultOutboundHTTPTimeout
 	}
 	if maxAttempts < 1 {
 		maxAttempts = 3

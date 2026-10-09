@@ -19,7 +19,7 @@ func TestDefaultSkillRuntimeConfiguration(t *testing.T) {
 		MaxActiveSkills: 6, TotalTokenBudget: 8192, MainTokenBudget: 6144,
 		ResourceTokenBudget: 4096, MaxResourcesPerPhase: 2,
 		MaxResourcesPerExecution: 8, ResolutionMaxTokens: 512,
-		RegistryReadTimeout: 5 * time.Second, SynthesisTokenBudget: 2048,
+		RegistryReadTimeout: 5 * time.Second, SynthesisTokenBudget: 6000,
 		EffectiveInputTokenBudget: 0,
 	}
 	if config.Skills.Enabled || len(config.Skills.Bindings) != 0 ||

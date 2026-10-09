@@ -579,7 +579,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				attribute.Int("attempt", attempt),
 			)
 
-			t.recordDebugInteraction(ctx, withAICompletionFacts(LLMInteraction{
+			t.recordDebugInteraction(ctx, withEffectiveAIRequest(LLMInteraction{
 				Type:         "tiered_selection",
 				Timestamp:    llmStartTime,
 				DurationMs:   llmDuration.Milliseconds(),
@@ -592,7 +592,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				Success:      false,
 				Error:        err.Error(),
 				Attempt:      attempt,
-			}, response))
+			}, invocationResult, invocation, response, err))
 			return nil, fmt.Errorf("tiered tool selection failed for request %q: %w",
 				truncateRequest(request, 50), err)
 		}
@@ -614,7 +614,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				"module", telemetry.ModuleOrchestration,
 			)
 
-			t.recordDebugInteraction(ctx, withAICompletionFacts(LLMInteraction{
+			t.recordDebugInteraction(ctx, withEffectiveAIRequest(LLMInteraction{
 				Type:             "tiered_selection",
 				Timestamp:        llmStartTime,
 				DurationMs:       llmDuration.Milliseconds(),
@@ -631,7 +631,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				Success:          false,
 				Error:            errTieredSelectionEmptyResponse,
 				Attempt:          attempt,
-			}, response))
+			}, invocationResult, invocation, response, err))
 
 			if attempt < maxAttempts {
 				telemetry.Counter("orchestrator.tiered.retry",
@@ -728,7 +728,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 					"request_id": requestID,
 					"attempt":    attempt,
 				})
-				t.recordDebugInteraction(ctx, withAICompletionFacts(LLMInteraction{
+				t.recordDebugInteraction(ctx, withEffectiveAIRequest(LLMInteraction{
 					Type:             "tiered_selection",
 					Timestamp:        llmStartTime,
 					DurationMs:       llmDuration.Milliseconds(),
@@ -745,7 +745,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 					Success:          true, // semantic-empty is a valid signal, not a failure
 					Error:            "semantic_empty: no tools in catalog match this request",
 					Attempt:          attempt,
-				}, response))
+				}, invocationResult, invocation, response, err))
 				// Return the sentinel error directly. selectTools has an
 				// existing graceful-degradation path that converts this into
 				// an all-agents fallback after a warn-level log entry.
@@ -769,7 +769,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				attribute.Bool("will_retry", attempt < maxAttempts),
 			)
 
-			t.recordDebugInteraction(ctx, withAICompletionFacts(LLMInteraction{
+			t.recordDebugInteraction(ctx, withEffectiveAIRequest(LLMInteraction{
 				Type:             "tiered_selection",
 				Timestamp:        llmStartTime,
 				DurationMs:       llmDuration.Milliseconds(),
@@ -786,7 +786,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				Success:          false,
 				Error:            parseErr.Error(),
 				Attempt:          attempt,
-			}, response))
+			}, invocationResult, invocation, response, err))
 
 			if attempt < maxAttempts {
 				telemetry.Counter("orchestrator.tiered.retry",
@@ -800,7 +800,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 		}
 
 		// Record successful selection (AFTER parse succeeds)
-		t.recordDebugInteraction(ctx, withAICompletionFacts(LLMInteraction{
+		t.recordDebugInteraction(ctx, withEffectiveAIRequest(LLMInteraction{
 			Type:             "tiered_selection",
 			Timestamp:        llmStartTime,
 			DurationMs:       llmDuration.Milliseconds(),
@@ -816,7 +816,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 			TotalTokens:      response.Usage.TotalTokens,
 			Success:          true,
 			Attempt:          attempt,
-		}, response))
+		}, invocationResult, invocation, response, err))
 
 		if attempt > 1 {
 			telemetry.Counter("orchestrator.tiered.retry_success",
@@ -860,7 +860,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 		if len(validatedTools) == 0 {
 			hallucinationErr := fmt.Errorf("no valid tools after filtering (all selections were hallucinated)")
 
-			t.recordDebugInteraction(ctx, withAICompletionFacts(LLMInteraction{
+			t.recordDebugInteraction(ctx, withEffectiveAIRequest(LLMInteraction{
 				Type:             "tiered_selection",
 				Timestamp:        llmStartTime,
 				DurationMs:       llmDuration.Milliseconds(),
@@ -877,7 +877,7 @@ func (t *TieredCapabilityProvider) selectRelevantTools(
 				Success:          false,
 				Error:            hallucinationErr.Error(),
 				Attempt:          attempt,
-			}, response))
+			}, invocationResult, invocation, response, err))
 
 			if attempt < maxAttempts {
 				telemetry.Counter("orchestrator.tiered.retry",

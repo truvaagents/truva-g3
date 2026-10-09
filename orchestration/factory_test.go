@@ -527,7 +527,7 @@ func TestDefaultConfig(t *testing.T) {
 	if config.ExecutionOptions.MaxConcurrency != 25 {
 		t.Errorf("Expected max concurrency 25, got %d", config.ExecutionOptions.MaxConcurrency)
 	}
-	if config.ExecutionOptions.StepTimeout != 120*time.Second {
+	if config.ExecutionOptions.StepTimeout != 15*time.Minute {
 		t.Errorf("Expected step timeout 120s, got %v", config.ExecutionOptions.StepTimeout)
 	}
 }
@@ -1309,10 +1309,10 @@ func TestDefaultConfig_MaxTokens_Defaults(t *testing.T) {
 
 	config := DefaultConfig()
 
-	if config.PlanMaxTokens != 15000 {
-		t.Errorf("Expected PlanMaxTokens default 15000, got %d", config.PlanMaxTokens)
+	if config.PlanMaxTokens != 20000 {
+		t.Errorf("Expected PlanMaxTokens default 20000, got %d", config.PlanMaxTokens)
 	}
-	if config.SynthesisMaxTokens != 5000 {
+	if config.SynthesisMaxTokens != 30000 {
 		t.Errorf("Expected SynthesisMaxTokens default 5000, got %d", config.SynthesisMaxTokens)
 	}
 	if config.SynthesisTemperature != 0.5 {
@@ -1348,8 +1348,8 @@ func TestDefaultConfig_MaxTokens_EnvironmentConfiguration(t *testing.T) {
 			t.Errorf("Expected PlanMaxTokens 5000, got %d", config.PlanMaxTokens)
 		}
 		// SynthesisMaxTokens should remain default
-		if config.SynthesisMaxTokens != 5000 {
-			t.Errorf("Expected SynthesisMaxTokens 5000 (default), got %d", config.SynthesisMaxTokens)
+		if config.SynthesisMaxTokens != 30000 {
+			t.Errorf("Expected SynthesisMaxTokens 30000 (default), got %d", config.SynthesisMaxTokens)
 		}
 	})
 
@@ -1360,8 +1360,8 @@ func TestDefaultConfig_MaxTokens_EnvironmentConfiguration(t *testing.T) {
 		config := DefaultConfig()
 
 		// PlanMaxTokens should remain default
-		if config.PlanMaxTokens != 15000 {
-			t.Errorf("Expected PlanMaxTokens 15000 (default), got %d", config.PlanMaxTokens)
+		if config.PlanMaxTokens != 20000 {
+			t.Errorf("Expected PlanMaxTokens 20000 (default), got %d", config.PlanMaxTokens)
 		}
 		if config.SynthesisMaxTokens != 3000 {
 			t.Errorf("Expected SynthesisMaxTokens 3000, got %d", config.SynthesisMaxTokens)
@@ -1374,8 +1374,8 @@ func TestDefaultConfig_MaxTokens_EnvironmentConfiguration(t *testing.T) {
 
 		config := DefaultConfig()
 
-		if config.PlanMaxTokens != 15000 {
-			t.Errorf("Expected PlanMaxTokens 15000 (default), got %d", config.PlanMaxTokens)
+		if config.PlanMaxTokens != 20000 {
+			t.Errorf("Expected PlanMaxTokens 20000 (default), got %d", config.PlanMaxTokens)
 		}
 	})
 
@@ -1385,8 +1385,8 @@ func TestDefaultConfig_MaxTokens_EnvironmentConfiguration(t *testing.T) {
 
 		config := DefaultConfig()
 
-		if config.PlanMaxTokens != 15000 {
-			t.Errorf("Expected PlanMaxTokens 15000 (default), got %d", config.PlanMaxTokens)
+		if config.PlanMaxTokens != 20000 {
+			t.Errorf("Expected PlanMaxTokens 20000 (default), got %d", config.PlanMaxTokens)
 		}
 	})
 
@@ -1397,8 +1397,8 @@ func TestDefaultConfig_MaxTokens_EnvironmentConfiguration(t *testing.T) {
 		config := DefaultConfig()
 
 		// val > 0 guard should reject zero
-		if config.PlanMaxTokens != 15000 {
-			t.Errorf("Expected PlanMaxTokens 15000 (default), got %d", config.PlanMaxTokens)
+		if config.PlanMaxTokens != 20000 {
+			t.Errorf("Expected PlanMaxTokens 20000 (default), got %d", config.PlanMaxTokens)
 		}
 	})
 }
@@ -1420,8 +1420,8 @@ func TestWithPlanMaxTokens(t *testing.T) {
 		opt := WithPlanMaxTokens(0)
 		opt(config)
 
-		if config.PlanMaxTokens != 15000 {
-			t.Errorf("Expected PlanMaxTokens to remain 15000, got %d", config.PlanMaxTokens)
+		if config.PlanMaxTokens != 20000 {
+			t.Errorf("Expected PlanMaxTokens to remain 20000, got %d", config.PlanMaxTokens)
 		}
 	})
 
@@ -1430,8 +1430,8 @@ func TestWithPlanMaxTokens(t *testing.T) {
 		opt := WithPlanMaxTokens(-1)
 		opt(config)
 
-		if config.PlanMaxTokens != 15000 {
-			t.Errorf("Expected PlanMaxTokens to remain 15000, got %d", config.PlanMaxTokens)
+		if config.PlanMaxTokens != 20000 {
+			t.Errorf("Expected PlanMaxTokens to remain 20000, got %d", config.PlanMaxTokens)
 		}
 	})
 }
@@ -1453,7 +1453,7 @@ func TestWithSynthesisMaxTokens(t *testing.T) {
 		opt := WithSynthesisMaxTokens(0)
 		opt(config)
 
-		if config.SynthesisMaxTokens != 5000 {
+		if config.SynthesisMaxTokens != 30000 {
 			t.Errorf("Expected SynthesisMaxTokens to remain 25000, got %d", config.SynthesisMaxTokens)
 		}
 	})
@@ -1463,7 +1463,7 @@ func TestWithSynthesisMaxTokens(t *testing.T) {
 		opt := WithSynthesisMaxTokens(-1)
 		opt(config)
 
-		if config.SynthesisMaxTokens != 5000 {
+		if config.SynthesisMaxTokens != 30000 {
 			t.Errorf("Expected SynthesisMaxTokens to remain 25000, got %d", config.SynthesisMaxTokens)
 		}
 	})
@@ -1725,7 +1725,7 @@ func TestDefaultConfig_StepTimeout_Default(t *testing.T) {
 
 	config := DefaultConfig()
 
-	if config.ExecutionOptions.StepTimeout != 120*time.Second {
+	if config.ExecutionOptions.StepTimeout != 15*time.Minute {
 		t.Errorf("Expected StepTimeout default 120s, got %v", config.ExecutionOptions.StepTimeout)
 	}
 }
@@ -1756,8 +1756,8 @@ func TestDefaultConfig_StepTimeout_EnvironmentConfiguration(t *testing.T) {
 
 		config := DefaultConfig()
 
-		if config.ExecutionOptions.StepTimeout != 120*time.Second {
-			t.Errorf("Expected StepTimeout 120s (default), got %v", config.ExecutionOptions.StepTimeout)
+		if config.ExecutionOptions.StepTimeout != 15*time.Minute {
+			t.Errorf("Expected StepTimeout 15m (default), got %v", config.ExecutionOptions.StepTimeout)
 		}
 	})
 
@@ -1766,8 +1766,8 @@ func TestDefaultConfig_StepTimeout_EnvironmentConfiguration(t *testing.T) {
 
 		config := DefaultConfig()
 
-		if config.ExecutionOptions.StepTimeout != 120*time.Second {
-			t.Errorf("Expected StepTimeout 120s (default), got %v", config.ExecutionOptions.StepTimeout)
+		if config.ExecutionOptions.StepTimeout != 15*time.Minute {
+			t.Errorf("Expected StepTimeout 15m (default), got %v", config.ExecutionOptions.StepTimeout)
 		}
 	})
 }
@@ -1789,8 +1789,8 @@ func TestWithStepTimeout(t *testing.T) {
 		opt := WithStepTimeout(0)
 		opt(config)
 
-		if config.ExecutionOptions.StepTimeout != 120*time.Second {
-			t.Errorf("Expected StepTimeout to remain 120s, got %v", config.ExecutionOptions.StepTimeout)
+		if config.ExecutionOptions.StepTimeout != 15*time.Minute {
+			t.Errorf("Expected StepTimeout to remain 15m, got %v", config.ExecutionOptions.StepTimeout)
 		}
 	})
 
@@ -1799,8 +1799,8 @@ func TestWithStepTimeout(t *testing.T) {
 		opt := WithStepTimeout(-1 * time.Second)
 		opt(config)
 
-		if config.ExecutionOptions.StepTimeout != 120*time.Second {
-			t.Errorf("Expected StepTimeout to remain 120s, got %v", config.ExecutionOptions.StepTimeout)
+		if config.ExecutionOptions.StepTimeout != 15*time.Minute {
+			t.Errorf("Expected StepTimeout to remain 15m, got %v", config.ExecutionOptions.StepTimeout)
 		}
 	})
 }
@@ -1839,7 +1839,7 @@ func TestDefaultConfig_TotalTimeout_Default(t *testing.T) {
 
 	config := DefaultConfig()
 
-	if config.ExecutionOptions.TotalTimeout != 600*time.Second {
+	if config.ExecutionOptions.TotalTimeout != 20*time.Minute {
 		t.Errorf("Expected TotalTimeout default 600s, got %v", config.ExecutionOptions.TotalTimeout)
 	}
 }
@@ -1870,8 +1870,8 @@ func TestDefaultConfig_TotalTimeout_EnvironmentConfiguration(t *testing.T) {
 
 		config := DefaultConfig()
 
-		if config.ExecutionOptions.TotalTimeout != 600*time.Second {
-			t.Errorf("Expected TotalTimeout 600s (default), got %v", config.ExecutionOptions.TotalTimeout)
+		if config.ExecutionOptions.TotalTimeout != 20*time.Minute {
+			t.Errorf("Expected TotalTimeout 20m (default), got %v", config.ExecutionOptions.TotalTimeout)
 		}
 	})
 
@@ -1880,8 +1880,8 @@ func TestDefaultConfig_TotalTimeout_EnvironmentConfiguration(t *testing.T) {
 
 		config := DefaultConfig()
 
-		if config.ExecutionOptions.TotalTimeout != 600*time.Second {
-			t.Errorf("Expected TotalTimeout 600s (default), got %v", config.ExecutionOptions.TotalTimeout)
+		if config.ExecutionOptions.TotalTimeout != 20*time.Minute {
+			t.Errorf("Expected TotalTimeout 20m (default), got %v", config.ExecutionOptions.TotalTimeout)
 		}
 	})
 }
@@ -1903,8 +1903,8 @@ func TestWithTotalTimeout(t *testing.T) {
 		opt := WithTotalTimeout(0)
 		opt(config)
 
-		if config.ExecutionOptions.TotalTimeout != 600*time.Second {
-			t.Errorf("Expected TotalTimeout to remain 600s, got %v", config.ExecutionOptions.TotalTimeout)
+		if config.ExecutionOptions.TotalTimeout != 20*time.Minute {
+			t.Errorf("Expected TotalTimeout to remain 20m, got %v", config.ExecutionOptions.TotalTimeout)
 		}
 	})
 
@@ -1913,8 +1913,8 @@ func TestWithTotalTimeout(t *testing.T) {
 		opt := WithTotalTimeout(-1 * time.Second)
 		opt(config)
 
-		if config.ExecutionOptions.TotalTimeout != 600*time.Second {
-			t.Errorf("Expected TotalTimeout to remain 600s, got %v", config.ExecutionOptions.TotalTimeout)
+		if config.ExecutionOptions.TotalTimeout != 20*time.Minute {
+			t.Errorf("Expected TotalTimeout to remain 20m, got %v", config.ExecutionOptions.TotalTimeout)
 		}
 	})
 }
@@ -2258,8 +2258,8 @@ func TestNewAIOrchestrator_PropagatesSynthesisConfig(t *testing.T) {
 			t.Errorf("Expected synthesizer temperature=0.5, got %f",
 				orchestrator.synthesizer.synthesisTemperature)
 		}
-		if orchestrator.synthesizer.synthesisMaxTokens != 5000 {
-			t.Errorf("Expected synthesizer maxTokens=5000, got %d",
+		if orchestrator.synthesizer.synthesisMaxTokens != 30000 {
+			t.Errorf("Expected synthesizer maxTokens=30000, got %d",
 				orchestrator.synthesizer.synthesisMaxTokens)
 		}
 	})

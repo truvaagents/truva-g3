@@ -177,6 +177,7 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 		wantError     bool
 		wantHookCalls bool
 		wantSuccess   bool
+		wantFinish    string
 	}{
 		{
 			name: "buffered success", client: &promptCapturingAIClient{
@@ -200,7 +201,23 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 		},
 		{
 			name: "native streaming partial", streaming: true,
-			client: &terminalStreamingClient{streamErr: core.ErrStreamPartiallyCompleted},
+			client:     &terminalStreamingClient{streamErr: core.ErrStreamPartiallyCompleted},
+			wantFinish: "interrupted",
+		},
+		{
+			name: "native streaming wrapped partial", streaming: true,
+			client:     &terminalStreamingClient{streamErr: fmt.Errorf("provider stream: %w", errors.Join(core.ErrStreamPartiallyCompleted, errors.New("connection reset")))},
+			wantFinish: "interrupted",
+		},
+		{
+			name: "native streaming cancelled partial", streaming: true,
+			client:     &terminalStreamingClient{streamErr: errors.Join(core.ErrStreamPartiallyCompleted, context.Canceled)},
+			wantFinish: "cancelled",
+		},
+		{
+			name: "native streaming deadline partial", streaming: true,
+			client:     &terminalStreamingClient{streamErr: errors.Join(core.ErrStreamPartiallyCompleted, context.DeadlineExceeded)},
+			wantFinish: "deadline_exceeded",
 		},
 		{
 			name: "native streaming failure", streaming: true,
@@ -241,9 +258,17 @@ func TestRequestDeliveryModesPersistTerminalPostSynthesisView(t *testing.T) {
 			var requestErr error
 			var actualExecution *ExecutionResult
 			if test.streaming {
-				_, actualExecution, requestErr = orchestrator.ProcessRequestStreamingWithExecution(t.Context(), "request", nil, func(core.StreamChunk) error {
+				var streamed *StreamingOrchestratorResponse
+				streamed, actualExecution, requestErr = orchestrator.ProcessRequestStreamingWithExecution(t.Context(), "request", nil, func(core.StreamChunk) error {
 					return nil
 				})
+				if test.wantFinish != "" {
+					client := test.client.(*terminalStreamingClient)
+					if streamed == nil || !streamed.PartialContent || streamed.StreamCompleted || streamed.FinishReason != test.wantFinish ||
+						len(streamed.Errors) != 1 || streamed.Errors[0] != client.streamErr.Error() {
+						t.Fatalf("terminal delivery lost interruption evidence: %+v", streamed)
+					}
+				}
 			} else {
 				_, actualExecution, requestErr = orchestrator.ProcessRequestWithExecution(t.Context(), "request", nil)
 			}

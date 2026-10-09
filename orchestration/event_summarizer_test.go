@@ -283,9 +283,9 @@ func TestSummarizeSteps_MaxTokensFloor(t *testing.T) {
 			return &core.AIResponse{Content: "[]"}, nil
 		},
 	}
-	s, _ := NewLLMEventSummarizer(ai) // default 100 tokens/step
+	s, _ := NewLLMEventSummarizer(ai, WithSummarizerTokensPerStep(150))
 
-	// Single step: 100 * 1 = 100, but floor is 200
+	// An explicit calculated budget still has a 300-token floor.
 	steps := []core.StepSummaryInput{
 		{StepID: "step-1", AgentName: "tool-a", Capability: "query", Success: true},
 	}

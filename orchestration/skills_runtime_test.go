@@ -379,7 +379,7 @@ func TestSkillCanonicalFingerprintGoldenVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	const wantBindings = "sha256:4309cbf9361108430f09d5577479cf72c219f1aaac2a11e444f12150f60acf1d"
-	const wantBudgets = "sha256:ba4d19f53016f85fe53dc3e33cc37884e05c94cef18c01e4df1ec01812fc84d4"
+	const wantBudgets = "sha256:7a52f56d9f4924ff49513a10f8697cf22cf993725b9b757185b6ec9d114f4879"
 	if bindingFingerprint != wantBindings || budgetFingerprint != wantBudgets {
 		t.Fatalf("golden fingerprints = bindings %q budgets %q", bindingFingerprint, budgetFingerprint)
 	}

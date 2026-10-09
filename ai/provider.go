@@ -57,8 +57,8 @@ type AIConfig struct {
 	// ReasoningTokenMultiplier is the factor by which max_tokens is increased for
 	// reasoning models (GPT-5, o1, o3, o4). These models count internal chain-of-thought
 	// tokens against max_completion_tokens but don't return them, causing empty responses
-	// if not enough tokens are allocated. Default is 5 (set in openai/reasoning.go).
-	// Set to 0 to use the default, or specify a custom value (e.g., 3 for cost optimization).
+	// if not enough tokens are allocated. Default is 3 on scaling profiles.
+	// Zero is unset; environment then default apply. Explicit 1 keeps budgets exact.
 	ReasoningTokenMultiplier int
 
 	// ReasoningEffort controls the reasoning effort level for OpenAI reasoning models.
@@ -223,8 +223,8 @@ func WithAWSCredentials(accessKey, secretKey, sessionToken string) AIOption {
 }
 
 // WithTimeout sets a positive provider request timeout. Zero and negative
-// values are treated as unset so the framework or selected provider default
-// applies; they do not enable an unbounded request mode.
+// values are treated as unset: TRUVAG3_AI_TIMEOUT, then the framework or
+// selected provider default applies. They do not enable an unbounded mode.
 func WithTimeout(timeout time.Duration) AIOption {
 	return func(c *AIConfig) {
 		c.Timeout = timeout
@@ -261,14 +261,16 @@ func WithMaxTokens(tokens int) AIOption {
 
 // WithReasoningTokenMultiplier sets the token multiplier for reasoning models (GPT-5, GPT-6, o1, o3, o4).
 // Reasoning models count internal chain-of-thought tokens against max_completion_tokens but
-// don't return them in the response. Without a multiplier, complex prompts exhaust tokens on
+// don't return them in the response. Complex prompts can exhaust the budget on
 // reasoning, leaving nothing for visible output.
 //
-// Default is 5 (5x multiplier). Set to a lower value (e.g., 3) for cost optimization if
-// responses are simpler, or higher (e.g., 8) for very complex reasoning tasks.
+// Default is 3; explicit 1 keeps the configured output cap exact. Reasoning and
+// visible text share the effective cap. Scaling applies only to reviewed scaling
+// profiles with active effective effort, including supported OpenRouter models.
+// The OpenAI-compatible adapter separately enforces reviewed output ceilings.
 //
 // Example: With multiplier=5 and MaxTokens=2000, reasoning models get 10000 tokens,
-// ensuring ~4000 for internal reasoning + ~6000 for visible output.
+// shared between reasoning and visible output; neither portion is guaranteed.
 func WithReasoningTokenMultiplier(multiplier int) AIOption {
 	return func(c *AIConfig) {
 		c.ReasoningTokenMultiplier = multiplier

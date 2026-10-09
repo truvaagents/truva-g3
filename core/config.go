@@ -88,7 +88,7 @@ type Config struct {
 type HTTPConfig struct {
 	ReadTimeout       time.Duration `json:"read_timeout" env:"TRUVAG3_HTTP_READ_TIMEOUT" default:"30s"`
 	ReadHeaderTimeout time.Duration `json:"read_header_timeout" env:"TRUVAG3_HTTP_READ_HEADER_TIMEOUT" default:"10s"`
-	WriteTimeout      time.Duration `json:"write_timeout" env:"TRUVAG3_HTTP_WRITE_TIMEOUT" default:"30s"`
+	WriteTimeout      time.Duration `json:"write_timeout" env:"TRUVAG3_HTTP_WRITE_TIMEOUT" default:"35m"`
 	IdleTimeout       time.Duration `json:"idle_timeout" env:"TRUVAG3_HTTP_IDLE_TIMEOUT" default:"120s"`
 	MaxHeaderBytes    int           `json:"max_header_bytes" env:"TRUVAG3_HTTP_MAX_HEADER_BYTES" default:"1048576"`
 	ShutdownTimeout   time.Duration `json:"shutdown_timeout" env:"TRUVAG3_HTTP_SHUTDOWN_TIMEOUT" default:"10s"`
@@ -169,7 +169,7 @@ type AIConfig struct {
 	Model         string        `json:"model" env:"TRUVAG3_AI_MODEL" default:"gpt-4"`
 	Temperature   float32       `json:"temperature" env:"TRUVAG3_AI_TEMPERATURE" default:"0.7"`
 	MaxTokens     int           `json:"max_tokens" env:"TRUVAG3_AI_MAX_TOKENS" default:"2000"`
-	Timeout       time.Duration `json:"timeout" env:"TRUVAG3_AI_TIMEOUT" default:"180s"`
+	Timeout       time.Duration `json:"timeout" env:"TRUVAG3_AI_TIMEOUT" default:"5m"`
 	RetryAttempts int           `json:"retry_attempts" env:"TRUVAG3_AI_RETRY_ATTEMPTS" default:"3"`
 	RetryDelay    time.Duration `json:"retry_delay" env:"TRUVAG3_AI_RETRY_DELAY" default:"1s"`
 }
@@ -410,7 +410,7 @@ func DefaultConfig() *Config {
 		HTTP: HTTPConfig{
 			ReadTimeout:       300 * time.Second,
 			ReadHeaderTimeout: 10 * time.Second,
-			WriteTimeout:      300 * time.Second,
+			WriteTimeout:      35 * time.Minute,
 			IdleTimeout:       120 * time.Second,
 			MaxHeaderBytes:    1 << 20, // 1MB
 			ShutdownTimeout:   10 * time.Second,
@@ -441,7 +441,7 @@ func DefaultConfig() *Config {
 			Model:         "gpt-4",
 			Temperature:   0.7,
 			MaxTokens:     2000,
-			Timeout:       30 * time.Second,
+			Timeout:       5 * time.Minute,
 			RetryAttempts: 3,
 			RetryDelay:    1 * time.Second,
 		},

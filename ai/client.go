@@ -26,7 +26,7 @@ const maxRetriesUnset = -1
 // per-provider BaseClient ships with.
 const defaultMaxRetries = 3
 
-const defaultRequestTimeout = 180 * time.Second
+const defaultRequestTimeout = 5 * time.Minute
 const defaultSSEEventMaxBytes = 1 << 20
 const defaultRetryDelay = time.Second
 
@@ -224,6 +224,16 @@ func instrumentProviderClient(
 }
 
 func resolveProviderFactory(config *AIConfig) (ProviderFactory, error) {
+	timeout, err := resolveRequestTimeoutOverride(config.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	config.Timeout = timeout
+	multiplier, err := ResolveReasoningTokenMultiplier(config.ReasoningTokenMultiplier)
+	if err != nil {
+		return nil, err
+	}
+	config.ReasoningTokenMultiplier = multiplier
 	if config.CircuitBreaker != nil && isNilCircuitBreaker(config.CircuitBreaker) {
 		return nil, fmt.Errorf("%w: AI circuit breaker is a typed nil", core.ErrInvalidConfiguration)
 	}

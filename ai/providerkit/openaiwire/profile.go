@@ -36,7 +36,7 @@ const (
 	// TokenBudgetExact sends the portable max-token value unchanged.
 	TokenBudgetExact TokenBudgetPolicy = iota + 1
 	// TokenBudgetScaleForReasoning applies the configured multiplier only when
-	// a nonempty reasoning effort other than "none" is active.
+	// reasoning is active through effort or a reviewed model default.
 	TokenBudgetScaleForReasoning
 )
 
@@ -71,10 +71,22 @@ type RequestProfile struct {
 	TokenBudget     TokenBudgetPolicy
 	ReasoningEffort ReasoningEffortStyle
 	Sampling        SamplingPolicy
+	// ReasoningActiveByDefault is a provider-reviewed model fact used only for
+	// budget preparation. It does not inject a wire effort or change sampling.
+	// Explicit omission, none, and native reasoning controls suppress inference.
+	ReasoningActiveByDefault bool
+	// ReasoningHeadroomLimit bounds only framework-added reasoning headroom
+	// when the caller's base budget fits this provider-reviewed output limit.
+	// Zero means unknown; it neither clamps an over-limit base budget nor
+	// replaces the adapter's final capacity validation after application policy.
+	ReasoningHeadroomLimit int
 }
 
 // Validate rejects incomplete and contradictory wire profiles.
 func (p RequestProfile) Validate() error {
+	if p.ReasoningHeadroomLimit < 0 {
+		return errors.New("OpenAI wire reasoning-headroom limit must be nonnegative")
+	}
 	if strings.TrimSpace(p.SemanticModel) == "" {
 		return errors.New("OpenAI wire semantic model is empty")
 	}

@@ -104,15 +104,17 @@ Key patterns shown above:
 //   - Fail-open: returns empty map on LLM error, caller falls back to heuristic
 //   - Tool-agnostic: LLM reads raw response and extracts what matters
 //   - Response/failure view: configurable per-step byte limit (default 4000)
-//   - MaxTokens floor: minimum 300 completion tokens regardless of batch size
+//   - Default output allowance: 10000 tokens; explicit per-step budgets have a 300-token floor
 type LLMEventSummarizer struct {
 	aiClient            core.AIClient
 	model               string // empty = use provider default
 	temperature         float32
 	maxResponseChars    int
+	maxSummaryBytes     int
 	maxStepsPerBatch    int
 	tokensPerStepBudget int
-	maxTokens           int // positive overrides the calculated per-batch output budget
+	maxTokens           int  // positive overrides the calculated per-batch output budget
+	maxTokensExplicit   bool // an explicit fixed budget wins over per-step options
 	timeout             time.Duration
 	logger              core.Logger
 	telemetry           core.Telemetry // optional — for span creation
@@ -182,6 +184,20 @@ func WithSummarizerMaxResponseChars(n int) LLMEventSummarizerOption {
 	}
 }
 
+// WithSummarizerSummaryMaxBytes bounds each stored derived summary, independently
+// of the batch generation allowance. At least 32 bytes are needed for prose and
+// the explicit shortening marker. Structured entity IDs and raw debug output
+// remain unchanged. The default is 1024 bytes.
+func WithSummarizerSummaryMaxBytes(n int) LLMEventSummarizerOption {
+	return func(s *LLMEventSummarizer) error {
+		if n < 32 {
+			return fmt.Errorf("summary max bytes must be at least 32")
+		}
+		s.maxSummaryBytes = n
+		return nil
+	}
+}
+
 // WithSummarizerMaxStepsPerBatch sets the maximum steps sent in a single LLM call.
 // Excess steps fall back to heuristic summaries. Default: 20.
 func WithSummarizerMaxStepsPerBatch(n int) LLMEventSummarizerOption {
@@ -195,26 +211,32 @@ func WithSummarizerMaxStepsPerBatch(n int) LLMEventSummarizerOption {
 }
 
 // WithSummarizerTokensPerStep sets the output token budget per step summary.
-// Total MaxTokens = tokensPerStep * batchSize, with a floor of 300. Default: 150.
-// WithSummarizerMaxTokens overrides this calculated budget when set.
+// Total MaxTokens = tokensPerStep * batchSize, with a floor of 300.
+// This explicitly selects calculated budgeting instead of the default 10,000.
+// An explicit WithSummarizerMaxTokens wins regardless of option order.
 func WithSummarizerTokensPerStep(n int) LLMEventSummarizerOption {
 	return func(s *LLMEventSummarizer) error {
 		if n <= 0 {
 			return fmt.Errorf("tokensPerStepBudget must be positive, got %d", n)
 		}
 		s.tokensPerStepBudget = n
+		if !s.maxTokensExplicit {
+			s.maxTokens = 0
+		}
 		return nil
 	}
 }
 
 // WithSummarizerMaxTokens sets an explicit per-call output-token budget,
-// independent of batch size. Unset preserves the calculated per-step budget.
+// independent of batch size. The default is 10,000. Explicit fixed budgets
+// take precedence over WithSummarizerTokensPerStep regardless of option order.
 func WithSummarizerMaxTokens(n int) LLMEventSummarizerOption {
 	return func(s *LLMEventSummarizer) error {
 		if n <= 0 {
 			return fmt.Errorf("maxTokens must be positive")
 		}
 		s.maxTokens = n
+		s.maxTokensExplicit = true
 		return nil
 	}
 }
@@ -251,8 +273,10 @@ func NewLLMEventSummarizer(aiClient core.AIClient, opts ...LLMEventSummarizerOpt
 		model:               "",
 		temperature:         0.1,
 		maxResponseChars:    4000,
+		maxSummaryBytes:     1024,
 		maxStepsPerBatch:    20,
 		tokensPerStepBudget: 150,
+		maxTokens:           defaultEventSummaryMaxTokens,
 		timeout:             2 * time.Minute,
 		logger:              &core.NoOpLogger{},
 	}
@@ -396,6 +420,8 @@ func (s *LLMEventSummarizer) summarizeWithOutcome(ctx context.Context, steps []c
 			attribute.String("request_id", requestID), attribute.String("outcome", result.Outcome),
 			attribute.Int("expected", result.Expected), attribute.Int("accepted", result.Accepted),
 			attribute.Int("batch_excluded", result.BatchExcluded),
+			attribute.Int("summaries_shortened", result.SummariesShortened),
+			attribute.Int("summary_max_bytes", s.maxSummaryBytes),
 			attribute.Int("rejected_entries", result.Rejected), attribute.Int("rejected_entities", result.EntitiesRejected),
 			attribute.Bool("complete_array", result.CompleteArray), attribute.Bool("truncated", result.Truncated),
 		}
@@ -527,15 +553,18 @@ func (s *LLMEventSummarizer) summarizeWithOutcome(ctx context.Context, steps []c
 
 	// Parse response
 	result = parseEventSummaries(aiResp.Content, batch)
+	result.boundSummaryProse(s.maxSummaryBytes)
 	if s.logger != nil {
 		logFields := map[string]interface{}{
-			"operation":       "event_summarization",
-			"request_id":      requestID,
-			"step_count":      len(batch),
-			"summaries_count": result.Accepted,
-			"outcome":         result.Outcome,
-			"duration_ms":     durationMs,
-			"entity_fields":   result.EntityFields,
+			"operation":           "event_summarization",
+			"request_id":          requestID,
+			"step_count":          len(batch),
+			"summaries_count":     result.Accepted,
+			"outcome":             result.Outcome,
+			"duration_ms":         durationMs,
+			"entity_fields":       result.EntityFields,
+			"summaries_shortened": result.SummariesShortened,
+			"summary_max_bytes":   s.maxSummaryBytes,
 		}
 		if s.model != "" {
 			logFields["model"] = s.model
@@ -589,6 +618,7 @@ func (s *LLMEventSummarizer) buildPrompt(steps []core.StepSummaryInput) string {
 	}
 
 	sb.WriteString("</steps>\n\n")
+	fmt.Fprintf(&sb, "Keep each summary within %d UTF-8 bytes; keep exact identifiers in the entities array.\n", s.maxSummaryBytes)
 	sb.WriteString(eventSummaryOutputContract)
 	return sb.String()
 }

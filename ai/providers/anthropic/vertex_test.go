@@ -213,8 +213,8 @@ func TestVertexFactoryDoesNotReadAnthropicEnvironment(t *testing.T) {
 
 func TestVertexSyncWireContractAndSemanticIdentity(t *testing.T) {
 	const (
-		semanticModel  = "claude-opus-5"
-		publisherModel = "claude-opus-5"
+		semanticModel  = "claude-opus-5-5"
+		publisherModel = "claude-opus-5-5"
 	)
 	resolver := &vertexTestResolver{
 		projectID: "acme-prod", location: "global",
@@ -237,7 +237,7 @@ func TestVertexSyncWireContractAndSemanticIdentity(t *testing.T) {
 		t.Fatalf("transport calls = %d", len(requests))
 	}
 	request := requests[0]
-	wantURL := "https://aiplatform.googleapis.com/v1/projects/acme-prod/locations/global/publishers/anthropic/models/claude-opus-5:rawPredict"
+	wantURL := "https://aiplatform.googleapis.com/v1/projects/acme-prod/locations/global/publishers/anthropic/models/claude-opus-5-5:rawPredict"
 	if request.url != wantURL {
 		t.Fatalf("request URL = %q", request.url)
 	}
@@ -327,7 +327,7 @@ func TestVertexRetainsSemanticSamplingAndPolicySelection(t *testing.T) {
 }
 
 func TestVertexResolverMapUsesPostAliasSemanticModel(t *testing.T) {
-	const semanticModel = "claude-opus-5"
+	const semanticModel = "claude-opus-5-5"
 	credentials := &phase4CredentialSource{credential: func(_ int64, _ ai.CredentialRequest) (ai.HeaderCredential, error) {
 		return ai.NewHeaderCredential("Authorization", "Bearer token"), nil
 	}}

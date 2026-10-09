@@ -37,7 +37,7 @@ func TestOpenRouterPortableProfileAndProtectedDefaults(t *testing.T) {
 		t.Fatalf("prepareInvocation returned error: %v", err)
 	}
 	body := decodePreparedOpenRouterBody(t, invocation.Request.Body)
-	if body["model"] != "openai/gpt-6-luna" || body["max_completion_tokens"] != float64(100) {
+	if body["model"] != "openai/gpt-6-luna" || body["max_completion_tokens"] != float64(300) {
 		t.Fatalf("OpenRouter model/token shape = %#v", body)
 	}
 	for _, absent := range []string{"max_tokens", "temperature", "reasoning_effort", "route"} {

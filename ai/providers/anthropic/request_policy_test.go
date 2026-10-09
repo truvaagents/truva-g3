@@ -17,6 +17,11 @@ func TestSamplingPolicyForModel(t *testing.T) {
 		{name: "opus 4.7 pinned", model: "claude-opus-4-7-20260701", want: samplingOmitted},
 		{name: "opus 4.8 case insensitive", model: " CLAUDE-OPUS-4-8-20260701 ", want: samplingOmitted},
 		{name: "opus 5", model: "claude-opus-5", want: samplingOmitted},
+		{name: "opus 5.5", model: "claude-opus-5-5", want: samplingOmitted},
+		{name: "haiku 5.5", model: "claude-haiku-5-5", want: samplingOmitted},
+		{name: "haiku 5.5 suffix", model: " CLAUDE-HAIKU-5-5-test ", want: samplingOmitted},
+		{name: "haiku boundary", model: "claude-haiku-5-50", want: samplingUnknown},
+		{name: "unreviewed haiku", model: "claude-haiku-5-6", want: samplingUnknown},
 		{name: "sonnet 5", model: "claude-sonnet-5", want: samplingOmitted},
 		{name: "fable 5", model: "claude-fable-5-20260701", want: samplingOmitted},
 		{name: "mythos 5", model: "claude-mythos-5", want: samplingOmitted},
@@ -87,6 +92,9 @@ func TestRequestPolicyEngine_MatchesSamplingClassification(t *testing.T) {
 		model string
 	}{
 		{name: "exact restricted family", model: "claude-sonnet-5"},
+		{name: "haiku 5.5", model: "claude-haiku-5-5"},
+		{name: "haiku boundary", model: "claude-haiku-5-50"},
+		{name: "opus 5.5", model: "claude-opus-5-5"},
 		{name: "opus 5 restricted family", model: "claude-opus-5"},
 		{name: "pinned restricted family", model: "claude-opus-4-7-20260701"},
 		{name: "case and surrounding whitespace", model: " CLAUDE-MYTHOS-5-20260701 "},
