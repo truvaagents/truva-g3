@@ -21,7 +21,7 @@ import {
     formatConversationRequest,
 } from '../utils/format.js';
 import { fetchAPI } from '../api.js';
-import { executionStatus, matchesExecutionStatus } from '../utils/execution-lifecycle.js';
+import { executionStatus, matchesExecutionStatus, executionFailureNotice } from '../utils/execution-lifecycle.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
 import {
     getLLMInteractionContent,
@@ -1208,6 +1208,7 @@ function renderGroupedExecutionRow(exec, options = {}) {
                 <div class="step-progress">
                     <span>${exec.step_count || 0} steps</span>
                     ${exec.failed_steps > 0 ? `<span class="dag-failed-steps">(${exec.failed_steps} failed)</span>` : ''}
+                    ${exec.skipped_steps > 0 ? `<span class="dag-skipped-steps" style="color: var(--text-muted);">(${exec.skipped_steps} skipped)</span>` : ''}
                 </div>
             </td>
             <td><span class="dag-mono">${formatDuration(duration)}</span></td>
@@ -1390,6 +1391,7 @@ function renderLegacyExecutionList() {
                     ${exec.failed_steps > 0 ? `
                         <span style="color: var(--accent-red); font-size: 11px;">(${exec.failed_steps} failed)</span>
                     ` : ''}
+                    ${exec.skipped_steps > 0 ? `<span style="color: var(--text-muted); font-size: 11px;">(${exec.skipped_steps} skipped)</span>` : ''}
                 </div>
             </td>
             <td>
@@ -1613,6 +1615,7 @@ function renderTimelineTurn(turn, index, totalTurns, selectedRequestID) {
                         ${execution.agent_name ? `<span>${escapeHtml(execution.agent_name)}</span>` : ''}
                         <span>${execution.step_count || 0} steps</span>
                         ${execution.failed_steps ? `<span class="dag-error-text">${execution.failed_steps} failed</span>` : ''}
+                        ${execution.skipped_steps ? `<span>${execution.skipped_steps} skipped</span>` : ''}
                         <span>${formatDuration(duration)}</span>
                         ${turn.llm_call_count ? `<span>${turn.llm_call_count} LLM call${turn.llm_call_count === 1 ? '' : 's'}</span>` : ''}
                         ${turn.history_status ? `<span>${escapeHtml(turn.history_status)}</span>` : ''}
@@ -2242,9 +2245,11 @@ function renderDAGVisualization(container, viewport = null) {
     // The trace ID is stored with the execution. This link is an optional
     // navigation affordance; no Viewer data is loaded from Jaeger.
     const traceID = selected.trace_id;
+    const failureNotice = executionFailureNotice(selected);
 
     container.innerHTML = `
         <div class="dag-viz-container">
+            ${failureNotice ? `<div class="dag-lifecycle-failure" role="status" style="padding: 12px; border-left: 3px solid var(--accent-red); color: var(--text-primary); background: rgba(255,107,107,0.08);">${escapeHtml(failureNotice)}</div>` : ''}
             <div class="dag-viz-header">
                 <div class="dag-viz-title" title="Click to expand/collapse">${formatConversationRequest(selected.original_request || 'Unknown Request')}</div>
                 <div class="dag-viz-meta">
@@ -3274,6 +3279,7 @@ function initCytoscape() {
                 id: 'response',
                 label: `📤 ${successLabel}`,
                 nodeType: 'response',
+                lifecycleState: executionStatus(selected).state,
                 success: executionStatus(selected).state === 'completed',
                 interrupted: selected.interrupted ? 'true' : 'false'
             }
@@ -4006,8 +4012,16 @@ function initCytoscape() {
                 }
             },
             {
+                selector: 'node[nodeType="response"][lifecycleState="failed"], node[nodeType="response"][lifecycleState="cancelled"]',
+                style: { 'background-color': '#2a0f0f', 'border-color': '#ff6b6b', 'color': '#ff6b6b' }
+            },
+            {
+                selector: 'node[nodeType="response"][lifecycleState="running"], node[nodeType="response"][lifecycleState="unknown"]',
+                style: { 'background-color': '#2a1f0a', 'border-color': '#ffb340', 'color': '#ffb340' }
+            },
+            {
                 // Response node when execution is interrupted (HITL pause) - amber/pause style
-                selector: 'node[nodeType="response"][interrupted="true"]',
+                selector: 'node[nodeType="response"][lifecycleState="suspended"]',
                 style: {
                     'background-color': '#2a1f0a',
                     'border-color': '#ffb340',
@@ -4661,13 +4675,15 @@ function showFullFlowNodePopup(node, nodeData) {
             title = '📤 Response';
             color = 'var(--accent-teal)';
             const responseStatus = executionStatus(selected);
-            const resultColor = responseStatus.state === 'completed' ? 'var(--accent-green)' : 'var(--text-muted)';
+            const resultColor = responseStatus.state === 'completed' ? 'var(--accent-green)' :
+                ['failed', 'cancelled'].includes(responseStatus.state) ? 'var(--accent-red)' : 'var(--text-muted)';
             const responseTotalDuration = primaryDurationMs(selected);
             content = `
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Status</div>
                     <div style="color: ${resultColor}; font-weight: 600;">${responseStatus.label}</div>
                 </div>
+                ${executionFailureNotice(selected) ? `<div style="margin-top: 10px; font-size: 12px;">${escapeHtml(executionFailureNotice(selected))}</div>` : ''}
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Elapsed Duration</div>
                     <div>${formatDuration(responseTotalDuration)}</div>

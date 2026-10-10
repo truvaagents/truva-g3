@@ -340,6 +340,7 @@ type ExecutionSummary struct {
 	Interrupted         bool                                         `json:"interrupted,omitempty"`
 	StepCount           int                                          `json:"step_count"`
 	FailedSteps         int                                          `json:"failed_steps"`
+	SkippedSteps        int                                          `json:"skipped_steps"`
 	TotalDurationMs     int64                                        `json:"total_duration_ms"`                // Phase-loop duration; retained for API compatibility.
 	WallClockDurationMs int64                                        `json:"wall_clock_duration_ms,omitempty"` // Non-additive elapsed-time envelope when available.
 	DurationSource      string                                       `json:"duration_source,omitempty"`
@@ -732,6 +733,9 @@ func initViewerTelemetry() core.Telemetry {
 
 func main() {
 	flag.Parse()
+	if err := configureApplicationReads(); err != nil {
+		log.Fatalf("application inspection configuration: %v", err)
+	}
 	viewerLogger = core.NewProductionLogger(
 		core.LoggingConfig{
 			Level: envOrDefault("TRUVAG3_LOG_LEVEL", "info"), Format: "json", Output: "stdout",
@@ -814,6 +818,7 @@ func main() {
 
 	// API endpoints — all wrapped with apiMiddleware (CORS + gzip + ETag)
 	mux.HandleFunc("/api/services", apiMiddleware(handleServices))
+	mux.Handle("/api/application-records", telemetry.TracingMiddleware("registry-viewer")(http.HandlerFunc(handleApplicationRecords)))
 	// /swagger-urls.json is the config feed for Swagger UI auto-discovery.
 	// Swagger UI loads this at page start and uses it to populate its service dropdown,
 	// so new tools/agents appear without editing any static config.
