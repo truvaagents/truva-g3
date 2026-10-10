@@ -8,7 +8,7 @@
 # Resource protection:
 #   - 30h retention (compactor auto-deletes older chunks)
 #   - 5Gi PVC hard cap on disk
-#   - 1Gi memory limit
+#   - 3Gi memory limit, two concurrent query workers (12h dashboard windows)
 #   - Ingestion rate limits to prevent burst-driven OOM
 #   - Max stream limits to prevent label cardinality explosion
 
@@ -63,6 +63,11 @@ data:
       max_global_streams_per_user: 5000
       max_query_length: 30h
       max_entries_limit_per_query: 10000
+      # Bound query fan-out on the local single-binary instance. The default
+      # TSDB parallelism is sized for a distributed deployment, not this pod.
+      max_query_parallelism: 4
+      tsdb_max_query_parallelism: 4
+      split_queries_by_interval: 1h
 
     # Compactor handles retention enforcement
     compactor:
@@ -74,6 +79,8 @@ data:
       delete_request_store: filesystem
 
     # Query engine settings
+    querier:
+      max_concurrent: 2
     query_range:
       results_cache:
         cache:
@@ -146,11 +153,11 @@ spec:
           mountPath: /loki
         resources:
           requests:
-            cpu: 100m
-            memory: 256Mi
+            cpu: 250m
+            memory: 512Mi
           limits:
-            cpu: 1500m
-            memory: 1Gi
+            cpu: "2"
+            memory: 3Gi
         livenessProbe:
           httpGet:
             path: /ready

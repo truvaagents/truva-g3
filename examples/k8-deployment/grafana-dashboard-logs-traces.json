@@ -1,10 +1,16 @@
 {
   "uid": "truvag3-logs-traces",
   "title": "TruvaG3 Logs & Traces",
-  "tags": ["truvag3", "logs", "traces", "loki", "jaeger"],
+  "tags": [
+    "truvag3",
+    "logs",
+    "traces",
+    "loki",
+    "jaeger"
+  ],
   "editable": true,
   "graphTooltip": 1,
-  "refresh": "10s",
+  "refresh": "1m",
   "schemaVersion": 39,
   "time": {
     "from": "now-30m",
@@ -15,7 +21,9 @@
   "links": [
     {
       "type": "dashboards",
-      "tags": ["truvag3"],
+      "tags": [
+        "truvag3"
+      ],
       "title": "TruvaG3 Dashboards",
       "keepTime": true,
       "includeVars": true
@@ -84,6 +92,33 @@
         "regex": "",
         "skipUrlSync": false,
         "sort": 1
+      },
+      {
+        "name": "trace_service",
+        "type": "query",
+        "label": "Trace Service",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\"}, service_name)",
+        "query": {
+          "query": "label_values(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\"}, service_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "current": {
+          "selected": true,
+          "text": "maintenance-agent",
+          "value": "maintenance-agent"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "options": [],
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1
       }
     ]
   },
@@ -93,7 +128,12 @@
       "title": "Log Overview",
       "type": "row",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "panels": []
     },
     {
@@ -104,16 +144,21 @@
         "type": "loki",
         "uid": "${loki_ds}"
       },
-      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 0
+      },
       "targets": [
         {
+          "expr": "sum by (service_name) (count_over_time({service_name=~\"$service_name\"} [$__auto]))",
+          "legendFormat": "{{service_name}}",
           "refId": "A",
           "datasource": {
             "type": "loki",
             "uid": "${loki_ds}"
-          },
-          "expr": "sum(count_over_time({service_name=~\"$service_name\"} [1m])) by (service_name)",
-          "legendFormat": "{{service_name}}"
+          }
         }
       ],
       "fieldConfig": {
@@ -154,15 +199,20 @@
         "type": "loki",
         "uid": "${loki_ds}"
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
       "targets": [
         {
+          "expr": "sum(count_over_time({service_name=~\"$service_name\"} | detected_level=\"ERROR\" [5m])) or vector(0)",
           "refId": "A",
           "datasource": {
             "type": "loki",
             "uid": "${loki_ds}"
-          },
-          "expr": "sum(count_over_time({service_name=~\".+\"} |= \"error\" [5m]))"
+          }
         }
       ],
       "fieldConfig": {
@@ -170,15 +220,19 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": 0 },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 100 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
             ]
           },
           "noValue": "0",
           "color": {
-            "mode": "fixed",
-            "fixedColor": "red"
+            "mode": "thresholds"
           }
         },
         "overrides": []
@@ -189,18 +243,26 @@
         "justifyMode": "auto",
         "textMode": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         }
-      }
+      },
+      "description": "ERROR-level log lines (by the log's level field) in the last 5 minutes."
     },
     {
       "id": 4,
       "title": "Error Log Stream",
       "type": "row",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
       "panels": []
     },
     {
@@ -211,15 +273,20 @@
         "type": "loki",
         "uid": "${loki_ds}"
       },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
       "targets": [
         {
+          "expr": "{service_name=~\"$service_name\"} | detected_level=\"ERROR\"",
           "refId": "A",
           "datasource": {
             "type": "loki",
             "uid": "${loki_ds}"
-          },
-          "expr": "{service_name=~\"$service_name\"} |= \"error\""
+          }
         }
       ],
       "options": {
@@ -231,25 +298,36 @@
         "enableLogDetails": true,
         "sortOrder": "Descending",
         "dedupStrategy": "none"
-      }
+      },
+      "description": "ERROR-level log lines (by the log's level field), newest first."
     },
     {
       "id": 6,
       "title": "Traces",
       "type": "row",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
       "panels": []
     },
     {
       "id": 7,
       "title": "Trace Search",
-      "type": "traces",
+      "type": "table",
       "datasource": {
         "type": "jaeger",
         "uid": "${jaeger_ds}"
       },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 18 },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
       "targets": [
         {
           "refId": "A",
@@ -258,17 +336,26 @@
             "uid": "${jaeger_ds}"
           },
           "queryType": "search",
-          "service": "$service_name",
+          "service": "$trace_service",
           "limit": 20
         }
-      ]
+      ],
+      "description": "Recent traces for the selected Trace Service (Jaeger search needs a single service). Jaeger keeps only the most recent 15,000 traces in memory.",
+      "options": {
+        "showHeader": true
+      }
     },
     {
       "id": 8,
       "title": "HTTP Traffic Detail",
       "type": "row",
       "collapsed": true,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
       "panels": [
         {
           "id": 9,
@@ -278,16 +365,23 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 29
+          },
           "targets": [
             {
+              "expr": "sum by (http_response_status_code) (rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\", http_route!=\"/api/capabilities\"}[5m]))",
+              "instant": false,
+              "range": true,
+              "legendFormat": "{{http_response_status_code}}",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
                 "uid": "${datasource}"
-              },
-              "expr": "sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (http_response_status_code)",
-              "legendFormat": "{{http_response_status_code}}"
+              }
             }
           ],
           "fieldConfig": {
@@ -308,39 +402,93 @@
             },
             "overrides": [
               {
-                "matcher": { "id": "byName", "options": "200" },
+                "matcher": {
+                  "id": "byName",
+                  "options": "200"
+                },
                 "properties": [
-                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
                 ]
               },
               {
-                "matcher": { "id": "byName", "options": "400" },
+                "matcher": {
+                  "id": "byName",
+                  "options": "400"
+                },
                 "properties": [
-                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "yellow"
+                    }
+                  }
                 ]
               },
               {
-                "matcher": { "id": "byName", "options": "404" },
+                "matcher": {
+                  "id": "byName",
+                  "options": "404"
+                },
                 "properties": [
-                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "yellow"
+                    }
+                  }
                 ]
               },
               {
-                "matcher": { "id": "byName", "options": "500" },
+                "matcher": {
+                  "id": "byName",
+                  "options": "500"
+                },
                 "properties": [
-                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
                 ]
               },
               {
-                "matcher": { "id": "byName", "options": "502" },
+                "matcher": {
+                  "id": "byName",
+                  "options": "502"
+                },
                 "properties": [
-                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
                 ]
               },
               {
-                "matcher": { "id": "byName", "options": "503" },
+                "matcher": {
+                  "id": "byName",
+                  "options": "503"
+                },
                 "properties": [
-                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
                 ]
               }
             ]
@@ -353,26 +501,45 @@
             "tooltip": {
               "mode": "multi"
             }
-          }
+          },
+          "description": "HTTP responses by status code, excluding /api/capabilities discovery polling."
         },
         {
           "id": 10,
-          "title": "HTTP Server Latency P95",
+          "title": "HTTP Server Latency (mean & bucket estimate)",
           "type": "timeseries",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 29
+          },
           "targets": [
             {
+              "expr": "histogram_quantile(0.95, sum by (service_name, le) (rate(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\", http_route!=\"/api/capabilities\"}[5m])))",
+              "instant": false,
+              "range": true,
+              "legendFormat": "{{service_name}} p95 (bucket-limited)",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
                 "uid": "${datasource}"
-              },
-              "expr": "histogram_quantile(0.95, sum(rate(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) by (service_name, le))",
-              "legendFormat": "{{service_name}}"
+              }
+            },
+            {
+              "expr": "sum by (service_name) (rate(truvag3_http_server_request_duration_seconds_sum{job=\"otel-collector-metrics\", service_name=~\"$service_name\", http_route!=\"/api/capabilities\"}[5m])) / (sum by (service_name) (rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\", http_route!=\"/api/capabilities\"}[5m])) > 0)",
+              "instant": false,
+              "range": true,
+              "legendFormat": "{{service_name}} mean",
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
             }
           ],
           "fieldConfig": {
@@ -401,7 +568,8 @@
             "tooltip": {
               "mode": "multi"
             }
-          }
+          },
+          "description": "Excludes /api/capabilities polling. P95 can't resolve below 5 ms or above 10 s (default buckets, code item C3); use the mean for fast endpoints."
         }
       ]
     },
@@ -410,7 +578,12 @@
       "title": "All Logs",
       "type": "row",
       "collapsed": true,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
       "panels": [
         {
           "id": 12,
@@ -420,15 +593,20 @@
             "type": "loki",
             "uid": "${loki_ds}"
           },
-          "gridPos": { "h": 12, "w": 24, "x": 0, "y": 30 },
+          "gridPos": {
+            "h": 12,
+            "w": 24,
+            "x": 0,
+            "y": 30
+          },
           "targets": [
             {
+              "expr": "{service_name=~\"$service_name\"} | detected_level!=\"DEBUG\"",
               "refId": "A",
               "datasource": {
                 "type": "loki",
                 "uid": "${loki_ds}"
-              },
-              "expr": "{service_name=~\"$service_name\"}"
+              }
             }
           ],
           "options": {
@@ -440,7 +618,8 @@
             "enableLogDetails": true,
             "sortOrder": "Descending",
             "dedupStrategy": "none"
-          }
+          },
+          "description": "All non-DEBUG log lines, newest first."
         }
       ]
     }
