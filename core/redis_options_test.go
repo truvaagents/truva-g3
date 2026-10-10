@@ -40,6 +40,9 @@ func TestApplyRedisClientDefaults(t *testing.T) {
 	require.Zero(t, options.WriteBufferSize)
 	require.Equal(t, 1, options.DialerRetries)
 	require.Nil(t, options.Dialer)
+	require.False(t, options.ClientSideCacheRefreshOnInvalidate)
+	require.False(t, options.ClientSideCacheCoalesceMisses)
+	require.Zero(t, options.ClientSideCacheInvalidationBatchWindow)
 }
 
 func TestApplyRedisClientDefaultsPreservesExplicitConfiguration(t *testing.T) {
@@ -197,6 +200,10 @@ func TestApplyRedisClientDefaultsMatchesUniversalCommonFields(t *testing.T) {
 		ClientSideCacheConfig:        cacheConfig,
 		ClientSideCache:              cache,
 		ClientSideCacheStrategy:      redis.CSCStrategy(41),
+
+		ClientSideCacheRefreshOnInvalidate:     true,
+		ClientSideCacheCoalesceMisses:          true,
+		ClientSideCacheInvalidationBatchWindow: 43 * time.Millisecond,
 	}
 
 	wrapper := ApplyRedisClientDefaults(input)
@@ -217,6 +224,8 @@ func TestApplyRedisClientDefaultsMatchesUniversalCommonFields(t *testing.T) {
 		"UnstableResp3", "PushNotificationProcessor", "FailingTimeoutSeconds",
 		"MaintNotificationsConfig", "ClientSideCacheConfig", "ClientSideCache",
 		"ClientSideCacheStrategy",
+		"ClientSideCacheRefreshOnInvalidate", "ClientSideCacheCoalesceMisses",
+		"ClientSideCacheInvalidationBatchWindow",
 	}
 	covered := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
@@ -243,6 +252,8 @@ func TestApplyRedisClientDefaultsMatchesUniversalCommonFields(t *testing.T) {
 		"ConnMaxLifetimeJitter", "TLSConfig", "DisableIdentity", "IdentitySuffix",
 		"AutoPipelineOptions", "PushNotificationProcessor", "MaintNotificationsConfig",
 		"ClientSideCacheConfig", "ClientSideCache", "ClientSideCacheStrategy",
+		"ClientSideCacheRefreshOnInvalidate", "ClientSideCacheCoalesceMisses",
+		"ClientSideCacheInvalidationBatchWindow",
 	}
 	for _, field := range commonFields {
 		requireRedisOptionFieldsEqual(t, field, universal, wrapper)

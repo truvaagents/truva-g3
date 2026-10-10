@@ -300,10 +300,16 @@ func TestRedisSkillCandidateResolutionUsesOnePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Establish the v9 connection before attaching the operation-counting hook.
-	// Otherwise HELLO and connection metadata initialization are counted as
-	// candidate-resolution commands even though they are transport setup.
+	// Warm both pools before attaching the operation-counting hook. Since
+	// go-redis v9.23, pipelines use a dedicated connection pool, so a plain PING
+	// alone leaves its HELLO and metadata initialization inside the measurement.
 	if err := client.Ping(t.Context()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Pipelined(t.Context(), func(pipe redis.Pipeliner) error {
+		pipe.Ping(t.Context())
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	requests := []orchestration.SkillCandidateRequest{
