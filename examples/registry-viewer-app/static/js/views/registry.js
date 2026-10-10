@@ -11,6 +11,7 @@ import {
     syntaxHighlightJson,
     formatResponseJson,
     copyToClipboard,
+    escapeHtml,
 } from '../utils/format.js';
 
 import { fetchAPI } from '../api.js';
@@ -23,6 +24,11 @@ let typeFilter = 'all';
 let services = [];
 let selected = null;
 let activeTab = 'formatted';
+let inspectedRecord = null;
+
+// Catalogue text is application data, not trusted HTML. Quotes also need
+// escaping in attributes on a page that accepts a transient read credential.
+const escapeAttribute = value => escapeHtml(String(value ?? '')).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -56,10 +62,10 @@ function renderServiceTable(list) {
         return;
     }
     tbody.innerHTML = list.map(service => `
-        <tr data-service-id="${service.id}" class="${selected?.id === service.id ? 'selected' : ''}">
-            <td><span class="type-badge ${service.type}">${service.type}</span></td>
-            <td><span class="service-name">${service.name}</span></td>
-            <td><div class="health-indicator"><span class="health-dot ${service.health || 'unknown'}"></span>${service.health || 'unknown'}</div></td>
+        <tr data-service-id="${escapeAttribute(service.id)}" class="${selected?.id === service.id ? 'selected' : ''}">
+            <td><span class="type-badge ${escapeAttribute(service.type)}">${escapeHtml(service.type)}</span></td>
+            <td><span class="service-name">${escapeHtml(service.name)}</span></td>
+            <td><div class="health-indicator"><span class="health-dot ${escapeAttribute(service.health || 'unknown')}"></span>${escapeHtml(service.health || 'unknown')}</div></td>
             <td><span class="time-ago">${formatTimeAgo(service.lastSeen || service.last_seen)}</span></td>
             <td>${service.capabilities?.length || 0}</td>
         </tr>
@@ -89,6 +95,8 @@ function renderDetail() {
         return;
     }
     title.textContent = selected.name;
+    // A catalogue poll should not erase an operator's in-progress read form.
+    if (document.activeElement?.closest('.application-inspector') && content.querySelector('.application-inspector')?.dataset.serviceId === selected.id) return;
     if (activeTab === 'json') {
         content.innerHTML = `<div class="json-container"><button class="copy-btn" data-action="copy-json">Copy</button><pre class="json-view">${syntaxHighlightJson(selected)}</pre></div>`;
     } else {
@@ -101,22 +109,35 @@ function renderFormattedView(service) {
     let html = `<div class="formatted-view">`;
 
     html += `<div class="info-section"><div class="info-section-title"><span class="section-icon">ℹ️</span> Service Info</div><div class="info-grid">
-        <div class="info-label">ID</div><div class="info-value mono">${service.id}</div>
-        <div class="info-label">Name</div><div class="info-value">${service.name}</div>
-        <div class="info-label">Type</div><div class="info-value"><span class="type-badge ${service.type}">${service.type}</span></div>
-        <div class="info-label">Health</div><div class="info-value"><div class="health-indicator"><span class="health-dot ${service.health || 'unknown'}"></span>${service.health || 'unknown'}</div></div>
+        <div class="info-label">ID</div><div class="info-value mono">${escapeHtml(service.id)}</div>
+        <div class="info-label">Name</div><div class="info-value">${escapeHtml(service.name)}</div>
+        <div class="info-label">Type</div><div class="info-value"><span class="type-badge ${escapeAttribute(service.type)}">${escapeHtml(service.type)}</span></div>
+        <div class="info-label">Health</div><div class="info-value"><div class="health-indicator"><span class="health-dot ${escapeAttribute(service.health || 'unknown')}"></span>${escapeHtml(service.health || 'unknown')}</div></div>
         <div class="info-label">Last Seen</div><div class="info-value">${lastSeen ? formatDateTime(lastSeen) : 'N/A'}</div>
-        ${service.description ? `<div class="info-label">Description</div><div class="info-value">${service.description}</div>` : ''}
+        ${service.description ? `<div class="info-label">Description</div><div class="info-value">${escapeHtml(service.description)}</div>` : ''}
     </div></div>`;
 
     html += `<div class="info-section"><div class="info-section-title"><span class="section-icon">🌐</span> Network</div><div class="info-grid">
-        <div class="info-label">Address</div><div class="info-value mono">${service.address}:${service.port}</div>
+        <div class="info-label">Address</div><div class="info-value mono">${escapeHtml(service.address)}:${escapeHtml(String(service.port))}</div>
     </div></div>`;
 
     if (service.metadata && Object.keys(service.metadata).length > 0) {
         html += `<div class="info-section"><div class="info-section-title"><span class="section-icon">🏷️</span> Metadata</div><div class="info-grid">
-            ${Object.entries(service.metadata).map(([key, value]) => `<div class="info-label">${key}</div><div class="info-value mono">${value}</div>`).join('')}
+            ${Object.entries(service.metadata).map(([key, value]) => `<div class="info-label">${escapeHtml(key)}</div><div class="info-value mono">${escapeHtml(String(value))}</div>`).join('')}
         </div></div>`;
+    }
+
+    if ((service.capabilities || []).some(cap => cap.name === 'inspect_application_records_v1' && cap.internal)) {
+        const captured = inspectedRecord?.serviceID === service.id ? inspectedRecord.data : null;
+        html += `<section class="info-section application-inspector" data-service-id="${escapeAttribute(service.id)}">
+            <div class="info-section-title">Application records (read-only)</div>
+            <p>Application outcomes are separate from framework DAG status. A record with no investigation has no DAG. Supply this component's authorized read credential for this request only.</p>
+            <label>Read parameters (JSON)<textarea id="applicationRecordInput" rows="4" style="width:100%" spellcheck="false">{}</textarea></label>
+            <label>Component read credential<input id="applicationRecordCredential" type="password" autocomplete="off" maxlength="4096" style="width:100%"></label>
+            <button type="button" data-action="inspect-application-records">Read application records</button>
+            <div id="applicationRecordStatus" role="status"></div>
+            <div id="applicationRecordResult">${captured ? formatResponseJson(captured) : ''}</div>
+        </section>`;
     }
 
     if (service.capabilities && service.capabilities.length > 0) {
@@ -125,12 +146,12 @@ function renderFormattedView(service) {
         const countLabel = internalCount > 0 ? `${service.capabilities.length} — <span style="color: var(--accent-green);">${externalCount} external</span>, <span style="color: var(--accent-orange);">${internalCount} internal</span>` : `${service.capabilities.length}`;
         html += `<div class="info-section"><div class="info-section-title"><span class="section-icon">⚡</span> Capabilities (${countLabel})</div>
             ${service.capabilities.map((cap, idx) => `<div class="capability-card">
-                <div class="capability-name">${cap.name} <span class="cap-visibility-badge ${cap.internal ? 'internal' : 'external'}">${cap.internal ? 'internal' : 'external'}</span></div>
-                ${cap.description ? `<div class="capability-desc">${cap.description}</div>` : ''}
-                ${cap.endpoint ? `<div class="capability-endpoint">${cap.endpoint}</div>` : ''}
+                <div class="capability-name">${escapeHtml(cap.name)} <span class="cap-visibility-badge ${cap.internal ? 'internal' : 'external'}">${cap.internal ? 'internal' : 'external'}</span></div>
+                ${cap.description ? `<div class="capability-desc">${escapeHtml(cap.description)}</div>` : ''}
+                ${cap.endpoint ? `<div class="capability-endpoint">${escapeHtml(cap.endpoint)}</div>` : ''}
                 ${cap.input_summary ? `<div class="capability-params">
-                    ${(cap.input_summary.required || []).map(p => `<span class="param-tag required">${p.name}: ${p.type}</span>`).join('')}
-                    ${(cap.input_summary.optional || []).map(p => `<span class="param-tag optional">${p.name}?: ${p.type}</span>`).join('')}
+                    ${(cap.input_summary.required || []).map(p => `<span class="param-tag required">${escapeHtml(p.name)}: ${escapeHtml(p.type)}</span>`).join('')}
+                    ${(cap.input_summary.optional || []).map(p => `<span class="param-tag optional">${escapeHtml(p.name)}?: ${escapeHtml(p.type)}</span>`).join('')}
                 </div>` : ''}
                 <div class="dag-step-response-header" data-toggle-cap="cap-json-${idx}" style="margin-top: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: rgba(0, 0, 0, 0.2); border-radius: 10px; font-size: 12px; color: var(--text-secondary);">
                     <span><span class="expand-arrow" id="cap-arrow-${idx}">▶</span> View Full JSON</span>
@@ -228,6 +249,8 @@ function handleDetailTabClick(e) {
 }
 
 function handleDetailContentClick(e) {
+    const inspect = e.target.closest('[data-action="inspect-application-records"]');
+    if (inspect) { void inspectApplicationRecords(inspect); return; }
     // Copy JSON button
     const copyBtn = e.target.closest('[data-action="copy-json"]');
     if (copyBtn) {
@@ -239,6 +262,39 @@ function handleDetailContentClick(e) {
     const toggleHeader = e.target.closest('[data-toggle-cap]');
     if (toggleHeader) {
         toggleCapabilityJson(toggleHeader.dataset.toggleCap);
+    }
+}
+
+async function inspectApplicationRecords(button) {
+    const panel = button.closest('.application-inspector');
+    const status = panel.querySelector('#applicationRecordStatus');
+    const output = panel.querySelector('#applicationRecordResult');
+    const credential = panel.querySelector('#applicationRecordCredential');
+    button.disabled = true;
+    status.textContent = 'Reading the registered component…';
+    try {
+        const input = JSON.parse(panel.querySelector('#applicationRecordInput').value);
+        if (!input || Array.isArray(input) || typeof input !== 'object') throw new Error('Supply one JSON object.');
+        const response = await fetch('/api/application-records', {
+            method: 'POST', cache: 'no-store',
+            headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${credential.value}`},
+            body: JSON.stringify({service_id: panel.dataset.serviceId, input}),
+        });
+        // Credentials stay neither in component parameters nor durable UI state.
+        credential.value = '';
+        if (!response.ok) throw new Error(`Read rejected or unavailable (HTTP ${response.status}).`);
+        const result = await response.json();
+        if (result.success !== true || result.data?.schema_version !== 1 || !Array.isArray(result.data.records)) throw new Error('Unsupported inspection response.');
+        inspectedRecord = {serviceID: panel.dataset.serviceId, data: result.data};
+        output.innerHTML = formatResponseJson(result.data);
+        status.textContent = result.data.truncated ? 'Bounded records returned; more records are omitted.' : 'Application records returned. No investigation was launched by this read.';
+    } catch (error) {
+        inspectedRecord = null;
+        output.textContent = '';
+        status.textContent = error.message;
+    } finally {
+        credential.value = '';
+        button.disabled = false;
     }
 }
 
@@ -293,6 +349,7 @@ export function destroy() {
     services = [];
     selected = null;
     activeTab = 'formatted';
+    inspectedRecord = null;
 }
 
 export function refresh() {

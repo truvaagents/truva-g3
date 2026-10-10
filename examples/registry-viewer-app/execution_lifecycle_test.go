@@ -28,3 +28,21 @@ func TestExecutionLifecycleProjection(t *testing.T) {
 		})
 	}
 }
+
+func TestExecutionSummarySeparatesFailuresAndSkips(t *testing.T) {
+	execution := &StoredExecution{Result: &ExecutionResult{Steps: []StepResult{
+		{Success: true}, {Success: true}, {Success: true}, {Success: true},
+		{Success: false}, {Success: false, Skipped: true},
+		{Success: false, Skipped: true}, {Success: false, Skipped: true},
+	}}}
+	summary := summarizeExecution(execution)
+	if summary.StepCount != 8 || summary.FailedSteps != 1 || summary.SkippedSteps != 3 {
+		t.Fatalf("skipped work counted as dispatched failures: %+v", summary)
+	}
+	// A refinement-satisfied skip can retain success=true; skip takes precedence.
+	execution.Result.Steps = []StepResult{{Success: true, Skipped: true}}
+	summary = summarizeExecution(execution)
+	if summary.FailedSteps != 0 || summary.SkippedSteps != 1 {
+		t.Fatalf("successful skip lost: %+v", summary)
+	}
+}

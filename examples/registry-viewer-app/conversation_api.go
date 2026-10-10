@@ -155,7 +155,9 @@ func summarizeExecution(execution *StoredExecution) ExecutionSummary {
 		}
 		summary.StepCount = len(execution.Result.Steps)
 		for _, step := range execution.Result.Steps {
-			if !step.Success {
+			if step.Skipped {
+				summary.SkippedSteps++
+			} else if !step.Success {
 				summary.FailedSteps++
 			}
 		}

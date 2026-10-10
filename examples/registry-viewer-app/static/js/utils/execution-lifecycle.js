@@ -20,3 +20,20 @@ export function matchesExecutionStatus(execution, filter) {
     if (filter === 'failed') return state === 'failed' || state === 'cancelled';
     return true;
 }
+
+// Only recorded lifecycle owns failure. A diagnostic can be displayed without
+// claiming that it caused termination, including after successful tool steps.
+export function executionFailureNotice(execution) {
+    if (executionStatus(execution).state !== 'failed') return '';
+    const reason = execution?.result?.metadata?.termination_reason;
+    const diagnostics = ['projections', 'activations', 'resource_selections'].flatMap(field =>
+        Array.isArray(execution?.skills?.[field]) ? execution.skills[field] : []);
+    const observed = [...new Set(diagnostics
+        .filter(item => item && (item.outcome === 'budget_exceeded' || item.admission === 'budget_exceeded'))
+        .map(item => `${item.boundary || 'unknown boundary'}: budget_exceeded`))];
+    const terminal = typeof reason === 'string' && reason
+        ? `Recorded termination reason: ${reason}.`
+        : 'The terminal cause is unavailable in the stored execution.';
+    return `The request failed. Tool-step outcomes are separate from this lifecycle failure. ${terminal}` +
+        (observed.length ? ` Observed skill diagnostics: ${observed.join('; ')}. These diagnostics are not linked to the terminal cause.` : '');
+}

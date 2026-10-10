@@ -333,6 +333,8 @@ deploy_k8s() {
         --from-literal=OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}" \
         --from-literal=JAEGER_UI_URL="${JAEGER_UI_URL:-http://jaeger.localhost}" \
         --from-literal=TRUVAG3_VIEWER_MEMORY_DOMAINS="${TRUVAG3_VIEWER_MEMORY_DOMAINS:-infrastructure}" \
+        --from-literal=TRUVAG3_VIEWER_APPLICATION_READ_TIMEOUT="${TRUVAG3_VIEWER_APPLICATION_READ_TIMEOUT-15s}" \
+        --from-literal=TRUVAG3_VIEWER_APPLICATION_READ_MAX_BYTES="${TRUVAG3_VIEWER_APPLICATION_READ_MAX_BYTES-1048576}" \
         --dry-run=client -o yaml | kubectl apply -f -
 
     log_info "Configuring Registry Viewer Redis credentials Secret..."
@@ -643,6 +645,7 @@ Docker:
 Kubernetes Deployment:
   deploy        Build, load to Kind, and deploy to K8s
   rebuild       Rebuild with --no-cache and redeploy
+  rollout       Apply configuration/resources using the existing cluster image
   forward       Port forward from K8s to localhost:$APP_PORT
   logs          Stream logs from K8s pod
   cleanup       Remove deployed resources
@@ -833,6 +836,11 @@ case "${1:-help}" in
         validate_redis_environment
         check_prerequisites
         rebuild
+        ;;
+    rollout)
+        validate_redis_environment
+        check_prerequisites
+        deploy_k8s
         ;;
     forward)
         check_prerequisites
