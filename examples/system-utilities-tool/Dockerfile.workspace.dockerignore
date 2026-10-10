@@ -1,0 +1,15 @@
+**
+!core/
+!core/**
+!telemetry/
+!telemetry/**
+!examples/
+!examples/system-utilities-tool/
+!examples/system-utilities-tool/*.go
+!examples/system-utilities-tool/go.mod
+!examples/system-utilities-tool/go.sum
+**/.env*
+**/notes/**
+**/*.md
+**/*_test.go
+**/.git/**
