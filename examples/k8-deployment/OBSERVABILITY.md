@@ -286,6 +286,34 @@ TelemetryConfig{
 - **Service Discovery**: Component topology and health
 - **Infrastructure**: Redis, Kubernetes, OTEL Collector metrics
 
+Dashboard definitions are provisioned from `grafana.yaml` and
+`grafana-dashboards-new.yaml`; standalone `grafana-dashboard-*.json` files mirror
+their corresponding definitions. Update both copies together and deploy with
+`./setup-infrastructure.sh rebuild grafana`.
+
+Read the panel titles and descriptions when interpreting measurements:
+
+- Sum/count series provide means, not percentiles; a percentile requires
+  histogram buckets. Counter increases are estimates over the selected window,
+  not an exact execution ledger.
+- Memory recording attempts and summarization outcomes do not prove durable
+  memory writes. A quiet retry, failover, cache or HITL panel can legitimately
+  have no data; it is not evidence that the dashboard is broken.
+- Loki queries use `k8s_namespace_name` and a finite service selection. Avoid
+  unscoped long-window log scans on this single-instance local stack.
+- Prometheus container metrics include `truvag3-examples` and
+  `software-maintenance`, matching the shared example deployment layout.
+
+The local Loki configuration retains its 30-hour retention and 5 GiB PVC. It
+allows 3 GiB memory and two concurrent query workers, with TSDB/query parallelism
+limited to four and one-hour query splits. These settings support bounded
+12-hour dashboard queries; they are not a guarantee for arbitrary log volume.
+Apply Loki or Prometheus configuration changes using the corresponding
+`./setup-infrastructure.sh rebuild loki` or `rebuild prometheus` command.
+Prometheus uses a `Recreate` deployment strategy because its single persistent
+TSDB permits only one writer. Rebuilds briefly interrupt scraping while the
+replacement opens the retained database; the PVC is preserved.
+
 ## 🔍 Monitoring Your Applications
 
 ### Application Integration

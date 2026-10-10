@@ -147,6 +147,7 @@ Docker:
 Kubernetes Deployment:
   deploy        Build, load to Kind, and deploy to K8s
   rebuild       Rebuild with --no-cache and redeploy
+  rollout       Apply configuration/resources using the existing cluster image
   forward       Port forward from K8s to localhost:8361
   logs          Stream logs from K8s pod
   cleanup       Remove deployed resources
@@ -167,6 +168,35 @@ data, not sourced as shell code. Explicit process environment takes precedence
 over the file, then the default `infrastructure`. Blank entries, duplicate or
 unknown keys fail before deployment. Shared infrastructure redeploys use the
 same local file. The file is excluded from Git and workspace Docker builds.
+
+The commented Redis settings in `.env.example` are reference examples for the
+**process environment**, not additional supported file keys. Keep them commented
+in `.env`; provide overrides in the shell, for example:
+
+```bash
+REDIS_URL=redis://custom-redis:6379/0 ./setup.sh deploy
+```
+
+See [Environment Variables](#environment-variables) and
+[Kubernetes Configuration](#kubernetes-configuration) for URL and structured-topology
+options. The loader continues to reject Redis assignments placed in `.env`.
+
+Optional application-record reads use process-environment settings (not additional
+`.env` keys): `TRUVAG3_VIEWER_APPLICATION_READ_TIMEOUT` defaults to `15s` (1s–1m),
+and `TRUVAG3_VIEWER_APPLICATION_READ_MAX_BYTES` to `1048576` (4096–8388608 bytes).
+`setup.sh` carries supplied values into the ConfigMap; explicit empty/invalid
+values fail application startup rather than silently using a default.
+
+Components can opt in through an internal `inspect_application_records_v1`
+capability returning a JSON ToolResponse with `data.schema_version: 1`, `records`,
+`execution_refs`, `truncated` and `limitations`. The Registry service detail then
+offers **Application records**. Supply a bounded JSON object and the component's
+authorized read credential for each read. Credentials are forwarded in the
+Authorization header only, cleared from the form, and not persisted. Redirects
+are rejected; responses are uncached and failures clear the displayed record.
+The component owns authorization, schemas and interpretation. The viewer reads
+no application-specific Redis keys and does not label these records as new DAGs
+or launch an investigation. This is an opt-in example protocol, not a framework API.
 
 The setup script generates the ConfigMap and overrides manifest values. Match
 the producer's Redis keyspace. Inspect Live Activity during a run: signals can expire before a long
