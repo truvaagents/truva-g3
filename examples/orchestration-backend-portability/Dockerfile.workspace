@@ -1,5 +1,5 @@
 # Local-development image built from the TruvaG3 repository root.
-FROM golang:1.27.0-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 
 RUN apk add --no-cache ca-certificates git
 WORKDIR /app
@@ -11,7 +11,7 @@ COPY examples/orchestration-backend-portability/ ./examples/orchestration-backen
 
 WORKDIR /app/examples/orchestration-backend-portability
 ENV GOWORK=off CGO_ENABLED=0 GOOS=linux
-RUN go mod download && \
+RUN go mod tidy && go mod download && \
     go build -trimpath -ldflags="-s -w" -o /out/orchestration-backend-portability .
 
 FROM alpine:3.23
