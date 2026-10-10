@@ -1324,6 +1324,20 @@ func TestSynthesizer_generateFallbackRequestID_Unique(t *testing.T) {
 // Factory Options Tests
 // =============================================================================
 
+func TestDefaultLLMDebugConfigRetention(t *testing.T) {
+	config := DefaultLLMDebugConfig()
+	if config.Enabled {
+		t.Fatal("debug persistence must remain opt-in")
+	}
+	if config.TTL != 72*time.Hour || config.ErrorTTL != 72*time.Hour {
+		t.Fatalf("default debug TTLs = (%v, %v), want (72h, 72h)", config.TTL, config.ErrorTTL)
+	}
+	if defaultDebugTTL != config.TTL || errorDebugTTL != config.ErrorTTL {
+		t.Fatalf("Redis debug defaults = (%v, %v), want config defaults (%v, %v)",
+			defaultDebugTTL, errorDebugTTL, config.TTL, config.ErrorTTL)
+	}
+}
+
 func TestWithLLMDebug_Enabled(t *testing.T) {
 	config := DefaultConfig()
 	WithLLMDebug(true)(config)

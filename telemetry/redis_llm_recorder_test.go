@@ -412,11 +412,11 @@ func TestRecorderGetEnvDuration(t *testing.T) {
 
 func TestRecorderConstants_MatchOrchestrationDefaults(t *testing.T) {
 	// These must stay in sync with orchestration/redis_llm_debug_store.go
-	if recorderDefaultTTL != 24*time.Hour {
-		t.Errorf("recorderDefaultTTL = %v, want 24h", recorderDefaultTTL)
+	if recorderDefaultTTL != 72*time.Hour {
+		t.Errorf("recorderDefaultTTL = %v, want 72h", recorderDefaultTTL)
 	}
-	if recorderErrorTTL != 7*24*time.Hour {
-		t.Errorf("recorderErrorTTL = %v, want 168h (7d)", recorderErrorTTL)
+	if recorderErrorTTL != 72*time.Hour {
+		t.Errorf("recorderErrorTTL = %v, want 72h (3d)", recorderErrorTTL)
 	}
 	if recorderMaxRetries != 3 {
 		t.Errorf("recorderMaxRetries = %d, want 3", recorderMaxRetries)

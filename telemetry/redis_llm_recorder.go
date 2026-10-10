@@ -33,8 +33,8 @@ const (
 	recorderConversationMetadataField = "meta:" + core.MetadataConversationID
 
 	// Default TTLs — match orchestration defaults
-	recorderDefaultTTL = 24 * time.Hour
-	recorderErrorTTL   = 7 * 24 * time.Hour
+	recorderDefaultTTL = 72 * time.Hour
+	recorderErrorTTL   = 72 * time.Hour
 
 	// Layer 1 resilience constants
 	recorderMaxRetries     = 3

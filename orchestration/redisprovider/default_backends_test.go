@@ -3,6 +3,7 @@ package redisprovider
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -17,6 +18,8 @@ func TestDefaultBackendsConstructsOnlySelectedRolesAndOwnsClients(t *testing.T) 
 		"TRUVAG3_HITL_REDIS_DB":             "invalid-unused-value",
 		"TRUVAG3_WORKFLOW_STATE_TTL":        "invalid-unused-value",
 		"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS": "invalid-unused-value",
+		"TRUVAG3_EXECUTION_DEBUG_TTL":       "invalid-unused-value",
+		"TRUVAG3_EXECUTION_DEBUG_ERROR_TTL": "invalid-unused-value",
 	})
 
 	owned, err := newDefaultBackends(
@@ -73,6 +76,109 @@ func TestDefaultBackendsPreservesCodePrecedenceAndCapabilityOverrides(t *testing
 	}
 	if owned.Backends().LLMDebug() != custom {
 		t.Fatal("provider-neutral backend override did not win")
+	}
+}
+
+func TestDefaultBackendsExecutionRetention(t *testing.T) {
+	codeConfig := orchestration.DefaultExecutionStoreConfig()
+	codeConfig.TTL = 4 * time.Hour
+	codeConfig.ErrorTTL = 8 * time.Hour
+	for _, test := range []struct {
+		name     string
+		values   map[string]string
+		options  []DefaultBackendsOption
+		ttl      time.Duration
+		errorTTL time.Duration
+	}{
+		{name: "defaults", ttl: 72 * time.Hour, errorTTL: 72 * time.Hour},
+		{
+			name: "success only", values: map[string]string{"TRUVAG3_EXECUTION_DEBUG_TTL": "2h"},
+			ttl: 2 * time.Hour, errorTTL: 72 * time.Hour,
+		},
+		{
+			name: "error only", values: map[string]string{"TRUVAG3_EXECUTION_DEBUG_ERROR_TTL": "96h"},
+			ttl: 72 * time.Hour, errorTTL: 96 * time.Hour,
+		},
+		{
+			name: "environment", values: map[string]string{
+				"TRUVAG3_EXECUTION_DEBUG_TTL": " 2h ", "TRUVAG3_EXECUTION_DEBUG_ERROR_TTL": "96h",
+			},
+			ttl: 2 * time.Hour, errorTTL: 96 * time.Hour,
+		},
+		{
+			name: "code overrides environment", values: map[string]string{
+				"TRUVAG3_EXECUTION_DEBUG_TTL": "2h", "TRUVAG3_EXECUTION_DEBUG_ERROR_TTL": "96h",
+			},
+			options: []DefaultBackendsOption{WithDefaultBackendProviderOptions(WithExecutionStoreConfig(codeConfig))},
+			ttl:     4 * time.Hour, errorTTL: 8 * time.Hour,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := miniredis.RunT(t)
+			values := map[string]string{"REDIS_URL": "redis://" + server.Addr()}
+			for key, value := range test.values {
+				values[key] = value
+			}
+			options := append([]DefaultBackendsOption{WithDefaultBackendRoles(ClientRoleExecution)}, test.options...)
+			owned, err := newDefaultBackends(&core.NoOpLogger{}, lookupValues(values), options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = owned.Close() })
+			keyspace, err := core.NewRedisKeyspace("default")
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys := orchestration.NewRedisExecutionDebugKeys(keyspace)
+			for _, outcome := range []struct {
+				id      string
+				success bool
+				state   string
+				ttl     time.Duration
+			}{
+				{id: "success", success: true, ttl: test.ttl},
+				{id: "failure", ttl: test.errorTTL},
+				{id: "cancelled", success: true, state: orchestration.RequestLifecycleCancelled, ttl: test.errorTTL},
+			} {
+				execution := &orchestration.StoredExecution{
+					RequestID: outcome.id,
+					Result:    &orchestration.ExecutionResult{Success: outcome.success},
+				}
+				if outcome.state != "" {
+					execution.Lifecycle = &orchestration.ExecutionLifecycleObservation{State: outcome.state}
+				}
+				if err := owned.Backends().Execution().Store(t.Context(), execution); err != nil {
+					t.Fatal(err)
+				}
+				if got := server.TTL(keys.Record(outcome.id)); got != outcome.ttl {
+					t.Errorf("%s TTL = %v, want %v", outcome.id, got, outcome.ttl)
+				}
+			}
+		})
+	}
+}
+
+func TestDefaultBackendsRejectsInvalidExecutionRetention(t *testing.T) {
+	for _, variable := range []string{"TRUVAG3_EXECUTION_DEBUG_TTL", "TRUVAG3_EXECUTION_DEBUG_ERROR_TTL"} {
+		for _, raw := range []string{"", " ", "0s", "-1h", "not-a-duration", "9223372036854775807h"} {
+			t.Run(variable+"/"+raw, func(t *testing.T) {
+				server := miniredis.RunT(t)
+				owned, err := newDefaultBackends(&core.NoOpLogger{}, lookupValues(map[string]string{
+					"REDIS_URL": "redis://" + server.Addr(), variable: raw,
+				}), WithDefaultBackendRoles(ClientRoleExecution),
+					// A valid code override does not hide malformed environment configuration.
+					WithDefaultBackendProviderOptions(WithExecutionStoreConfig(orchestration.DefaultExecutionStoreConfig())),
+				)
+				if owned != nil {
+					_ = owned.Close()
+					t.Fatal("invalid retention returned usable backends")
+				}
+				want := "redisprovider: " + variable + " must be a positive duration"
+				if err == nil || err.Error() != want {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+			})
+		}
 	}
 }
 

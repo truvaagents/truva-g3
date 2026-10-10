@@ -787,12 +787,24 @@ func TestOwnedClientRoleSelectionValidation(t *testing.T) {
 }
 
 func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
+	// Layer 2 is environment-free, even when process values are invalid.
+	t.Setenv("TRUVAG3_EXECUTION_DEBUG_TTL", "invalid-process-value")
+	t.Setenv("TRUVAG3_EXECUTION_DEBUG_ERROR_TTL", "invalid-process-value")
 	base, err := NewOptions()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if base.executionConfig != orchestration.DefaultExecutionStoreConfig() {
+		t.Fatalf("NewOptions changed execution defaults: %#v", base.executionConfig)
+	}
+	absent, err := LoadOptionsFromEnvironment(base, lookupValues(nil))
+	if err != nil || absent.executionConfig != base.executionConfig {
+		t.Fatalf("absent environment changed execution configuration: %#v, %v", absent.executionConfig, err)
+	}
 	fromEnvironment, err := LoadOptionsFromEnvironment(base, func(name string) (string, bool) {
 		values := map[string]string{
+			"TRUVAG3_EXECUTION_DEBUG_TTL":           "2h",
+			"TRUVAG3_EXECUTION_DEBUG_ERROR_TTL":     "96h",
 			"TRUVAG3_WORKFLOW_STATE_TTL":            "48h",
 			"TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS":     "5",
 			"TRUVAG3_TASK_QUEUE_RETRY_DELAY":        "250ms",
@@ -808,6 +820,12 @@ func TestProviderOperationalOptionsEnvironmentAndCodePrecedence(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	wantExecutionConfig := base.executionConfig
+	wantExecutionConfig.TTL = 2 * time.Hour
+	wantExecutionConfig.ErrorTTL = 96 * time.Hour
+	if fromEnvironment.executionConfig != wantExecutionConfig {
+		t.Fatalf("execution configuration = %#v, want %#v", fromEnvironment.executionConfig, wantExecutionConfig)
 	}
 	executionConfig := orchestration.ExecutionStoreConfig{
 		Enabled:   true,

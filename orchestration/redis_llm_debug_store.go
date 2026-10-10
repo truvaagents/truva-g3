@@ -26,8 +26,8 @@ var (
 const (
 
 	// Default TTLs
-	defaultDebugTTL = 24 * time.Hour
-	errorDebugTTL   = 7 * 24 * time.Hour
+	defaultDebugTTL = 72 * time.Hour
+	errorDebugTTL   = 72 * time.Hour
 )
 
 var recordLLMInteractionScript = redis.NewScript(`

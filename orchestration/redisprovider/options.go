@@ -157,6 +157,8 @@ func LoadOptionsFromEnvironment(base Options, lookup func(string) (string, bool)
 		name   string
 		target *time.Duration
 	}{
+		{name: "TRUVAG3_EXECUTION_DEBUG_TTL", target: &base.executionConfig.TTL},
+		{name: "TRUVAG3_EXECUTION_DEBUG_ERROR_TTL", target: &base.executionConfig.ErrorTTL},
 		{name: "TRUVAG3_LLM_DEBUG_TTL", target: &base.llmDebugTTL},
 		{name: "TRUVAG3_LLM_DEBUG_ERROR_TTL", target: &base.llmDebugErrorTTL},
 		{name: "TRUVAG3_HITL_CHECKPOINT_TTL", target: &base.checkpointTTL},

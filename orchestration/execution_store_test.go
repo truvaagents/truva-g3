@@ -658,11 +658,11 @@ func TestDefaultExecutionStoreConfig(t *testing.T) {
 	if config.Enabled != false {
 		t.Error("Default should be disabled")
 	}
-	if config.TTL != 24*time.Hour {
-		t.Errorf("Default TTL should be 24h, got %v", config.TTL)
+	if config.TTL != 72*time.Hour {
+		t.Errorf("Default TTL should be 72h, got %v", config.TTL)
 	}
-	if config.ErrorTTL != 168*time.Hour {
-		t.Errorf("Default ErrorTTL should be 168h, got %v", config.ErrorTTL)
+	if config.ErrorTTL != 72*time.Hour {
+		t.Errorf("Default ErrorTTL should be 72h, got %v", config.ErrorTTL)
 	}
 }
 
