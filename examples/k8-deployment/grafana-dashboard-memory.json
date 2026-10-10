@@ -49,7 +49,7 @@
         "name": "service_name",
         "type": "query",
         "datasource": "${datasource}",
-        "query": "label_values(truvag3_memory_operations_total{job=\"otel-collector-metrics\"}, service_name)",
+        "query": "label_values({job=\"otel-collector-metrics\", __name__=~\"truvag3_memory_(cache_hits|cache_misses|operations|evictions|enrichment_injected|reflection_pass)_count|truvag3_memory_(record_events|knowledge_store_success|knowledge_search_success)_total|truvag3_orchestration_(digest_cache_hit|digest_cache_miss|activity_coordination_duration_ms|event_summarization_outcomes)_count|truvag3_orchestration_activity_compaction(_incremental)?_success_total\"}, service_name)",
         "label": "Service",
         "current": {
           "selected": true,
@@ -97,7 +97,9 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_memory_cache_hits_total{job=\"otel-collector-metrics\"}[$__range])) / clamp_min(sum(rate(truvag3_memory_cache_hits_total{job=\"otel-collector-metrics\"}[$__range])) + sum(rate(truvag3_memory_cache_misses_total{job=\"otel-collector-metrics\"}[$__range])), 1e-10) * 100",
+          "expr": "100 * (sum((increase(truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) + (((min_over_time(truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) unless truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset $__range) unless (last_over_time(truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) * 0))) or vector(0)) / (((sum((increase(truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) + (((min_over_time(truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) unless truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset $__range) unless (last_over_time(truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) * 0))) or vector(0)) + (sum((increase(truvag3_memory_cache_misses_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) + (((min_over_time(truvag3_memory_cache_misses_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) unless truvag3_memory_cache_misses_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset $__range) unless (last_over_time(truvag3_memory_cache_misses_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_memory_cache_misses_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) * 0))) or vector(0))) > 0)",
+          "instant": true,
+          "range": false,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -110,7 +112,7 @@
           "unit": "percent",
           "min": 0,
           "max": 100,
-          "noValue": "\u2014",
+          "noValue": "—",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -141,11 +143,12 @@
         },
         "showThresholdLabels": false,
         "showThresholdMarkers": true
-      }
+      },
+      "description": "In-process cache hit rate over the selected range. No data means no cache lookups happened. Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 3,
-      "title": "Memory Ops Rate",
+      "title": "In-process Cache Ops (range)",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -159,7 +162,9 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_memory_operations_total{job=\"otel-collector-metrics\"}[$__range]))",
+          "expr": "sum((increase(truvag3_memory_operations_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) + (((min_over_time(truvag3_memory_operations_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) unless truvag3_memory_operations_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset $__range) unless (last_over_time(truvag3_memory_operations_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_memory_operations_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) * 0)))",
+          "instant": true,
+          "range": false,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -169,7 +174,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "color": {
             "mode": "fixed",
             "fixedColor": "blue"
@@ -199,11 +204,12 @@
         "justifyMode": "auto",
         "textMode": "auto",
         "wideLayout": true
-      }
+      },
+      "description": "In-process MemoryStore/SchemaCache operations in the selected range. Shared (episodic) memory writes are under Episodic Memory. Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 4,
-      "title": "Evictions/s",
+      "title": "Evictions (range)",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -217,7 +223,9 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_memory_evictions_total{job=\"otel-collector-metrics\"}[$__range]))",
+          "expr": "sum((increase(truvag3_memory_evictions_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) + (((min_over_time(truvag3_memory_evictions_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) unless truvag3_memory_evictions_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset $__range) unless (last_over_time(truvag3_memory_evictions_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_memory_evictions_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range]) * 0)))",
+          "instant": true,
+          "range": false,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -227,7 +235,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "noValue": "0",
           "thresholds": {
             "mode": "absolute",
@@ -262,11 +270,12 @@
         "justifyMode": "auto",
         "textMode": "auto",
         "wideLayout": true
-      }
+      },
+      "description": " Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 5,
-      "title": "Memory Avg Duration",
+      "title": "agentic-memory-tool Avg Request",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -280,7 +289,9 @@
       },
       "targets": [
         {
-          "expr": "sum(truvag3_memory_request_duration_ms_sum{job=\"otel-collector-metrics\"}) / clamp_min(sum(truvag3_memory_request_duration_ms_count{job=\"otel-collector-metrics\"}), 1e-10)",
+          "expr": "sum (increase(truvag3_memory_request_duration_ms_sum{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range])) / (sum (increase(truvag3_memory_request_duration_ms_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__range])) > 0)",
+          "instant": true,
+          "range": false,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -291,7 +302,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
-          "noValue": "\u2014",
+          "noValue": "—",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -325,7 +336,8 @@
         "justifyMode": "auto",
         "textMode": "auto",
         "wideLayout": true
-      }
+      },
+      "description": "Mean request duration of examples/agentic-memory-tool over the selected range (the only emitter of this metric)."
     },
     {
       "id": 6,
@@ -356,18 +368,22 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_memory_cache_hits_total{job=\"otel-collector-metrics\"}[5m]))",
-          "refId": "A",
+          "expr": "sum(rate(truvag3_memory_cache_hits_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__rate_interval]))",
+          "instant": false,
+          "range": true,
           "legendFormat": "Hits",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           }
         },
         {
-          "expr": "sum(rate(truvag3_memory_cache_misses_total{job=\"otel-collector-metrics\"}[5m]))",
-          "refId": "B",
+          "expr": "sum(rate(truvag3_memory_cache_misses_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__rate_interval]))",
+          "instant": false,
+          "range": true,
           "legendFormat": "Misses",
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -460,9 +476,11 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_memory_evictions_total{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
-          "refId": "A",
+          "expr": "sum by (service_name) (rate(truvag3_memory_evictions_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[$__rate_interval]))",
+          "instant": false,
+          "range": true,
           "legendFormat": "{{service_name}}",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -523,7 +541,7 @@
     },
     {
       "id": 10,
-      "title": "Events Recorded",
+      "title": "Event Recording Attempts / sec",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -537,9 +555,11 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_memory_record_events_total{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
-          "refId": "A",
+          "expr": "sum by (service_name) ((rate(truvag3_orchestration_memory_entity_extraction_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\", hook=\"record\"}[5m]) + (((min_over_time(truvag3_orchestration_memory_entity_extraction_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\", hook=\"record\"}[5m]) unless truvag3_orchestration_memory_entity_extraction_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\", hook=\"record\"} offset 5m) unless (last_over_time(truvag3_orchestration_memory_entity_extraction_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\", hook=\"record\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_orchestration_memory_entity_extraction_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\", hook=\"record\"}[5m]) * 0) / 300))",
+          "instant": false,
+          "range": true,
           "legendFormat": "{{service_name}}",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -583,7 +603,8 @@
           "placement": "bottom",
           "calcs": []
         }
-      }
+      },
+      "description": "Estimated record-hook step attempts. Entity-extraction is counted before RecordEvent; failed persistence is included. This does not prove successful event writes. Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 11,
@@ -601,18 +622,22 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_orchestration_event_summarization_success_total{job=\"otel-collector-metrics\"}[5m]))",
-          "refId": "A",
+          "expr": "sum(rate(truvag3_orchestration_event_summarization_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+          "instant": false,
+          "range": true,
           "legendFormat": "Provider completion (legacy)",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           }
         },
         {
-          "expr": "sum by (outcome) (rate(truvag3_orchestration_event_summarization_outcomes_total{job=\"otel-collector-metrics\"}[5m]))",
-          "refId": "B",
+          "expr": "sum by (outcome) (rate(truvag3_orchestration_event_summarization_outcomes_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]))",
+          "instant": false,
+          "range": true,
           "legendFormat": "Summary {{outcome}}",
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -668,147 +693,153 @@
         "x": 0,
         "y": 23
       },
-      "collapsed": true,
-      "panels": [
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 13,
+      "title": "Knowledge Store & Search",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
         {
-          "id": 13,
-          "title": "Knowledge Store & Search",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 24
-          },
+          "expr": "sum((rate(truvag3_memory_knowledge_store_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) + (((min_over_time(truvag3_memory_knowledge_store_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) unless truvag3_memory_knowledge_store_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset 5m) unless (last_over_time(truvag3_memory_knowledge_store_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_memory_knowledge_store_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) * 0) / 300))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "Store Success",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
-          },
-          "targets": [
-            {
-              "expr": "sum(rate(truvag3_memory_knowledge_store_success_total{job=\"otel-collector-metrics\"}[5m]))",
-              "refId": "A",
-              "legendFormat": "Store Success",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${datasource}"
-              }
-            },
-            {
-              "expr": "sum(rate(truvag3_memory_knowledge_search_success_total{job=\"otel-collector-metrics\"}[5m]))",
-              "refId": "B",
-              "legendFormat": "Search Success",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${datasource}"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "fillOpacity": 10,
-                "stacking": {
-                  "mode": "none"
-                },
-                "lineWidth": 1,
-                "pointSize": 5,
-                "showPoints": "auto",
-                "spanNulls": false
-              },
-              "unit": "ops",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            },
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": []
-            }
           }
         },
         {
-          "id": 14,
-          "title": "Enrichment Injected",
-          "description": "Memory context added to LLM prompts",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 24
-          },
+          "expr": "sum((rate(truvag3_memory_knowledge_search_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) + (((min_over_time(truvag3_memory_knowledge_search_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) unless truvag3_memory_knowledge_search_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset 5m) unless (last_over_time(truvag3_memory_knowledge_search_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_memory_knowledge_search_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) * 0) / 300))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "Search Success",
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
-          },
-          "targets": [
-            {
-              "expr": "sum(rate(truvag3_memory_enrichment_injected_count{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
-              "refId": "A",
-              "legendFormat": "{{service_name}}",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${datasource}"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "fillOpacity": 10,
-                "stacking": {
-                  "mode": "none"
-                },
-                "lineWidth": 1,
-                "pointSize": 5,
-                "showPoints": "auto",
-                "spanNulls": false
-              },
-              "unit": "ops",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            },
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": []
-            }
           }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "description": " Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
+    },
+    {
+      "id": 14,
+      "title": "Enrichment Injected",
+      "description": "Memory context added to LLM prompts Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (service_name) ((rate(truvag3_memory_enrichment_injected_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) + (((min_over_time(truvag3_memory_enrichment_injected_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) unless truvag3_memory_enrichment_injected_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset 5m) unless (last_over_time(truvag3_memory_enrichment_injected_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_memory_enrichment_injected_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) * 0) / 300))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{service_name}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      }
     },
     {
       "id": 15,
@@ -818,252 +849,264 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 32
       },
-      "collapsed": true,
-      "panels": [
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 16,
+      "title": "Compaction Success",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
         {
-          "id": 16,
-          "title": "Compaction Success",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 0,
-            "y": 25
-          },
+          "expr": "sum((rate(truvag3_orchestration_activity_compaction_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) + (((min_over_time(truvag3_orchestration_activity_compaction_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) unless truvag3_orchestration_activity_compaction_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset 5m) unless (last_over_time(truvag3_orchestration_activity_compaction_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_orchestration_activity_compaction_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) * 0) / 300))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "Full Compaction",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
-          },
-          "targets": [
-            {
-              "expr": "sum(rate(truvag3_orchestration_activity_compaction_success_total{job=\"otel-collector-metrics\"}[5m]))",
-              "refId": "A",
-              "legendFormat": "Full Compaction",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${datasource}"
-              }
-            },
-            {
-              "expr": "sum(rate(truvag3_orchestration_activity_compaction_incremental_success_total{job=\"otel-collector-metrics\"}[5m]))",
-              "refId": "B",
-              "legendFormat": "Incremental",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${datasource}"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "fillOpacity": 10,
-                "stacking": {
-                  "mode": "none"
-                },
-                "lineWidth": 1,
-                "pointSize": 5,
-                "showPoints": "auto",
-                "spanNulls": false
-              },
-              "unit": "ops",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            },
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": []
-            }
           }
         },
         {
-          "id": 17,
-          "title": "Coordination Duration P95",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 8,
-            "y": 25
-          },
+          "expr": "sum((rate(truvag3_orchestration_activity_compaction_incremental_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) + (((min_over_time(truvag3_orchestration_activity_compaction_incremental_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) unless truvag3_orchestration_activity_compaction_incremental_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset 5m) unless (last_over_time(truvag3_orchestration_activity_compaction_incremental_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_orchestration_activity_compaction_incremental_success_total{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) * 0) / 300))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "Incremental",
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
-          },
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(truvag3_orchestration_activity_coordination_duration_ms_bucket{job=\"otel-collector-metrics\"}[5m])) by (le))",
-              "refId": "A",
-              "legendFormat": "P95",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${datasource}"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "fillOpacity": 10,
-                "stacking": {
-                  "mode": "none"
-                },
-                "lineWidth": 1,
-                "pointSize": 5,
-                "showPoints": "auto",
-                "spanNulls": false
-              },
-              "unit": "ms",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
             },
-            "overrides": []
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
           },
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "description": " Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
+    },
+    {
+      "id": 17,
+      "title": "Coordination Duration (mean)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum ((increase(truvag3_orchestration_activity_coordination_duration_ms_sum{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"}[15m]) + (((min_over_time(truvag3_orchestration_activity_coordination_duration_ms_sum{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"}[15m]) unless truvag3_orchestration_activity_coordination_duration_ms_sum{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"} offset 15m) unless (last_over_time(truvag3_orchestration_activity_coordination_duration_ms_sum{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"}[1d] offset 15m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 15m) > 0))) or increase(truvag3_orchestration_activity_coordination_duration_ms_sum{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"}[15m]) * 0))) / (sum ((increase(truvag3_orchestration_activity_coordination_duration_ms_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"}[15m]) + (((min_over_time(truvag3_orchestration_activity_coordination_duration_ms_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"}[15m]) unless truvag3_orchestration_activity_coordination_duration_ms_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"} offset 15m) unless (last_over_time(truvag3_orchestration_activity_coordination_duration_ms_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"}[1d] offset 15m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 15m) > 0))) or increase(truvag3_orchestration_activity_coordination_duration_ms_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\", module=~\".+\"}[15m]) * 0))) > 0)",
+          "instant": false,
+          "range": true,
+          "legendFormat": "mean (15m)",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
             },
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": []
-            }
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      },
+      "description": "Mean activity-coordination time. Values are whole milliseconds and mostly sub-millisecond, so a percentile from the default buckets is meaningless (code items C3, C13). Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
+    },
+    {
+      "id": 18,
+      "title": "Digest Cache Hit/Miss",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(truvag3_orchestration_digest_cache_hit_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m])) or vector(0)",
+          "instant": false,
+          "range": true,
+          "legendFormat": "Hit",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
           }
         },
         {
-          "id": 18,
-          "title": "Digest Cache Hit/Miss",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 16,
-            "y": 25
-          },
+          "expr": "sum((rate(truvag3_orchestration_digest_cache_miss_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) + (((min_over_time(truvag3_orchestration_digest_cache_miss_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) unless truvag3_orchestration_digest_cache_miss_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"} offset 5m) unless (last_over_time(truvag3_orchestration_digest_cache_miss_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_orchestration_digest_cache_miss_count{job=\"otel-collector-metrics\", service_name=~\"$service_name\"}[5m]) * 0) / 300))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "Miss",
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
           },
-          "targets": [
-            {
-              "expr": "sum(rate(truvag3_orchestration_digest_cache_hit_count{job=\"otel-collector-metrics\"}[5m]))",
-              "refId": "A",
-              "legendFormat": "Hit",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${datasource}"
-              }
-            },
-            {
-              "expr": "sum(rate(truvag3_orchestration_digest_cache_miss_count{job=\"otel-collector-metrics\"}[5m]))",
-              "refId": "B",
-              "legendFormat": "Miss",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${datasource}"
-              }
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "fillOpacity": 10,
-                "stacking": {
-                  "mode": "none"
-                },
-                "lineWidth": 1,
-                "pointSize": 5,
-                "showPoints": "auto",
-                "spanNulls": false
-              },
-              "unit": "ops",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": [
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Hit"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "mode": "fixed",
-                      "fixedColor": "green"
-                    }
-                  }
-                ]
-              },
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Hit"
+            },
+            "properties": [
               {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Miss"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "mode": "fixed",
-                      "fixedColor": "red"
-                    }
-                  }
-                ]
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
               }
             ]
           },
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Miss"
             },
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": []
-            }
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
           }
+        ]
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
         }
-      ]
+      },
+      "description": " Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     }
   ]
 }

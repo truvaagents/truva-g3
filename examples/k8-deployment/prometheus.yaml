@@ -8,6 +8,10 @@ metadata:
     component: monitoring
 spec:
   replicas: 1
+  # A single TSDB volume has one writer. Stop the old process before opening
+  # the same database in the replacement pod during a configuration rebuild.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: prometheus
@@ -148,9 +152,9 @@ data:
           target_label: __metrics_path__
           replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
         metric_relabel_configs:
-        # Keep only metrics for truvag3-examples namespace
+        # Keep only metrics for the example namespaces
         - source_labels: [namespace]
-          regex: truvag3-examples
+          regex: truvag3-examples|software-maintenance
           action: keep
         # Keep only container_* metrics we need
         - source_labels: [__name__]

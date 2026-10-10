@@ -48,7 +48,7 @@
         "name": "service_type",
         "type": "custom",
         "label": "Service Type",
-        "query": "agent,tool",
+        "query": "Agents : agent, Tools : tool, Untyped : ^$, Tools + untyped : (tool|^$)",
         "current": {
           "selected": true,
           "text": "All",
@@ -66,13 +66,23 @@
           },
           {
             "selected": false,
-            "text": "agent",
+            "text": "Agents",
             "value": "agent"
           },
           {
             "selected": false,
-            "text": "tool",
+            "text": "Tools",
             "value": "tool"
+          },
+          {
+            "selected": false,
+            "text": "Untyped",
+            "value": "^$"
+          },
+          {
+            "selected": false,
+            "text": "Tools + untyped",
+            "value": "(tool|^$)"
           }
         ],
         "skipUrlSync": false
@@ -82,7 +92,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Request Rate",
+      "title": "Requests & Executions",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -96,8 +106,22 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[$__range]))",
+          "expr": "sum((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) or vector(0)",
+          "instant": true,
+          "range": false,
+          "legendFormat": "POST requests",
           "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        },
+        {
+          "expr": "sum((increase(truvag3_orchestrator_requests_total{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_orchestrator_requests_total{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_orchestrator_requests_total{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_orchestrator_requests_total{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_orchestrator_requests_total{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) or vector(0)",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Executions",
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -106,7 +130,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
+          "unit": "short",
           "color": {
             "mode": "fixed",
             "fixedColor": "blue"
@@ -119,7 +143,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "decimals": 0
         },
         "overrides": []
       },
@@ -134,9 +159,10 @@
           "values": false
         },
         "justifyMode": "auto",
-        "textMode": "auto",
+        "textMode": "value_and_name",
         "wideLayout": true
-      }
+      },
+      "description": "Instrumented POST requests and orchestrated executions in the selected range. Scheduled agents (e.g. maintenance-agent) make no POST requests, so they only appear under Executions. Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals. Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 2,
@@ -154,8 +180,22 @@
       },
       "targets": [
         {
-          "expr": "(sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\"}[$__range])) or vector(0)) / clamp_min(sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[$__range])), 1e-10) * 100",
+          "expr": "100 * (sum((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) or vector(0)) / (sum((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) > 0)",
+          "instant": true,
+          "range": false,
+          "legendFormat": "5xx",
           "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        },
+        {
+          "expr": "100 * (sum((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) or vector(0)) / (sum((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) > 0)",
+          "instant": true,
+          "range": false,
+          "legendFormat": "4xx",
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -165,7 +205,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "noValue": "0%",
+          "noValue": "No traffic",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -197,9 +237,10 @@
           "values": false
         },
         "justifyMode": "auto",
-        "textMode": "auto",
+        "textMode": "value_and_name",
         "wideLayout": true
-      }
+      },
+      "description": "Share of POST requests in the selected range that returned 5xx / 4xx. Agent-to-tool failures usually surface as 4xx. Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 3,
@@ -217,7 +258,9 @@
       },
       "targets": [
         {
-          "expr": "sum(truvag3_http_server_request_duration_seconds_sum{job=\"otel-collector-metrics\", http_request_method=\"POST\"}) / clamp_min(sum(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}), 1e-10) * 1000",
+          "expr": "1000 * sum((increase(truvag3_http_server_request_duration_seconds_sum{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_sum{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_sum{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_sum{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_sum{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) / (sum((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) > 0)",
+          "instant": true,
+          "range": false,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -228,7 +271,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
-          "noValue": "\u2014",
+          "noValue": "—",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -262,7 +305,8 @@
         "justifyMode": "auto",
         "textMode": "auto",
         "wideLayout": true
-      }
+      },
+      "description": "Mean POST request latency over the selected range. Mixes fast tool calls with multi-minute agent calls; filter by Service Type for a meaningful number. Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 4,
@@ -280,7 +324,9 @@
       },
       "targets": [
         {
-          "expr": "count(count by (service_name) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\"}))",
+          "expr": "count(count by (service_name) (increase(truvag3_discovery_health_checks_count{job=\"otel-collector-metrics\", status=\"success\", service_type=~\"${service_type:raw}\"}[2m]) > 0)) or vector(0)",
+          "instant": true,
+          "range": false,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -320,7 +366,8 @@
         "justifyMode": "auto",
         "textMode": "auto",
         "wideLayout": true
-      }
+      },
+      "description": "Services that sent a successful heartbeat in the last 2 minutes. Untyped services remain visible under All, Untyped, or Tools + untyped. Tools alone requires explicit service.type=tool; missing metadata is not proof of a tool."
     },
     {
       "id": 5,
@@ -338,66 +385,84 @@
       },
       "targets": [
         {
-          "expr": "sum by (service_name, service_type) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"})",
+          "expr": "max by (service_name, service_type) (increase(truvag3_discovery_health_checks_count{job=\"otel-collector-metrics\", status=\"success\", service_type=~\"${service_type:raw}\"}[2m]) > bool 0) or max by (service_name, service_type) (last_over_time(truvag3_discovery_health_checks_count{job=\"otel-collector-metrics\", status=\"success\", service_type=~\"${service_type:raw}\"}[$__range]) * 0)",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "refId": "G",
+          "legendFormat": "Health",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        },
+        {
+          "expr": "sum by (service_name) ((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0)))",
+          "instant": true,
+          "range": false,
+          "format": "table",
           "refId": "A",
           "legendFormat": "Requests",
-          "instant": true,
-          "format": "table",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           }
         },
         {
-          "expr": "sum by (service_name) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\"}) or sum by (service_name) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}) * 0",
+          "expr": "sum by (service_name) ((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) or sum by (service_name) ((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) * 0",
+          "instant": true,
+          "range": false,
+          "format": "table",
           "refId": "B",
           "legendFormat": "Errors",
-          "instant": true,
-          "format": "table",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           }
         },
         {
-          "expr": "(sum by (service_name) (rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\"}[6h])) or sum by (service_name) (truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}) * 0) / clamp_min(sum by (service_name) (rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[6h])), 1e-10) * 100",
+          "expr": "100 * (sum by (service_name) ((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) or sum by (service_name) ((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) * 0) / (sum by (service_name) ((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) > 0)",
+          "instant": true,
+          "range": false,
+          "format": "table",
           "refId": "C",
           "legendFormat": "Error %",
-          "instant": true,
-          "format": "table",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           }
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (service_name, le) (rate(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[6h]))) * 1000",
+          "expr": "histogram_quantile(0.95, sum by (service_name, le) ((increase(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0)))) * 1000 and on (service_name) (sum by (service_name) ((increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) > 0)",
+          "instant": true,
+          "range": false,
+          "format": "table",
           "refId": "D",
           "legendFormat": "P95 (ms)",
-          "instant": true,
-          "format": "table",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           }
         },
         {
-          "expr": "sum by (service_name) (truvag3_tool_call_total{job=\"otel-collector-metrics\"}) or sum by (service_name) (truvag3_request_total{job=\"otel-collector-metrics\"}) * 0",
+          "expr": "sum by (service_name) ((increase(truvag3_tool_call_total{job=\"otel-collector-metrics\", status=~\".+\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_tool_call_total{job=\"otel-collector-metrics\", status=~\".+\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_tool_call_total{job=\"otel-collector-metrics\", status=~\".+\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_tool_call_total{job=\"otel-collector-metrics\", status=~\".+\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_tool_call_total{job=\"otel-collector-metrics\", status=~\".+\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) > 0",
+          "instant": true,
+          "range": false,
+          "format": "table",
           "refId": "E",
-          "legendFormat": "Tool Calls",
-          "instant": true,
-          "format": "table",
+          "legendFormat": "Tool calls served",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           }
         },
         {
-          "expr": "sum by (service_name) (truvag3_ai_request_total{job=\"otel-collector-metrics\"}) or sum by (service_name) (truvag3_request_total{job=\"otel-collector-metrics\"}) * 0",
-          "refId": "F",
-          "legendFormat": "AI Calls",
+          "expr": "sum by (service_name) ((increase(truvag3_ai_request_total{job=\"otel-collector-metrics\", module=\"ai\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_ai_request_total{job=\"otel-collector-metrics\", module=\"ai\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_ai_request_total{job=\"otel-collector-metrics\", module=\"ai\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_ai_request_total{job=\"otel-collector-metrics\", module=\"ai\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_ai_request_total{job=\"otel-collector-metrics\", module=\"ai\", service_type=~\"${service_type:raw}\"}[$__range]) * 0))) > 0",
           "instant": true,
+          "range": false,
           "format": "table",
+          "refId": "F",
+          "legendFormat": "LLM calls",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -413,27 +478,38 @@
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Time": true
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "Time 9": true
             },
             "indexByName": {
               "service_name": 0,
               "service_type": 1,
-              "Value #A": 2,
-              "Value #B": 3,
-              "Value #C": 4,
-              "Value #D": 5,
-              "Value #E": 6,
-              "Value #F": 7
+              "Value #G": 2,
+              "Value #A": 3,
+              "Value #B": 4,
+              "Value #C": 5,
+              "Value #D": 6,
+              "Value #E": 7,
+              "Value #F": 8
             },
             "renameByName": {
               "service_name": "Service",
               "service_type": "Type",
+              "Value #G": "Health",
               "Value #A": "Requests",
-              "Value #B": "Errors",
+              "Value #B": "Errors (5xx)",
               "Value #C": "Error %",
               "Value #D": "P95 (ms)",
-              "Value #E": "Tool Calls",
-              "Value #F": "AI Calls"
+              "Value #E": "Tool calls served",
+              "Value #F": "LLM calls"
             }
           }
         }
@@ -496,9 +572,89 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "Health"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "STALE",
+                        "color": "red"
+                      },
+                      "1": {
+                        "text": "UP",
+                        "color": "green"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "P95 (ms)"
             },
             "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 9999.5,
+                      "to": 1000000000000000000,
+                      "result": {
+                        "text": "> 10 s (bucket limit)",
+                        "color": "orange"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Errors (5xx)"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
               {
                 "id": "thresholds",
                 "value": {
@@ -509,22 +665,23 @@
                       "value": null
                     },
                     {
-                      "color": "yellow",
-                      "value": 500
-                    },
-                    {
                       "color": "red",
-                      "value": 2000
+                      "value": 1
                     }
                   ]
                 }
-              },
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Requests|Tool calls served|LLM calls"
+            },
+            "properties": [
               {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "basic"
-                }
+                "id": "decimals",
+                "value": 0
               }
             ]
           }
@@ -547,7 +704,8 @@
           "countRows": false,
           "fields": ""
         }
-      }
+      },
+      "description": "Every service that sent a heartbeat in the last 2 minutes, with POST traffic, tool calls served and LLM calls over the selected range. P95 tops out at 10 s (histogram bucket limit, code item C3). Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 6,
@@ -578,9 +736,11 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[5m])) by (service_name)",
-          "refId": "A",
+          "expr": "sum by (service_name) ((rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[5m]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[5m]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset 5m) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[5m]) * 0) / 300))",
+          "instant": false,
+          "range": true,
           "legendFormat": "{{service_name}}",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -631,7 +791,8 @@
           "placement": "bottom",
           "calcs": []
         }
-      }
+      },
+      "description": " Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 8,
@@ -649,10 +810,12 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\"}[5m])) by (le)",
-          "refId": "A",
-          "format": "heatmap",
+          "expr": "sum by (le) ((rate(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[5m]) + (((min_over_time(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[5m]) unless truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"} offset 5m) unless (last_over_time(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_http_server_request_duration_seconds_bucket{job=\"otel-collector-metrics\", http_request_method=\"POST\", service_type=~\"${service_type:raw}\"}[5m]) * 0) / 300))",
+          "instant": false,
+          "range": true,
           "legendFormat": "{{le}}",
+          "format": "heatmap",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -671,7 +834,7 @@
           "exponent": 0.5
         },
         "yAxis": {
-          "unit": "ms",
+          "unit": "s",
           "reverse": false
         },
         "cellGap": 1,
@@ -683,13 +846,14 @@
           "color": "rgba(255,0,255,0.7)"
         },
         "filterValues": {
-          "le": 1e-09
+          "le": 1e-9
         },
         "rowsFrame": {
           "layout": "auto"
         },
         "showValue": "never"
-      }
+      },
+      "description": "POST request duration distribution. Buckets are in seconds and stop at 10 s; slower calls land in +Inf. Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
     },
     {
       "id": 9,
@@ -719,9 +883,22 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\"}[5m])) by (service_name)",
+              "expr": "sum by (service_name) ((rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[5m]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[5m]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"} offset 5m) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"5..\", service_type=~\"${service_type:raw}\"}[5m]) * 0) / 300))",
+              "instant": false,
+              "range": true,
+              "legendFormat": "{{service_name}} 5xx",
               "refId": "A",
-              "legendFormat": "{{service_name}}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              }
+            },
+            {
+              "expr": "sum by (service_name) ((rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"}[5m]) + (((min_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"}[5m]) unless truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"} offset 5m) unless (last_over_time(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"}[1d] offset 5m) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset 5m) > 0))) or rate(truvag3_http_server_request_duration_seconds_count{job=\"otel-collector-metrics\", http_request_method=\"POST\", http_response_status_code=~\"4..\", service_type=~\"${service_type:raw}\"}[5m]) * 0) / 300))",
+              "instant": false,
+              "range": true,
+              "legendFormat": "{{service_name}} 4xx",
+              "refId": "B",
               "datasource": {
                 "type": "prometheus",
                 "uid": "${datasource}"
@@ -754,7 +931,8 @@
                     "value": null
                   }
                 ]
-              }
+              },
+              "unit": "reqps"
             },
             "overrides": []
           },
@@ -768,12 +946,13 @@
               "placement": "bottom",
               "calcs": []
             }
-          }
+          },
+          "description": " Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals."
         },
         {
           "id": 11,
-          "title": "Service Registrations",
-          "type": "timeseries",
+          "type": "table",
+          "title": "Service Registrations (range)",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -784,54 +963,49 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
+          "description": "Service registrations counted over the selected range. Only services whose telemetry starts before their component report this today (framework issue C4). Counter-derived estimates can over- or under-count: Prometheus extrapolates between scrapes, and missing per-pod identity can conceal restarts. Not billing/audit totals.",
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "desc": true,
+                "displayName": "Registrations"
+              }
+            ]
+          },
           "targets": [
             {
-              "expr": "sum(rate(truvag3_discovery_registrations_total{job=\"otel-collector-metrics\"}[5m])) by (service_name)",
+              "expr": "sum by (service_name) ((increase(truvag3_discovery_registrations_count{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"}[$__range]) + (((min_over_time(truvag3_discovery_registrations_count{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"}[$__range]) unless truvag3_discovery_registrations_count{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"} offset $__range) unless (last_over_time(truvag3_discovery_registrations_count{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"}[1d] offset $__range) unless on() (count_over_time(up{job=\"otel-collector-metrics\"}[2m] offset $__range) > 0))) or increase(truvag3_discovery_registrations_count{job=\"otel-collector-metrics\", service_type=~\"${service_type:raw}\"}[$__range]) * 0)))",
+              "instant": true,
+              "range": false,
+              "format": "table",
               "refId": "A",
-              "legendFormat": "{{service_name}}",
               "datasource": {
                 "type": "prometheus",
                 "uid": "${datasource}"
               }
             }
           ],
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "linear",
-                "fillOpacity": 10,
-                "stacking": {
-                  "mode": "none"
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true
                 },
-                "lineWidth": 1,
-                "pointSize": 5,
-                "showPoints": "auto",
-                "spanNulls": false
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
+                "renameByName": {
+                  "service_name": "Service",
+                  "Value": "Registrations"
+                }
               }
-            },
-            "overrides": []
-          },
-          "options": {
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            },
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": []
             }
-          }
+          ]
         }
       ]
     },
@@ -863,9 +1037,11 @@
           },
           "targets": [
             {
-              "expr": "topk(15, sum(rate(container_cpu_usage_seconds_total{namespace=\"truvag3-examples\", container!=\"\", container!=\"POD\"}[5m])) by (pod))",
-              "refId": "A",
+              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=~\"truvag3-examples|software-maintenance\", container!=\"\", container!=\"POD\"}[5m])) and on (pod) topk(15, sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=~\"truvag3-examples|software-maintenance\", container!=\"\", container!=\"POD\"}[$__range] @ end())))",
+              "instant": false,
+              "range": true,
               "legendFormat": "{{pod}}",
+              "refId": "A",
               "datasource": {
                 "type": "prometheus",
                 "uid": "${datasource}"
@@ -927,9 +1103,11 @@
           },
           "targets": [
             {
-              "expr": "topk(15, sum(container_memory_working_set_bytes{namespace=\"truvag3-examples\", container!=\"\", container!=\"POD\"}) by (pod) / 1024 / 1024)",
-              "refId": "A",
+              "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=~\"truvag3-examples|software-maintenance\", container!=\"\", container!=\"POD\"}) and on (pod) topk(15, sum by (pod) (avg_over_time(container_memory_working_set_bytes{namespace=~\"truvag3-examples|software-maintenance\", container!=\"\", container!=\"POD\"}[$__range] @ end())))",
+              "instant": false,
+              "range": true,
               "legendFormat": "{{pod}}",
+              "refId": "A",
               "datasource": {
                 "type": "prometheus",
                 "uid": "${datasource}"
@@ -938,7 +1116,7 @@
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": "decmbytes",
+              "unit": "bytes",
               "custom": {
                 "drawStyle": "line",
                 "lineInterpolation": "linear",
