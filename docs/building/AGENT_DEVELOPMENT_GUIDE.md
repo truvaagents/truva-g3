@@ -412,7 +412,7 @@ The code above uses `ai.NewChainClient()` for multi-provider failover. Key conce
 - **Provider aliases**: One-line identifiers (`"openai"`, `"anthropic"`, `"openai.groq"`, `"openai.ollama"`) that auto-resolve base URL + API key env var
 - **Model aliases**: Portable names (`"default"`, `"fast"`, `"smart"`, `"premium"`, `"code"`, `"vision"`) that resolve per provider. Override a mapping at runtime when needed: `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-luna`
 - **Explicit vs auto-detect chain**: Use `ai.WithProviderChain("openai", "anthropic")` for deterministic order, or omit for auto-detection from available API keys
-- **Reasoning-capable models**: May need extended timeouts. The OpenAI-compatible request path reserves reasoning-token capacity with a configurable multiplier (default 5x); follow the provider's current model guidance rather than coupling application code to a model family name
+- **Reasoning-capable models**: Reasoning and visible output share the completion cap. Scaling profiles offer a configurable multiplier (default 3x), not a reserved reasoning allowance; follow provider guidance and measure truncation rather than coupling application code to a model family name
 
 > **Reference:** [AI_PROVIDERS_SETUP_GUIDE.md](AI_PROVIDERS_SETUP_GUIDE.md) for provider/model alias tables, failover behavior, K8s secrets/ConfigMaps, and operational scenarios.
 
@@ -1924,7 +1924,7 @@ Streaming chat agents that serve a frontend (e.g., `chat-ui`) require additional
 | `PORT` | Yes | — | HTTP server port ([port allocation](https://github.com/truvaagents/truva-g3/blob/main/examples/README.md)) |
 | AI provider key(s) | Yes (at least one) | — | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, etc. |
 | `TRUVAG3_CORS_HEADERS` | **Yes** (chat agents) | `Content-Type,Authorization` | Must include `X-User-ID` for chat-ui: `Content-Type,Authorization,X-User-ID,X-Requested-With` |
-| `TRUVAG3_SYNTHESIS_MAX_TOKENS` | Recommended | `5000` | Max output tokens for LLM synthesis. Chat agents typically need `10000` for detailed responses |
+| `TRUVAG3_SYNTHESIS_MAX_TOKENS` | Recommended | `30000` | Max output tokens for LLM synthesis. Reasoning and visible text share this cap |
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Recommended | `false` | Stores orchestration DAGs in the versioned DB 0 execution-debug subspace for [Registry Viewer](https://github.com/truvaagents/truva-g3/tree/main/examples/registry-viewer-app) inspection |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Recommended | `false` | Stores LLM request/response payloads for debugging |
 | `DEV_MODE` | No | `false` | Enables verbose logging |
@@ -1936,7 +1936,7 @@ Streaming chat agents that serve a frontend (e.g., `chat-ui`) require additional
 
 **Common mistakes:**
 - Missing `TRUVAG3_CORS_HEADERS` — the chat-ui frontend sends `X-User-ID` via a custom header; without this setting, CORS blocks the request silently
-- Low `TRUVAG3_SYNTHESIS_MAX_TOKENS` — the default of 5000 tokens is fine for simple tools but chat agents with multi-step orchestration often need 10000+ for complete responses
+- Low `TRUVAG3_SYNTHESIS_MAX_TOKENS` — the default is 30000 shared output tokens; explicit smaller budgets can truncate complex responses
 - Missing `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` — without this, the Registry Viewer's "Execution DAG" tab shows no data, making orchestration debugging harder
 
 ### Dockerfile.workspace, k8-deployment.yaml, setup.sh
@@ -2458,7 +2458,7 @@ func main() {
 | `OPENAI_API_KEY` | One AI key required | OpenAI API key |
 | `ANTHROPIC_API_KEY` | One AI key required | Anthropic API key |
 | `TRUVAG3_CORS_HEADERS` | Streaming agents | Allowed CORS headers (include `X-User-ID` for chat-ui) |
-| `TRUVAG3_SYNTHESIS_MAX_TOKENS` | No | Max tokens for synthesis (default: 5000, chat agents: 10000) |
+| `TRUVAG3_SYNTHESIS_MAX_TOKENS` | No | Max tokens for synthesis (default: 30000; reasoning and final output share the cap) |
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | No | Store orchestration DAGs in the versioned DB 0 execution-debug subspace for Registry Viewer |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | No | Store LLM request/response payloads for debugging |
 | `DEV_MODE` | No | Enable verbose logging |
@@ -2466,7 +2466,7 @@ func main() {
 | `TRUVAG3_DEBUG` | No | Enable debug mode (sets level to `debug`) |
 | `APP_ENV` | No | `development`, `staging`, `production` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OpenTelemetry collector endpoint |
-| `TRUVAG3_PLAN_MAX_TOKENS` | No | Max tokens for planning (default: 15000) |
+| `TRUVAG3_PLAN_MAX_TOKENS` | No | Max tokens for planning (default: 20000) |
 | `TRUVAG3_{PROVIDER}_MODEL_{ALIAS}` | No | Override model alias (e.g., `TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol`) |
 | `TRUVAG3_SKILLS_ENABLED` | No | Enable skill processing; the effective binding list must also be nonempty |
 | `TRUVAG3_SKILL_BINDINGS_JSON` | No | Replace the complete code-owned skill binding list with deployment configuration |

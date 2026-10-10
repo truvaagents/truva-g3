@@ -2607,6 +2607,13 @@ finish text. Separately, orchestration's native synthesis span can emit exact
 `synthesis.finish_reason`. These values do not belong in baggage or metric labels.
 Truncation evidence does not itself declare application failure.
 
+An interrupted native synthesis span is marked failed with a bounded
+partial-stream exception and `synthesis.partial=true`.
+`synthesis.interruption_reason` is `interrupted`, `cancelled` or
+`deadline_exceeded`, classified from the returned error, not a guessed provider
+finish reason. The exact cause is retained in the failed synthesis debug
+interaction and response errors; it is not copied into this span exception.
+
 When orchestration defers the generic AI recorder, its typed debug interaction
 is authoritative: it copies these completion facts from that exact call's
 response, including an available partial response on error. This does not emit
@@ -2627,6 +2634,13 @@ When properly configured, the AI module emits these spans:
 | `ai.request.prepared` (event) | Single metadata-only evidence event for the effective orchestration request, including the no-report/provider-failure path | `request_id` first, purpose, requested/resolved model, report presence, adjustment count, policy stability, optional provider/surface/operation, and stable policy fingerprint. Prompt/system bodies, provider patches, credentials, and adjustment details are excluded |
 | `ai.request.rejected` (event) | AI dispatch rejected before a provider call | `request_id` first, purpose, and bounded rejection reason such as `prompt_assembly`; prompt bodies and raw error text are excluded |
 | `ai.http_attempt` | Each wire attempt; decode-aware adapters include response consumption | `ai.attempt`, `ai.max_retries`, `ai.is_retry`, `ai.attempt_status`, `ai.attempt_duration_ms`, real `http.status_code`; decode-aware failures add `ai.semantic_status_code`, `ai.retryable`, `ai.error_type`. Available usage is `ai.attempt_usage_available` and `ai.attempt_{prompt,completion,total}_tokens`, not additional logical token counters |
+
+For decoded attempts, `ai.attempt_duration_ms` includes response consumption and
+body closure. On success it matches the successful attempt's `duration_ms` in
+the `ai_http_success` Debug log or `ai_request_recovery` Info log; it does not
+include earlier attempts or backoff waits. Transport-only attempts measure
+through response headers. Failure/partial-stream attempts emit no success log.
+These logs do not add spans or logical request/token counters.
 
 Every operation span that returns an error is marked failed, including both an
 outer embedding span and its invocation child when the invocation fails. This
@@ -2841,6 +2855,27 @@ Distributed tracing transforms debugging from guesswork into science. Here's wha
 Happy tracing!
 
 ### Terminal evidence correlation and summary deadline outcomes
+
+The existing `memory.event_summarization.outcome` event also includes
+`summaries_shortened` and `summary_max_bytes`. These count bounded derived prose,
+not lost steps or entity IDs. Raw model completions remain in debug records.
+The memory-summary coverage object carries `summaries_shortened` as well.
+Provider request reports record `wire-profile` / `reasoning-headroom-v1` scale
+adjustments. Bounding added headroom records `wire-profile` /
+`reasoning-headroom-ceiling-v1`, action `cap`; clamping an over-cap base in
+Compatible mode retains `built-in-rule` / `model-output-ceiling@1`. A valid base
+whose headroom is bounded is also accepted in Strict mode. Final post-policy
+capacity validation remains in force.
+Default-aware headroom uses `wire-profile` /
+`model-default-reasoning-headroom-v1` instead of the effort-based rule. This
+records a reviewed provider fact, not an inferred or transmitted effort setting.
+It also changes the policy fingerprint, including token-count-free preflight.
+`EffectiveMaxTokens` remains the actual post-policy wire budget. These changes
+add no raw prompt or response text to ordinary telemetry.
+Integral JSON-number budgets retain their original wire notation while the
+effective report records their integer value. Active reasoning multiplier
+changes also change `ai.request.policy_fingerprint`; this is expected cache
+invalidation, not a new trace/metric event or an additional model call.
 
 Existing terminal execution results now expose the owning segment's
 `execution_request_id` metadata on both returned and stored results. Application

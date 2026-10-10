@@ -179,7 +179,7 @@ auto-detection requires an explicitly configured loopback `OLLAMA_BASE_URL`
 whose `/models` endpoint responds; use an explicit alias for a remote Ollama
 endpoint.
 
-**The key insight**: Each provider in the chain resolves model aliases independently. When you pass `Model: "smart"`, OpenAI resolves it to `gpt-5.6-sol`, Anthropic resolves it to `claude-opus-5`, and Groq resolves it to `openai/gpt-oss-120b`. You don't need different code for different providers.
+**The key insight**: Each provider in the chain resolves model aliases independently. When you pass `Model: "smart"`, OpenAI resolves it to `gpt-5.6-sol`, Anthropic resolves it to `claude-opus-5-5`, and Groq resolves it to `openai/gpt-oss-120b`. You don't need different code for different providers.
 
 ### When to Use Which
 
@@ -476,7 +476,7 @@ No code changes needed. The proxy gets all Groq traffic for logging/monitoring.
 Every AI provider has different model names:
 
 - OpenAI: `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`; native GPT-6 Astra/Sol/Luna and GPT-6.1 Sol are also supported explicitly
-- Anthropic: `claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`
+- Anthropic: `claude-sonnet-5`, `claude-opus-5-5`, `claude-haiku-5-5`
 - Groq: `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`
 
 If you hardcode model names, switching providers means changing code everywhere. And when providers release new models? More code changes.
@@ -487,6 +487,14 @@ Other alias mappings are unchanged. See the
 [AI module's family compatibility and override guide](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#gpt-6-family-support)
 for effort/sampling restrictions, explicit model selection and verification
 scope. Native OpenAI and OpenRouter are separate capability routes.
+
+Anthropic's cost-focused refresh selects Haiku 5.5 for `fast` and Opus 5.5 for
+`smart`/`code`/`vision`, preserving Sonnet 5 for `default` and Fable 5 for
+`premium`. These new selections use adaptive thinking; budget and native-extra
+migration requirements are documented in the
+[Anthropic alias refresh](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#anthropic-october-2026-alias-refresh).
+Existing environment overrides still win; Vertex publisher mappings remain
+application-owned. This does not change OpenRouter or Bedrock model selection.
 
 The native OpenAI mapping is built in; the first assignment below is optional.
 OpenRouter still needs an explicit override to select Sol rather than its router:
@@ -529,11 +537,11 @@ client, _ := ai.NewClient(
 | Alias | Purpose | OpenAI | Anthropic | OpenRouter | Gemini | Groq | DeepSeek | Together |
 |-------|---------|--------|-----------|------------|--------|------|----------|----------|
 | `default` | General catalog choice | `gpt-6.1-sol` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` | `deepseek-ai/DeepSeek-V4-Flash-0731` |
-| `fast` | Latency-oriented catalog choice | `gpt-6-luna` | `claude-haiku-4-5` | `openai/gpt-6-luna` | `gemini-3.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` | `google/gemma-4-31B-it` |
-| `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-reasoner` | `moonshotai/Kimi-K3` |
+| `fast` | Latency-oriented catalog choice | `gpt-6-luna` | `claude-haiku-5-5` | `openai/gpt-6-luna` | `gemini-3.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` | `google/gemma-4-31B-it` |
+| `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-reasoner` | `moonshotai/Kimi-K3` |
 | `premium` | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | _(N/A)_ | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ |
-| `code` | Code-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-chat` | `moonshotai/Kimi-K3` |
-| `vision` | Image-capable catalog choice | `gpt-4.1` | `claude-opus-5` | _(N/A)_ | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | _(N/A)_ |
+| `code` | Code-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-chat` | `moonshotai/Kimi-K3` |
+| `vision` | Image-capable catalog choice | `gpt-4.1` | `claude-opus-5-5` | _(N/A)_ | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | _(N/A)_ |
 
 > **Note**: The `premium` alias is available for OpenAI, Anthropic, and Gemini.
 > Other built-in catalogs use `smart` for their reasoning-oriented choice.
@@ -586,7 +594,7 @@ Here's where it gets powerful. You can override any alias at runtime without cha
 export TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-terra
 
 # Override Anthropic's "fast" alias
-export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5
+export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-5-5
 
 # For OpenAI-compatible providers, strip the "openai." prefix
 export TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.1-8b-instant
@@ -883,7 +891,7 @@ GROQ_API_KEY=gsk-staging-key
 
 # But use mid-tier models to save costs
 TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-terra
-TRUVAG3_ANTHROPIC_MODEL_SMART=claude-haiku-4-5
+TRUVAG3_ANTHROPIC_MODEL_SMART=claude-haiku-5-5
 ```
 
 **Code**:
@@ -920,7 +928,7 @@ GROQ_API_KEY=gsk-prod-key
 
 # Use the models approved for this production workload
 TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol
-TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5
+TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5-5
 TRUVAG3_GROQ_MODEL_SMART=openai/gpt-oss-120b
 ```
 
@@ -1112,7 +1120,7 @@ metadata:
   namespace: development
 data:
   TRUVAG3_OPENAI_MODEL_SMART: "gpt-5.6-terra"
-  TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-haiku-4-5"
+  TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-haiku-5-5"
   TRUVAG3_OPENROUTER_MODEL_DEFAULT: "google/gemini-2.5-flash"
   TRUVAG3_OPENROUTER_MODEL_SMART: "google/gemini-2.5-flash"
   TRUVAG3_GROQ_MODEL_DEFAULT: "llama-3.1-8b-instant"
@@ -1126,7 +1134,7 @@ metadata:
   namespace: production
 data:
   TRUVAG3_OPENAI_MODEL_SMART: "gpt-5.6-sol"
-  TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-opus-5"
+  TRUVAG3_ANTHROPIC_MODEL_SMART: "claude-opus-5-5"
   TRUVAG3_OPENROUTER_MODEL_DEFAULT: "moonshotai/kimi-k3"
   TRUVAG3_OPENROUTER_MODEL_SMART: "moonshotai/kimi-k3"
   TRUVAG3_GROQ_MODEL_DEFAULT: "openai/gpt-oss-120b"
@@ -1682,7 +1690,7 @@ Current Claude compatibility is provider-owned and shared by sync and stream:
 passes `n+1` total attempts to each AWS SDK operation. Explicitly selected
 standalone Bedrock clients and direct `bedrock.NewClient` values default to 60
 minutes. Auto-detected clients and framework-managed chain entries default to
-180 seconds. Positive `WithTimeout` and `WithChainTimeout` values override
+300 seconds. Positive `WithTimeout` and `WithChainTimeout` values override
 those defaults; zero and negative values mean unset rather than unbounded.
 
 `GetEmbeddings` now defaults to 1024-dimensional Titan V2. An application with
@@ -1743,20 +1751,30 @@ gets the same sync/stream behavior.
 ### Request Timeouts
 
 Most clients constructed through TruvaG3's built-in provider factories default
-to a **180-second (3 minute) timeout**. An explicitly selected standalone
+to a **300-second (5 minute) timeout**. An explicitly selected standalone
 SDK-native Bedrock provider declares a **60-minute default** for long-running
 inference; direct `bedrock.NewClient` does the same. Auto-detected clients and
-framework-managed failover entries keep 180 seconds so one provider cannot
-block selection or failover for an hour. An explicit `WithTimeout` wins.
+framework-managed failover entries keep 300 seconds so one provider cannot
+block selection or failover for an hour. Positive `WithTimeout`/`WithChainTimeout`
+wins over `TRUVAG3_AI_TIMEOUT`, then the applicable default. The environment
+value must be a positive Go duration; invalid present values fail construction.
 Application-defined clients and injected chain entries retain their own timeout
 behavior.
+
+The environment is read by root AI constructors and managed chain entries, not
+direct provider constructors/factory calls or `core.Config.LoadFromEnv`. This
+is a total call deadline including retries/streaming, not an idle timeout.
+Earlier caller/phase/auxiliary-stage or injected HTTP-client deadlines still win.
+Output budgets are ceilings, not latency guarantees; set a longer bounded
+timeout explicitly when measurements justify it. Deadline errors do not cause
+automatic chain failover, even when the parent context is still live.
 
 #### Single Client Timeout
 
 ```go
 import "time"
 
-// Auto-detection defaults to 180s, even if it selects Bedrock.
+// Auto-detection defaults to 300s, even if it selects Bedrock.
 client, err := ai.NewClient()
 
 // Explicit standalone Bedrock defaults to 60m.
@@ -1785,7 +1803,7 @@ chainClient, err := ai.NewChainClient(
 )
 ```
 
-Without `WithChainTimeout`, every framework-managed chain entry uses 180
+Without `WithChainTimeout`, every framework-managed chain entry uses 300
 seconds, including Bedrock. `ProviderEntry` follows the same rule. A
 caller-owned `ClientEntry` is never mutated.
 
@@ -1806,7 +1824,7 @@ ignored; disable single-client retries explicitly with `WithMaxRetries(0)`.
 |----------|---------------------|
 | Simple queries with standard models (GPT-4, Claude) | 60s |
 | Complex prompts with standard models | 120s |
-| Reasoning models (GPT-5, GPT-6, o1, o3, o4) | 180s (default) |
+| Reasoning models (GPT-5, GPT-6, o1, o3, o4) | 300s (default) |
 | Orchestration/plan generation | 240-300s |
 | Very complex multi-step reasoning | 300s+ |
 
@@ -1851,7 +1869,10 @@ translation:
 The adapter selects the wire profile and validates supported controls. On a
 scaling profile, the token multiplier reserves additional budget when the
 effective effort is nonempty and not `none`, including an inherited client/chain
-effort. Empty effective effort and `none` do not multiply it. This is a budget
+effort. Reviewed exact native GPT-6 Astra/Sol/Luna/GPT-6.1 Sol and routed
+Luna/Sol also receive headroom with absent effort because their defaults reason;
+the adapter does not inject effort. Unknown defaults, explicit omission, `none`
+and native-extra-only reasoning do not multiply it. This is a budget
 allocation, not a guarantee of visible answer length or provider acceptance.
 
 The shared `openaiwire.IsReasoningModel` helper now recognizes names exactly at
@@ -1865,33 +1886,22 @@ surface contract. Changing only the route's deployment name does not necessarily
 the semantic model classification. This recognition does not certify that a
 deployment exists or supports a particular effort.
 
-#### The Token Multiplier Problem
+#### Reasoning Shares the Output Budget
 
-```
-Without multiplier (2000 tokens requested):
-┌────────────────────────────────────┐
-│  Internal Reasoning (invisible)    │  ← Uses ~1800 tokens
-├────────────────────────────────────┤
-│  Visible Output (truncated!)       │  ← Only ~200 tokens remain
-└────────────────────────────────────┘
-Result: Empty or truncated responses
-
-With 5x multiplier (10000 tokens allocated):
-┌────────────────────────────────────┐
-│  Internal Reasoning (invisible)    │  ← Uses ~4000 tokens
-├────────────────────────────────────┤
-│  Visible Output (complete!)        │  ← ~6000 tokens for response
-└────────────────────────────────────┘
-Result: Full, complete responses
-```
+Reasoning and visible text consume the same completion allowance. For example,
+if reasoning consumes 25000 tokens from a 30000-token cap, at most 5000 remain
+for the answer. Neither portion is reserved; even a larger cap can be exhausted
+before visible output. The default multiplier is **3×** on scaling profiles;
+explicit **1×** keeps the configured budget exact. A multiplier adds headroom only
+on scaling profiles; it does not guarantee a complete response.
 
 #### Configuring Token Multiplier
 
 ```go
-// Default 5x multiplier (recommended for most use cases)
+// Default 3x multiplier on supported active-reasoning profiles
 client, err := ai.NewClient()
 
-// Lower multiplier for cost optimization (simpler prompts)
+// Explicit opt-in to additional headroom on scaling profiles
 client, err := ai.NewClient(
     ai.WithReasoningTokenMultiplier(3),  // 3x multiplier
 )
@@ -1912,12 +1922,12 @@ chainClient, err := ai.NewChainClient(
 
 | Scenario | Recommended Multiplier |
 |----------|------------------------|
-| Simple Q&A with reasoning models | 3x |
-| Standard prompts | 5x (default) |
-| Complex analysis or planning | 6-8x |
-| Multi-step orchestration plans | 8x+ |
+| Predictable configured output cap | Explicit 1x |
+| General active-reasoning headroom | 3x (default) |
+| Preserve the previous implicit scaling | Explicit 5x; check the resulting model output limit |
+| Truncated reasoning-heavy responses | Raise the exact output cap first; evaluate effort, latency and cost |
 
-> **Note**: Multiplication applies only to scaling reasoning profiles (including native GPT-5, GPT-6, o1, o3 and o4) with effective nonempty effort other than `none`. Client/chain defaults count. Standard non-scaling profiles are unaffected; there is no per-model output ceiling clamp. Choose a total budget accepted by the model.
+> **Note**: Scaling profiles apply the multiplier for active effort (including client/chain defaults) or the reviewed native/routed defaults listed above. Unknown defaults, explicit omission, `none`, native-extra-only controls and non-scaling profiles stay exact. Reviewed exact native GPT-5.6 Sol/GPT-6 Astra/Sol/Luna/GPT-6.1 Sol and routed GPT-5.6 Luna/GPT-6 Luna/GPT-6.1 Sol have a 128000 output capacity. The GPT-5.6 entries add capacity only. Headroom for a valid base is bounded in both modes (50000 × 3 → 128000); only over-cap base budgets require a built-in clamp in Compatible mode or application acknowledgement in Strict mode. Final capacity checks still cover patches. Other model/route limits remain the application's responsibility; metadata support is separate work. Configure the multiplier in code or with `TRUVAG3_AI_REASONING_TOKEN_MULTIPLIER`; invalid explicit settings fail construction.
 
 ### Orchestration Model Overrides
 
@@ -1946,7 +1956,8 @@ and **stops immediately** — it does not try the next provider. This silently
 breaks failover.
 
 Portable aliases work because each provider resolves them independently:
-- `"fast"` → Anthropic resolves to Haiku 4.5, OpenAI resolves to GPT-5.6 Luna
+
+- `"fast"` → Anthropic resolves to Haiku 5.5, OpenAI resolves to GPT-6 Luna
 - Failover works correctly since each provider gets a model it recognizes
 
 **Example** — route each orchestration phase to an appropriate model tier:
@@ -1959,9 +1970,9 @@ TRUVAG3_MICRO_RESOLUTION_MODEL=fast
 TRUVAG3_RESULT_DISTILL_MODEL=fast
 
 # Optionally control which concrete model each alias maps to per-provider
-TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5
+TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5-5
 TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol
-TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5
+TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-5-5
 TRUVAG3_OPENAI_MODEL_FAST=gpt-5.6-luna
 ```
 
@@ -2039,7 +2050,7 @@ OLLAMA_BASE_URL=http://...
 ```bash
 # Pattern: TRUVAG3_{PROVIDER}_MODEL_{ALIAS}
 TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1
-TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5
+TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-5-5
 TRUVAG3_GROQ_MODEL_DEFAULT=openai/gpt-oss-120b
 TRUVAG3_OLLAMA_MODEL_DEFAULT=llama3.2
 # For openai.deepseek, strip prefix → TRUVAG3_DEEPSEEK_MODEL_*

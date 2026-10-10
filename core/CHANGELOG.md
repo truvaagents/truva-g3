@@ -2,6 +2,10 @@
 
 ## Unreleased — shared memory contracts and configuration
 
+- Default HTTP write timeout is now 35 minutes; default AI configuration timeout
+  is 5 minutes. The latter's env tag remains reserved/unloaded. Task workers retain
+  their existing 30-minute default; explicit application settings remain authoritative.
+
 Adoption: start typed configuration from `DefaultConfig()` and check constructor
 errors. `Config.Validate` rejects zero values for positive memory/activity fields;
 an unresolved zero-value struct does not receive defaults through validation.

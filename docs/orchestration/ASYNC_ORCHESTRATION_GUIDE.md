@@ -1585,8 +1585,8 @@ Set these environment variables to enable advanced observability:
 |----------|-------------|---------|
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Enable execution storage for DAG visualization | `false` |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Enable LLM debug payload capture | `false` |
-| `TRUVAG3_LLM_DEBUG_TTL` | Base retention for successful LLM records | `24h` |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Base retention for error records | `168h` (7 days) |
+| `TRUVAG3_LLM_DEBUG_TTL` | Base retention for successful LLM records | `72h` (3 days) |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Base retention for error records | `72h` (3 days) |
 
 **What Gets Recorded:**
 
@@ -1750,8 +1750,8 @@ See [examples/k8-deployment/grafana.yaml](https://github.com/truvaagents/truva-g
 | `GROQ_API_KEY` | Groq API key (alternative provider) | - | `gsk-...` |
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | Enable execution storage for DAG visualization | `false` | `true` |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | Enable LLM debug payload capture | `false` | `true` |
-| `TRUVAG3_LLM_DEBUG_TTL` | Base retention for successful LLM records | `24h` | `48h` |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Base retention for error records | `168h` | `336h` |
+| `TRUVAG3_LLM_DEBUG_TTL` | Base retention for successful LLM records | `72h` | `48h` |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | Base retention for error records | `72h` | `336h` |
 
 > 📖 **AI Provider Configuration**: For comprehensive information on configuring AI providers, model aliases, provider chains with failover, and environment variable overrides for models, see the [AI Providers Setup Guide](../building/AI_PROVIDERS_SETUP_GUIDE.md). It covers:
 > - All supported providers (OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Gemini, Ollama, etc.)

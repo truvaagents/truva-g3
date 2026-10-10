@@ -1416,22 +1416,22 @@ retain their completed classification in Registry Viewer.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `600s` | HTTP client timeout for tool/agent calls. Uses Go duration format. |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `20m` | HTTP client timeout for tool/agent calls. Uses Go duration format. |
 | `TRUVAG3_OAUTH_TOKEN` | (empty) | Bearer token for service-to-service authentication. Per-request tokens via `WithOAuthToken(ctx, token)` take priority. When set, all outbound HTTP calls include `Authorization: Bearer <token>`. |
 | *(no env var)* | N/A | Custom header propagation via `config.PropagatedHeaders` (config-level) or `WithPropagatedHeaders(ctx, headers)` (per-request). Context headers override config headers on key conflict. Reserved headers (`Authorization`, `Content-Type`, `X-TruvaG3-*`) are protected. |
 | `TRUVAG3_TIERED_RESOLUTION_ENABLED` | `true` | Enable tiered capability resolution for LLM token optimization. Automatically selects relevant tools before plan generation. |
 | `TRUVAG3_TIERED_MIN_TOOLS` | `20` | Minimum tool count to trigger tiered resolution. Below this threshold, all tools are sent directly. |
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable LLM debug payload capture for production debugging |
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful debug records; longer lineage floors are preserved |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error debug records; HITL or investigation retention may extend it |
+| `TRUVAG3_LLM_DEBUG_TTL` | `72h` | Base TTL for successful debug records; longer lineage floors are preserved |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `72h` | Base TTL for error debug records; HITL or investigation retention may extend it |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | Maximum records returned by `ListByConversationID` |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | Maximum conversation-index members inspected by one lookup, including stale entries |
 | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | Per-write timeout for ordered execution-debug persistence |
 | `TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` | `30s` | Lease for an atomic expired-checkpoint claim across replicas |
 | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | `true` | Enable multi-phase iterative planning. When enabled, the LLM planner can generate partial plans that execute in phases. Uses a tiered approach: Phase 1 discovers, Phase 2+ acts on results with context-aware tool re-selection. |
-| `TRUVAG3_ITERATIVE_MAX_PHASES` | `5` | Maximum planning phases per request. Most queries need at most 2. |
+| `TRUVAG3_ITERATIVE_MAX_PHASES` | `20` | Maximum planning phases per request. Most queries need at most 2. |
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | Maximum total steps across all phases. Prevents runaway plan generation. |
-| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | Maximum duration for a single phase (plan generation + execution). Prevents a single continuation phase from hanging. |
+| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `25m` | Maximum duration for a single phase (plan generation + execution). Prevents a single continuation phase from hanging. |
 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | Maximum regenerations after the first validation failure. Malformed replacements consume a round; provider/boundary failures and persistent step-ID conflicts can stop earlier. |
 | `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | Maximum encoded correction context added to one phase's selected prompt. Effective value must be > 0 when validated. Earlier rejected output is summarized or omitted with a marker if needed. |
 | `TRUVAG3_STEP_RETRY_INITIAL_DELAY` | `500ms` | Initial backoff delay for step retries. Go duration format. Exponential backoff doubles this per attempt. |
@@ -1682,7 +1682,7 @@ export TRUVAG3_CAPABILITY_THRESHOLD="0.75"
 The service provider includes built-in resilience:
 
 1. **Circuit Breaker** (if injected) - Prevents cascading failures
-2. **Retry Logic** (built-in) - 3 retries with exponential backoff
+2. **Retry Logic** (built-in) - Capability-service fetches allow 3 retries after the initial call, with waits of 2s, 4s and 6s. This is separate from the executor's step-attempt budget.
 3. **Fallback Provider** (configurable) - Falls back to default provider
 
 ### When to Use Each Provider
@@ -1807,6 +1807,13 @@ func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 ### StreamingOrchestratorResponse
 
 The response includes both standard orchestration fields and streaming-specific metadata:
+
+Native partial-stream delivery preserves received text and available usage but
+does not retry or count as success. `PartialContent=true` and
+`StreamCompleted=false` accompany the original error in `Errors`. Its delivery
+`FinishReason` distinguishes `cancelled`, `deadline_exceeded` and `interrupted`
+using the returned error chain. Provider finish evidence remains unchanged in
+the failed synthesis debug record.
 
 ```go
 type StreamingOrchestratorResponse struct {
@@ -2272,9 +2279,9 @@ The orchestration module captures complete LLM request/response payloads for pro
 # Enable debug capture (disabled by default)
 export TRUVAG3_LLM_DEBUG_ENABLED=true
 
-# TTL for records (default: 24h success, 168h errors)
-export TRUVAG3_LLM_DEBUG_TTL=24h
-export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h
+# TTL for records (default: 72h for both success and errors)
+export TRUVAG3_LLM_DEBUG_TTL=72h
+export TRUVAG3_LLM_DEBUG_ERROR_TTL=72h
 
 # Optional deployment namespace shared by the debug writer and viewer
 export TRUVAG3_REDIS_NAMESPACE=production
@@ -2381,8 +2388,8 @@ Step Results → ResultProcessor.ProcessForPrompt() → Trimmed Results → Synt
 
 ```bash
 export TRUVAG3_RESULT_TRIM_ENABLED=true                    # Enable/disable (default: true)
-export TRUVAG3_RESULT_TRIM_MAX_BYTES=16384                 # Per-result max (default: 16KB)
-export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=32768           # Total synthesis prompt max (default: 32KB)
+export TRUVAG3_RESULT_TRIM_MAX_BYTES=65536                 # Per-result max (default: 64 KiB)
+export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=196608          # Total synthesis results (default: 192 KiB)
 export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=65536           # Micro-resolution source data max (default: 64KB)
 export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=0         # Agent HTTP parameter max (default: 0 = no cap, fidelity-first)
 export TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD=16384  # Schema-mapping threshold (default: 16KB; 0 disables)

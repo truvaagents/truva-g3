@@ -1743,7 +1743,7 @@ inspecting provider error strings.
 An explicitly selected standalone Bedrock provider declares a 60-minute
 default request timeout, and direct `bedrock.NewClient` construction uses the
 same value. Auto-detected clients and framework-managed chain entries retain
-the failover-safe 180-second framework default; use `ai.WithChainTimeout` to
+the failover-safe 300-second framework default; use `ai.WithChainTimeout` to
 override managed chain entries. Caller-owned `ClientEntry` values are not
 mutated. An explicit positive `ai.WithTimeout` wins; zero and negative values
 mean unset rather than unbounded. Context cancellation also stops AWS SDK
@@ -2175,7 +2175,7 @@ also implement the optional validated and request-aware contracts:
 | `ProviderFactory` | Registration, environment detection, and legacy client construction |
 | `ValidatedProviderFactory` | Error-capable legacy construction |
 | `RequestProviderFactory` | Request-aware construction with an isolated integration snapshot |
-| `ProviderRequestTimeoutFactory` | Optional positive request-timeout default when 180 seconds is not appropriate |
+| `ProviderRequestTimeoutFactory` | Optional positive request-timeout default when 300 seconds is not appropriate |
 
 ```go
 type Factory struct{}
@@ -2253,7 +2253,7 @@ integration snapshot. Treat `AIConfig.Headers`, `AIConfig.Extra`, request
 rules, and provider requests as caller-owned. Clone them before applying
 defaults or mutating nested values.
 
-Most providers should keep the framework's 180-second request timeout. If the
+Most providers should keep the framework's 300-second request timeout. If the
 official operation contract needs different default headroom, the factory may
 also implement:
 
@@ -2267,7 +2267,7 @@ The root constructor uses this positive value only for an explicitly selected
 standalone provider when the application did not supply a positive
 `ai.WithTimeout`. Bedrock uses the optional contract for its 60-minute
 standalone default. Auto-detected clients and framework-managed chains retain
-180 seconds; caller-owned chain clients remain untouched. Zero and negative
+300 seconds; caller-owned chain clients remain untouched. Zero and negative
 application durations are unset and do not request an unbounded call. Do not
 branch on provider names in root construction.
 
@@ -2391,6 +2391,7 @@ codec, err := openaiwire.NewProfiledCodec(openaiwire.Config{
     SurfaceVersion:           "acme-chat-completions-v1",
     MaxSSEEventBytes:          config.SSEEventMaxBytes,
     ReasoningContentFallback: config.ReasoningContentFallback,
+    ReasoningTokenMultiplier: config.ReasoningTokenMultiplier,
 })
 if err != nil {
     return nil, fmt.Errorf("create Acme wire codec: %w", err)
@@ -2411,6 +2412,15 @@ The surface version is an adapter-contract version, not a release version.
 Change it when the same logical request could produce a meaningfully different
 wire request after an adapter change.
 
+When a provider needs built-in rules derived from a call-local capability
+snapshot, use `policy.WithBuiltInRules(additionalRules...)` and check its error.
+It returns a separate immutable engine, cloning and validating the additional
+rules while preserving application policy, middleware and compatibility mode.
+Apply that derived engine only to the current draft; the shared engine remains
+unchanged and safe for concurrent calls. Matching rules use the existing
+adjustment report and fingerprint. This is a provider-owned compatibility seam,
+not a replacement for application request rules.
+
 `MaxSSEEventBytes` is an operational memory/safety ceiling for one complete
 server-sent event. Pass the resolved `AIConfig.SSEEventMaxBytes`; a
 non-positive codec value uses the shared 1 MiB default. Do not implement
@@ -2420,6 +2430,30 @@ Forward `AIConfig.ReasoningContentFallback` as well so the public client option
 reaches this adapter. Its default is false; opting in restores reasoning-as-answer
 substitution while keeping the separate channel and provenance. The codec
 includes this behavior in its fingerprint even with a custom surface version.
+
+Also forward the resolved `AIConfig.ReasoningTokenMultiplier`. For a profile
+using `TokenBudgetScaleForReasoning`, active reasoning uses this allowance;
+explicit 1 preserves the base cap. The codec fingerprints the multiplier when
+reasoning is active, including preflight requests without a token count. This
+keeps cached results distinct when effective headroom changes. Profiles that
+preserve the token budget, or calls with omitted/`none` effective effort, do not
+apply the allowance. Absent effort scales only when the adapter supplies the
+reviewed `ReasoningActiveByDefault` fact. Supply `ReasoningHeadroomLimit` to bound
+only framework-added headroom before compatibility rules run, so Strict mode
+does not reject a valid base budget merely because its expansion exceeded capacity.
+Zero means unknown; negative limits fail validation. The limit participates in
+active-scaling fingerprints and a named wire-profile cap adjustment. It does
+not clamp an over-cap base or validate post-policy values: final model-capacity
+policy remains the adapter's responsibility. Neither fact performs model lookup
+or network I/O inside the codec.
+
+Token-limit validation accepts positive, Go-`int`-representable numeric values,
+including integral JSON decimal/exponent notation supplied by policy. The
+effective report records the numeric limit without rewriting the caller's wire
+literal. Checked draft construction rejects multiplication overflow unless a
+reviewed limit safely bounds added headroom; the legacy
+`BuildRequestBody` helper instead saturates at `math.MaxInt` because its
+signature cannot return an error. Prefer the checked draft API for new adapters.
 
 Then use one preparation function for sync, stream, and fingerprint preflight:
 
@@ -2525,9 +2559,12 @@ func (client *Client) requestProfile(model string, route resolvedRoute) (openaiw
 
 `TokenBudgetExact` sends the portable maximum unchanged. Use
 `TokenBudgetScaleForReasoning` only for a verified reasoning-model contract
-where an explicit, active reasoning effort reserves hidden-reasoning tokens;
-that policy requires `TokenLimitMaxCompletionTokens`. Empty effort and
-`"none"` never scale. The selected policy is part of the stable request
+where active reasoning shares the completion budget;
+that policy requires `TokenLimitMaxCompletionTokens`. Set
+`ReasoningActiveByDefault: true` only for a reviewed upstream default. It
+enables headroom with absent effort without emitting effort or changing sampling.
+The zero value preserves effort-only scaling. Explicit omission, `"none"` and
+native-extra-only reasoning remain exact. The selected policy is part of the stable request
 fingerprint, and the request report records the final wire token value.
 
 Do not infer that a model is a reasoning family merely because a capability

@@ -1308,6 +1308,14 @@ and a separate `batch_excluded` count. Record hook effects use independent
 `backend_assigns_event_id`/`backend_assigns_timestamp` flags; the former combined
 diagnostic field is no longer emitted (historical records stay unchanged).
 
+`WithSummarizerSummaryMaxBytes(n)` limits each stored derived summary to 1024
+UTF-8 bytes by default (minimum 32). The builder reads
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_SUMMARY_MAX_BYTES`; invalid explicit
+settings fail construction even without AI. Overlong prose gets a rune-safe
+` [shortened]` suffix within the limit, with `summaries_shortened` in coverage,
+logs and traces. Structured entities and raw LLM debug output are unchanged.
+This is separate from the 10000-token batch generation allowance.
+
 `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_RESPONSE_BYTES` sets the positive
 per-step encoded failure/response payload allowance (default 4000 bytes).
 Direct callers use `WithSummarizerMaxResponseChars` (legacy name, byte units).
@@ -2206,6 +2214,9 @@ type Config struct {
 type Engine struct { /* unexported fields */ }
 
 func NewEngine(config Config) (*Engine, error)
+func (engine *Engine) WithBuiltInRules(
+    patches ...core.AIProviderPatch,
+) (*Engine, error)
 func (engine *Engine) Apply(
     ctx context.Context,
     draft Draft,
@@ -2243,7 +2254,15 @@ func ClonePatches(
 ```
 
 `NewEngine` snapshots its configuration and returns an immutable,
-concurrency-safe engine. `NewDocument` adopts `Body`, so that map must already
+concurrency-safe engine. `WithBuiltInRules` derives a separate immutable engine
+with additional provider-owned rules, validating and cloning the supplied
+patches. It preserves application rules, middleware and Compatible/Strict
+precedence without mutating the original engine. A nil receiver or invalid patch
+returns an error. Providers can use it for a call-local capability snapshot;
+applications should use application rules instead. Matching built-ins contribute
+to the existing request report and policy fingerprint.
+
+`NewDocument` adopts `Body`, so that map must already
 be call-local; it snapshots the other configuration. `Body` exposes the
 document-owned map for provider validation and encoding, while `Headers`
 returns an isolated copy. `CloneJSONValue` and `ClonePatches` reject unsupported
@@ -2493,8 +2512,13 @@ The shared codec still validates before policy: an explicit sampling setting
 with active effort can fail before a removal rule runs. Use explicit temperature
 omission on the presence-aware API when appropriate. Native tool restrictions
 are not copied to this routed guard; OpenRouter owns its upstream translation.
-OpenRouter token budgets remain exact; native scaling profiles retain the
-configured reasoning multiplier. No automatic output-ceiling clamp is added.
+Supported OpenRouter portable effort now activates the configured reasoning
+multiplier, as native scaling profiles do. Reviewed exact native GPT-5.6 Sol,
+GPT-6 Astra/Sol/Luna/GPT-6.1 Sol and routed GPT-5.6 Luna/GPT-6 Luna/GPT-6.1 Sol
+have a 128000-token output ceiling. Added headroom for a valid base is bounded
+before policy; over-cap base budgets retain Compatible/Strict handling. The
+GPT-5.6 capacity entries add no default-reasoning inference. Unknown model/route
+capacity is not inferred.
 
 #### Provider factory extension contracts
 
@@ -2534,11 +2558,11 @@ type ProviderIntegrationConfig struct {
 `NewClient` prefers `CreateValidated`. `NewRequestClient` uses
 `CreateRequestClient` and passes an isolated integration snapshot. The reusable
 `ProviderRequestTimeoutFactory` is optional: without it, a provider receives
-the framework's 180-second default. When implemented, its positive duration is
+the framework's 300-second default. When implemented, its positive duration is
 used only for an explicitly selected standalone provider if the application
 did not supply a positive `WithTimeout`. Bedrock uses this contract to declare
 a 60-minute standalone default. Auto-detected clients and framework-managed
-chain entries retain 180 seconds; caller-owned `ClientEntry` values remain
+chain entries retain 300 seconds; caller-owned `ClientEntry` values remain
 untouched. The reusable
 `ai/providerkit/openaiwire` package supplies the OpenAI chat-completions draft,
 encode, decode, and stream-decode contract without owning credentials, routing,
@@ -2613,6 +2637,8 @@ type RequestProfile struct {
     TokenBudget     TokenBudgetPolicy
     ReasoningEffort ReasoningEffortStyle
     Sampling        SamplingPolicy
+    ReasoningActiveByDefault bool // reviewed provider fact; budget only, no wire effort
+    ReasoningHeadroomLimit int // reviewed capacity for added headroom; 0 unknown, negative invalid
 }
 
 type Config struct {
@@ -2625,7 +2651,7 @@ type Config struct {
 }
 
 const DefaultSurfaceVersion = "openai-chat-completions-v2"
-const DefaultReasoningTokenMultiplier = 5
+const DefaultReasoningTokenMultiplier = 3
 
 type ModelFieldMode uint8
 
@@ -2698,7 +2724,31 @@ route-owned wire identity. Use its exported mode constants rather than numeric
 values, and call `Validate` before relying on a profile constructed outside the
 codec. `BuildRequestBody` is a compatibility bridge for providers that adopted
 the earlier OpenAI reasoning helper; new provider integrations should use a
-`Codec`.
+`Codec`. The map-only helper saturates overflowing token multiplication at
+`math.MaxInt`; the error-returning draft API rejects it unless a reviewed limit
+safely bounds added headroom. Saturation is an
+integer-safety fallback, not a model-capacity guarantee.
+
+For scaling profiles, `ReasoningActiveByDefault` reserves headroom when effective
+effort is absent. The provider owns evidence for that fact; the codec does not
+infer model defaults. It does not change sampling or emit effort. Explicit
+reasoning omission, `none`, and native-extra-only `reasoning`/`reasoning_effort`
+controls suppress inference. The legacy `BuildRequestBody` helper has no such
+reviewed profile and retains effort-only scaling.
+
+`ReasoningHeadroomLimit` bounds only framework-added headroom for a base budget
+that fits the reviewed capacity. It does not clamp an over-cap base or validate
+application patches; the adapter must retain those capacity guards. Its zero
+value means unknown and negative values fail profile validation. On active scaling
+profiles, the limit participates in cache identity (including token-free preflight).
+Bounding records `wire-profile` / `reasoning-headroom-ceiling-v1`, action `cap`.
+This is a provider capability fact, not a new operator budget setting.
+
+OpenAI-wire token fields accept positive integral numeric values that fit a
+Go `int`, including `json.Number("1e3")` and `json.Number("1000.0")` supplied
+by request policy. Validation and `EffectiveMaxTokens` agree on the value;
+the encoded numeric representation remains unchanged. Strings, fractions,
+non-finite values and out-of-range integers fail before dispatch.
 
 `IsReasoningModel`, `BuildDraft` and `BuildRequestBody` recognize `gpt-6` and
 `gpt-6-*`, plus `gpt-6.1-sol` and its hyphen-suffixed variants/snapshots. Recognition is
@@ -3015,6 +3065,14 @@ use `TRUVAG3_OPENAI_MODEL_FAST` and `TRUVAG3_OPENROUTER_MODEL_FAST`; existing
 pins retain precedence. Fast selection does not change effort or token budgets.
 Azure/shared-catalog resolvers also receive Luna for the `fast` semantic model.
 
+Anthropic `fast` selects `claude-haiku-5-5`; `smart`, `code`, and `vision` select
+`claude-opus-5-5`. `default` and `premium` remain Sonnet 5 and Fable 5. Nonempty
+`TRUVAG3_ANTHROPIC_MODEL_<ALIAS>` overrides still win. `anthropic.vertex` resolves
+the same semantic catalog before application-owned publisher mapping. Budgets
+are unchanged; adaptive thinking consumes part of `max_tokens`. See the
+[Anthropic migration note](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#anthropic-october-2026-alias-refresh)
+for native-extra changes, sampling policy, rollback and verification scope.
+
 ```go
 // "smart" resolves differently per provider
 ai.WithProviderAlias("openai")          // → gpt-5.6-sol
@@ -3152,12 +3210,19 @@ not interchangeable Go types.
 
 #### WithTimeout
 
-Set the provider request timeout. The framework default is 180 seconds (3
+Set the provider request timeout. The framework default is 300 seconds (5
 minutes); an explicitly selected standalone Bedrock provider declares 60
-minutes. Auto-detected clients and framework-managed chain entries use 180
-seconds. An explicit positive value overrides the applicable default. Zero and
-negative values mean unset and select the applicable bounded default; they do
-not disable request deadlines.
+minutes. Auto-detected clients and framework-managed chain entries use 300
+seconds. Positive code overrides `TRUVAG3_AI_TIMEOUT`, then the applicable
+default. A present environment value must be a positive Go duration; invalid
+values fail construction even with a code override. Zero and negative code
+values mean unset, not unbounded. Environment resolution belongs to root AI
+constructors and managed entries, not direct provider constructors/factory calls
+or caller-owned `ClientEntry` values; `core.Config.LoadFromEnv` does not read it.
+The total provider deadline covers retries and streaming. Shorter caller, phase,
+auxiliary-stage or injected HTTP-client deadlines still win. Token caps are not
+latency guarantees: deadlines are not derived from guessed token throughput,
+and deadline errors do not trigger chain failover.
 
 ```go
 func WithTimeout(timeout time.Duration) AIOption
@@ -3168,7 +3233,7 @@ func WithChainTimeout(timeout time.Duration) ChainOption  // For chain clients
 ```go
 import "time"
 
-// Single client with extended timeout for complex tasks
+// Single client with an explicit five-minute timeout
 client, _ := ai.NewClient(
     ai.WithTimeout(300 * time.Second),  // 5 minutes
 )
@@ -3187,22 +3252,45 @@ GPT-6, o1, o3 and o4). Reasoning consumes the completion budget even when it is
 not returned as visible answer text. The multiplier applies when a scaling
 wire profile has an effective nonempty effort other than `none`. This includes
 effort inherited from `WithReasoningEffort` or `WithChainReasoningEffort`, even
-when the call supplies no effort. An empty effective effort or `none` leaves
-the configured budget unmultiplied.
+when the call supplies no effort. Reviewed exact native GPT-6 Astra/Sol/Luna/
+GPT-6.1 Sol and routed GPT-6 Luna/GPT-6.1 Sol also scale when effort is absent,
+without sending a wire effort. Unknown defaults (including Azure), explicit
+reasoning omission, `none` and native-extra-only reasoning remain exact.
 
 ```go
 func WithReasoningTokenMultiplier(multiplier int) AIOption
 func WithChainReasoningTokenMultiplier(multiplier int) ChainOption  // For chain clients
+func ResolveReasoningTokenMultiplier(value int) (int, error)         // Provider authors
 ```
 
-**Default:** 5x when applicable (e.g., 2000 requested tokens with effective
-`high` effort, explicit or inherited → 10000 allocated). There is no per-model
-output-token ceiling clamp; configure a budget/multiplier supported by the selected model. This is
-independent of whether reasoning is exposed through the response channel.
+**Default:** 3x on scaling profiles, including supported OpenRouter effort.
+Explicit 1x keeps the configured cap exact. Code zero is unset; otherwise
+code overrides `TRUVAG3_AI_REASONING_TOKEN_MULTIPLIER`, then the default.
+Invalid explicit environment values (including empty/zero) and negative code
+values fail construction. An explicit 5x turns 2000 requested tokens into 10000.
+`ResolveReasoningTokenMultiplier` exposes the same resolution for provider
+factories: positive code value > environment > 3; zero code means unset. It
+validates a present environment value even when code overrides it, returning an
+error wrapping `core.ErrInvalidConfiguration` for invalid settings. It resolves
+configuration only; model-specific scaling and capacity checks happen later.
+Active scaling includes the resolved multiplier in the policy/cache identity,
+including preflight requests without a token count. Inferred defaults also carry
+`model-default-reasoning-v1` and a `model-default-reasoning-headroom-v1` report
+adjustment when scaling occurs. Unknown-default effort, `none`,
+explicit reasoning omission and non-scaling profiles do not gain that identity.
+The OpenAI-compatible adapter bounds reviewed exact native GPT-5.6 Sol,
+GPT-6 Astra/Sol/Luna/GPT-6.1 Sol and routed GPT-5.6 Luna/GPT-6 Luna/GPT-6.1 Sol
+IDs to 128000. GPT-5.6 entries add capacity only. For a valid base, headroom is
+bounded in both modes (50000 × 3 → 128000), with a wire-profile cap adjustment.
+For an over-cap caller base, Compatible reports a built-in clamp; Strict rejects
+an unacknowledged explicit change. Final validation still checks patches. Unknown
+models/variants have no inferred ceiling. Remaining input-context capacity is
+not calculated, and request-specific routing can still reject a budget.
+Reasoning visibility does not change the allowance or create retries.
 
 **Example:**
 ```go
-// Lower multiplier for cost optimization (simpler prompts)
+// Opt into additional reasoning/output headroom
 client, _ := ai.NewClient(
     ai.WithReasoningTokenMultiplier(3),  // 3x multiplier
 )
@@ -3238,12 +3326,12 @@ chainClient, _ := ai.NewChainClient(
 | `WithAWSCredentials(access, secret, session)` | three `string` values | AWS SDK credential chain | Explicit Bedrock credentials |
 | `WithTemperature(t)` | `float32` | 0.7 | Sampling temperature; permitted range is provider/model-specific |
 | `WithMaxTokens(n)` | `int` | 1000 | Default max tokens (per `ai/providers/base.go`) |
-| `WithTimeout(d)` | `time.Duration` | 180s; explicit standalone Bedrock 60m | Provider request timeout |
+| `WithTimeout(d)` | `time.Duration` | 300s; explicit standalone Bedrock 60m | Provider request timeout |
 | `WithMaxRetries(n)` | `int` | 3 | In-provider retries; explicit 0 disables |
 | `WithReasoningContentFallback(enabled)` | `bool` | false | Compatible-codec legacy reasoning-as-answer opt-in; separate reasoning and provenance retained |
 | `WithChainReasoningContentFallback(enabled)` | `bool` | false | Same opt-in for compatible entries constructed by legacy `NewChainClient`; a `ChainOption`, not an `AIOption` |
 | `WithCircuitBreaker(breaker)` | `core.CircuitBreaker` | none | Protect each logical provider call; configure it with `ShouldCountAICircuitBreakerFailure` semantics |
-| `WithReasoningTokenMultiplier(n)` | `int` | 5 | Token multiplier for reasoning models |
+| `WithReasoningTokenMultiplier(n)` | `int` | 3 (environment override supported) | Active scaling-profile multiplier; explicit 1 keeps the cap exact |
 | `WithReasoningEffort(effort)` | `string` | model default | OpenAI-compatible reasoning effort, model dependent |
 | `WithHeaders(headers)` | `map[string]string` | none | Snapshot custom eligible request headers |
 | `WithExtra(key, value)` | `string`, `interface{}` | none | Provider-specific legacy configuration |
@@ -4306,8 +4394,8 @@ func NewRedisLLMCallRecorder(opts ...RecorderOption) (*RedisLLMCallRecorder, err
 | `WithRecorderRedisURL(url)` | Redis connection URL |
 | `WithRecorderKeyspace(keyspace)` | Validated deployment namespace in shared DB 0 |
 | `WithRecorderLogger(logger)` | Logger for recorder operations |
-| `WithRecorderTTL(ttl)` | Base TTL for successful records (default: 24h); an existing longer/persistent lifetime or retention floor wins |
-| `WithRecorderErrorTTL(ttl)` | Base TTL for error records (default: 7 days); an existing longer/persistent lifetime or retention floor wins |
+| `WithRecorderTTL(ttl)` | Base TTL for successful records (default: 72h / 3 days); an existing longer/persistent lifetime or retention floor wins |
+| `WithRecorderErrorTTL(ttl)` | Base TTL for error records (default: 72h / 3 days); an existing longer/persistent lifetime or retention floor wins |
 
 **Built-in resilience:** Layer 1 retry with exponential backoff (3 attempts, 100ms→2s) and failure cooldown (5 failures within 30s triggers cooldown).
 
@@ -4919,8 +5007,8 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 - `WithResultDistill(enabled, distillThreshold)` - Enable/configure LLM result distillation (Layer 2)
 - `WithResultDistillModel(model)` - Model or portable alias for distillation calls; aliases are portable only across catalog-backed entries, so leave it empty for a chain containing Bedrock
 - `WithMaxConcurrency(n)` - Max parallel step executions in DAG (default: 25)
-- `WithStepTimeout(d)` - Execution allowance added to the HITL timeout for delegated orchestrator calls (default: 120s); not a direct deadline on ordinary tool calls
-- `WithTotalTimeout(d)` - Base HTTP client timeout per tool/agent call (default: 600s); delegation allowance may enlarge it. Not an end-to-end request deadline.
+- `WithStepTimeout(d)` - Execution allowance added to the HITL timeout for delegated orchestrator calls (default: 15m); not a direct deadline on ordinary tool calls
+- `WithTotalTimeout(d)` - Base HTTP client timeout per tool/agent call (default: 20m); delegation allowance may enlarge it. Not an end-to-end request deadline.
 - `WithStepRetryBackoff(initial, max)` - Code-owned retry timing; canonical validation rejects non-positive or inverted values
 - `WithExecutionStoreWriteTimeout(d)` - Per-write deadline for execution-debug snapshots (default: 5s)
 
@@ -5064,6 +5152,14 @@ values can then be applied using `LoadOptionsFromEnvironment`, followed by
 `ConfigureOptions` when code must win. Supported options include namespace,
 logger, execution-store configuration, LLM-debug retention, checkpoint
 retention, workflow TTL, task-queue retry policy, and checkpoint expiry.
+`LoadOptionsFromEnvironment` forwards `TRUVAG3_EXECUTION_DEBUG_TTL` and
+`TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` into the Redis execution store's configuration;
+both default to 72 hours. Present empty, malformed, non-positive, or overflowing
+durations fail loading. `NewDefaultBackends` invokes this loader automatically
+and ignores these two variables when the execution role is not selected.
+Later `WithExecutionStoreConfig` provider options override valid environment
+values; they do not suppress invalid-environment errors. These provider options
+configure the actual injected store, independently of the harness configuration.
 Caller-supplied root backend overrides are applied last:
 
 ```go
@@ -5334,8 +5430,8 @@ Configure execution behavior for the orchestrator, including retry logic and typ
 ```go
 type ExecutionOptions struct {
     MaxConcurrency           int           // Default: 25 | Env: TRUVAG3_EXECUTION_MAX_CONCURRENCY
-    StepTimeout              time.Duration // Delegation execution allowance: 120s | Env: TRUVAG3_EXECUTION_STEP_TIMEOUT
-    TotalTimeout             time.Duration // Base HTTP-client timeout: 600s | Env: TRUVAG3_ORCHESTRATION_TIMEOUT
+    StepTimeout              time.Duration // Delegation execution allowance: 15m | Env: TRUVAG3_EXECUTION_STEP_TIMEOUT
+    TotalTimeout             time.Duration // Base HTTP-client timeout: 20m | Env: TRUVAG3_ORCHESTRATION_TIMEOUT
     RetryAttempts            int           // Total attempts per step (default: 3 = 1 initial + 2 retries; overridable via TRUVAG3_STEP_RETRY_MAX_ATTEMPTS)
     RetryDelay               time.Duration // Legacy field; not consumed by SmartExecutor
     CircuitBreaker           bool          // Legacy field; does not enable a SmartExecutor breaker
@@ -5522,7 +5618,7 @@ type IterativePlanConfig struct {
     // MaxPhases is the maximum number of planning phases allowed per request.
     // If reached without a terminal plan, the orchestrator forces termination
     // and synthesizes with available results.
-    // Default: 5 | Env: TRUVAG3_ITERATIVE_MAX_PHASES
+    // Default: 20 | Env: TRUVAG3_ITERATIVE_MAX_PHASES
     MaxPhases int `json:"max_phases"`
 
     // MaxTotalSteps is the maximum total steps across all phases.
@@ -5534,7 +5630,7 @@ type IterativePlanConfig struct {
     // The phase loop raises it to the delegation allowance when that is larger;
     // earlier parent deadlines still apply.
     // Prevents a single continuation phase from hanging indefinitely.
-    // Default: 180s | Env: TRUVAG3_ITERATIVE_PHASE_TIMEOUT
+    // Default: 25m | Env: TRUVAG3_ITERATIVE_PHASE_TIMEOUT
     PhaseTimeout time.Duration `json:"phase_timeout"`
 
     // Regeneration attempts after the first validation failure. Malformed JSON
@@ -5570,7 +5666,7 @@ and can stop before the outer validation budget is exhausted.
 ```go
 config := orchestration.DefaultConfig()
 // IterativePlanning is already configured with sensible defaults:
-// Enabled: true, MaxPhases: 5, MaxTotalSteps: 200, PhaseTimeout: 180s
+// Enabled: true, MaxPhases: 20, MaxTotalSteps: 200, PhaseTimeout: 25m
 ```
 
 **Example - Complex research queries:**
@@ -5591,9 +5687,9 @@ config.IterativePlanning.Enabled = false // All plans treated as single-shot
 **Environment-backed defaults** (read by `DefaultConfig`):
 ```bash
 export TRUVAG3_ITERATIVE_PLANNING_ENABLED=true
-export TRUVAG3_ITERATIVE_MAX_PHASES=5
+export TRUVAG3_ITERATIVE_MAX_PHASES=20
 export TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS=200
-export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s
+export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=25m
 ```
 
 `DefaultConfig` applies these variables while constructing the returned value.
@@ -5621,7 +5717,7 @@ The continuation prompt's `<completed_steps>` section renders each completed ste
 ```go
 type OrchestratorConfig struct {
     // ...
-    ContinuationResultMaxTotalChars int `json:"continuation_result_max_total_chars,omitempty"` // Default: 32768 | Env: TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS
+    ContinuationResultMaxTotalChars int `json:"continuation_result_max_total_chars,omitempty"` // Default: 196608 | Env: TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS
     ContinuationMaxEscalations      int `json:"continuation_max_escalations,omitempty"`        // Default: 8     | Env: TRUVAG3_CONTINUATION_MAX_ESCALATIONS
     ContinuationDigestArraySample   int `json:"continuation_digest_array_sample,omitempty"`    // Default: 3     | Env: TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE
     ContinuationDigestScalarMax     int `json:"continuation_digest_scalar_max,omitempty"`      // Default: 200   | Env: TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX
@@ -5748,7 +5844,7 @@ type ResultTrimConfig struct {
     // Results exceeding this are structurally trimmed.
     // Note: Single-step requests use MaxTotalPromptBytes (32KB) instead,
     // since there is no multi-result allocation needed.
-    // Default: 16384 (16 KB, ~4K tokens) | Env: TRUVAG3_RESULT_TRIM_MAX_BYTES
+    // Default: 65536 (64 KiB, ~16K tokens) | Env: TRUVAG3_RESULT_TRIM_MAX_BYTES
     MaxResultBytes int `json:"max_result_bytes"`
 
     // MaxTotalPromptBytes is the maximum total bytes across all step results
@@ -5759,7 +5855,7 @@ type ResultTrimConfig struct {
     // processor will distill is sized at its post-distill footprint (~TargetSize,
     // via EffectiveSizer), not its raw bytes, so a large distillable result
     // doesn't crowd out the others.
-    // Default: 32768 (32 KB, ~8K tokens) | Env: TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES
+    // Default: 196608 (192 KiB, ~48K tokens) | Env: TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES
     MaxTotalPromptBytes int `json:"max_total_prompt_bytes"`
 
     // MaxMicroResolutionBytes controls how much source data is included when
@@ -5793,7 +5889,7 @@ type ResultTrimConfig struct {
 ```go
 config := orchestration.DefaultConfig()
 // ResultTrim is already configured with sensible defaults:
-// Enabled: true, MaxResultBytes: 16384, MaxTotalPromptBytes: 32768,
+// Enabled: true, MaxResultBytes: 65536, MaxTotalPromptBytes: 196608,
 // MaxMicroResolutionBytes: 65536, MaxAgentInputBytes: 0 (no cap, fidelity-first),
 // SchemaGuidedMappingThreshold: 16384
 ```
@@ -5803,8 +5899,8 @@ config := orchestration.DefaultConfig()
 config := orchestration.DefaultConfig()
 config.ResultTrim = orchestration.ResultTrimConfig{
     Enabled:                      true,
-    MaxResultBytes:               32768, // 32 KB per result
-    MaxTotalPromptBytes:          65536, // 64 KB total
+    MaxResultBytes:               131072, // 128 KiB per result
+    MaxTotalPromptBytes:          262144, // 256 KiB total
     MaxMicroResolutionBytes:      131072, // 128 KB for resolution prompts
     MaxAgentInputBytes:           131072, // 128 KB per agent parameter
     SchemaGuidedMappingThreshold: 16384,  // Schema mapping above 16 KB
@@ -5820,8 +5916,8 @@ config.ResultTrim.SchemaGuidedMappingThreshold = 0 // Always use direct value ex
 **Environment variable overrides:**
 ```bash
 export TRUVAG3_RESULT_TRIM_ENABLED=true
-export TRUVAG3_RESULT_TRIM_MAX_BYTES=16384
-export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=32768
+export TRUVAG3_RESULT_TRIM_MAX_BYTES=65536
+export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=196608
 export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=65536
 export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=0   # default 0 = no cap (fidelity-first); set > 0 to enable the guard
 export TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD=16384
@@ -6031,6 +6127,16 @@ Native delivery requires the streaming interface and `SupportsStreaming()` to
 return true. Otherwise orchestration uses simulated delivery and emits the
 bounded `streaming_fallback` diagnostic. Simulated chunks are split on UTF-8
 rune boundaries, so a callback never receives half of a multibyte character.
+
+If native synthesis returns partial output with `core.ErrStreamPartiallyCompleted`,
+including a wrapped/joined error, orchestration returns that output without a
+retry: `PartialContent=true`, `StreamCompleted=false`, and a nil Go error.
+The response's `Errors` retains the exact interruption error. Delivery
+`FinishReason` is `cancelled` for `context.Canceled`, `deadline_exceeded` for
+`context.DeadlineExceeded`, otherwise `interrupted`. The execution and synthesis
+debug interaction remain unsuccessful; the provider's reported finish reason is
+preserved separately in the debug interaction. A partial sentinel without an AI
+response follows the ordinary error-return path.
 
 **StreamingOrchestratorResponse fields:**
 ```go
@@ -6417,8 +6523,8 @@ type LLMDebugRecordSummary struct {
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | Enable debug capture |
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | Base TTL for successful records; longer lineage floors are preserved |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` | Base TTL for error records (7 days); HITL or investigation retention may extend it |
+| `TRUVAG3_LLM_DEBUG_TTL` | `72h` | Base TTL for successful records; longer lineage floors are preserved |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `72h` | Base TTL for error records (3 days); HITL or investigation retention may extend it |
 
 ### Execution Debug Store
 
@@ -7866,7 +7972,7 @@ TruvaG3 supports configuration through environment variables:
 
 **Activity Compaction (LLM-powered digest):**
 - `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` - Model for summarization/compaction LLM calls. Accepts aliases such as `fast` and `smart` only when the selected provider defines them, or a concrete model ID (default: agent's model)
-- `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` - Positive fixed output-token allowance per event-summary call, read by `BuildMemoryHooks` at startup. Unset retains max(300, 150 × batch size); invalid explicit values fail construction, including without an AI client. Direct construction uses `WithSummarizerMaxTokens(n)`, which rejects non-positive values and overrides `WithSummarizerTokensPerStep(n)` regardless of option order. Independent of synthesis and compaction budgets.
+- `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` - Positive fixed output-token allowance per event-summary call, read by `BuildMemoryHooks` at startup. Unset retains 10000; invalid explicit values fail construction, including without an AI client. Direct construction uses `WithSummarizerMaxTokens(n)`, which rejects non-positive values and overrides `WithSummarizerTokensPerStep(n)` regardless of option order. Independent of synthesis and compaction budgets.
 - `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` - Requested digest length (default: `500` tokens). The built-in full/incremental compactor sends `AIOptions.MaxTokens = 5 × target` (default: `2500`); provider reasoning scaling may further alter the wire budget. The target is a prompt instruction, not a tokenizer-enforced output cap. The final enrichment view has its own byte budget.
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` - Max events fetched before compaction (default: `200`)
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` - Raw events appended after digest for detail (default: `15`)
