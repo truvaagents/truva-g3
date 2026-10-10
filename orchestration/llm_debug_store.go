@@ -271,11 +271,11 @@ type LLMDebugConfig struct {
 	Enabled bool `json:"enabled"`
 
 	// TTL is the retention period for successful records.
-	// Default: 24h. Override via TRUVAG3_LLM_DEBUG_TTL
+	// Default: 72h (3 days). Override via TRUVAG3_LLM_DEBUG_TTL
 	TTL time.Duration `json:"ttl"`
 
 	// ErrorTTL is the retention period for records with errors.
-	// Default: 168h (7 days). Override via TRUVAG3_LLM_DEBUG_ERROR_TTL
+	// Default: 72h (3 days). Override via TRUVAG3_LLM_DEBUG_ERROR_TTL
 	ErrorTTL time.Duration `json:"error_ttl"`
 }
 
@@ -283,8 +283,8 @@ type LLMDebugConfig struct {
 // Feature is disabled by default per design principles.
 func DefaultLLMDebugConfig() LLMDebugConfig {
 	return LLMDebugConfig{
-		Enabled:  false,              // Disabled by default
-		TTL:      24 * time.Hour,     // 24 hours for success
-		ErrorTTL: 7 * 24 * time.Hour, // 7 days for errors
+		Enabled:  false,          // Disabled by default
+		TTL:      72 * time.Hour, // 3 days for success
+		ErrorTTL: 72 * time.Hour, // 3 days for errors
 	}
 }

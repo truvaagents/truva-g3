@@ -373,12 +373,12 @@ type ExecutionStoreConfig struct {
 	Enabled bool `json:"enabled"`
 
 	// TTL is the retention period for successful records.
-	// Default: 24h. Override via TRUVAG3_EXECUTION_DEBUG_TTL.
+	// Default: 72h (3 days). Override via TRUVAG3_EXECUTION_DEBUG_TTL.
 	// This is passed to the StorageProvider implementation.
 	TTL time.Duration `json:"ttl"`
 
 	// ErrorTTL is the retention period for records with errors.
-	// Default: 168h (7 days). Override via TRUVAG3_EXECUTION_DEBUG_ERROR_TTL.
+	// Default: 72h (3 days). Override via TRUVAG3_EXECUTION_DEBUG_ERROR_TTL.
 	ErrorTTL time.Duration `json:"error_ttl"`
 
 	// KeyPrefix scopes logical keys in the generic StorageProvider implementation.
@@ -402,9 +402,9 @@ type ExecutionStoreConfig struct {
 // Feature is disabled by default per FRAMEWORK_DESIGN_PRINCIPLES.md.
 func DefaultExecutionStoreConfig() ExecutionStoreConfig {
 	return ExecutionStoreConfig{
-		Enabled:                    false,              // Disabled by default
-		TTL:                        24 * time.Hour,     // 24 hours for success
-		ErrorTTL:                   7 * 24 * time.Hour, // 7 days for errors
+		Enabled:                    false,          // Disabled by default
+		TTL:                        72 * time.Hour, // 3 days for success
+		ErrorTTL:                   72 * time.Hour, // 3 days for errors
 		KeyPrefix:                  defaultRedisKeyspace().Plain("execution-debug") + ":",
 		ConversationQueryLimit:     defaultConversationQueryLimit,
 		ConversationIndexScanLimit: defaultConversationIndexScanLimit,

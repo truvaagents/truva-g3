@@ -56,6 +56,8 @@ var clientRoleCapabilities = map[ClientRole][]orchestration.BackendCapability{
 }
 
 var providerOptionVariableRoles = map[string]ClientRole{
+	"TRUVAG3_EXECUTION_DEBUG_TTL":           ClientRoleExecution,
+	"TRUVAG3_EXECUTION_DEBUG_ERROR_TTL":     ClientRoleExecution,
 	"TRUVAG3_LLM_DEBUG_TTL":                 ClientRoleLLMDebug,
 	"TRUVAG3_LLM_DEBUG_ERROR_TTL":           ClientRoleLLMDebug,
 	"TRUVAG3_HITL_CHECKPOINT_TTL":           ClientRoleHITL,

@@ -141,8 +141,8 @@ type RedisExecutionDebugStore struct {
 // schema uses DB 0 in every topology; typed keyspace options select deployment isolation.
 //
 // Store-specific environment:
-//   - TRUVAG3_EXECUTION_DEBUG_TTL: TTL for successful records (default: 24h)
-//   - TRUVAG3_EXECUTION_DEBUG_ERROR_TTL: TTL for error records (default: 168h)
+//   - TRUVAG3_EXECUTION_DEBUG_TTL: TTL for successful records (default: 72h)
+//   - TRUVAG3_EXECUTION_DEBUG_ERROR_TTL: TTL for error records (default: 72h)
 //   - TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT: per-query result ceiling (default: 1000)
 //   - TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT: per-query index scan ceiling (default: 5000)
 //
