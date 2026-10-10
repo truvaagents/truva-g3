@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.17
+**Version**: 1.23
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -94,24 +94,53 @@ Every `openaiwire.RequestProfile` declares both its token-field spelling and
 its token-budget policy. `TokenBudgetExact` sends the portable maximum
 unchanged. `TokenBudgetScaleForReasoning` is valid only with
 `max_completion_tokens` and expands the value for an effective active
-reasoning effort, including inherited client/chain defaults. Empty effective
-effort, explicit `OmitAIParameter[string]()` and `none` remain exact. Omission
+reasoning effort, including inherited client/chain defaults. Providers may also
+set `ReasoningActiveByDefault` for a reviewed model contract: absent effective
+effort then receives headroom without injecting effort on the wire. Unknown
+defaults, native-extra-only reasoning controls, explicit
+`OmitAIParameter[string]()` and `none` remain exact. Omission
 suppresses codec-default inheritance before budget/sampling preparation, not
-just during final wire-field removal. Only verified OpenAI
-and Azure OpenAI reasoning profiles use scaling. A future compatible-provider
+just during final wire-field removal. Verified OpenAI,
+Azure OpenAI and supported OpenRouter reasoning profiles use scaling. A future compatible-provider
 profile starts from exact semantics unless its upstream contract proves
 otherwise.
 
+Providers may supply `ReasoningHeadroomLimit` (zero = unknown, negative = invalid).
+For a base budget within that reviewed capacity, the codec bounds only added
+headroom before policy evaluation. This is budget translation, not a built-in
+change to explicit caller intent. Over-cap base budgets still go through the
+adapter's Compatible/Strict capacity policy. The adapter remains responsible for
+final capacity validation after application policy; the codec owns no model table.
+Active scaling with a known limit adds `reasoning-headroom-ceiling-v1=<limit>`
+to the policy identity even for token-count-free preflight, and reports a
+`wire-profile` / `reasoning-headroom-ceiling-v1` cap adjustment when needed.
+
 The policy is included in the versioned prepared-wire profile identity
-(`profile-v2`), so exact and scaled requests cannot share a stable request
-fingerprint. `AIRequestReport.EffectiveMaxTokens` is read from the final draft
+(`profile-v2`). Active scaling also includes
+`reasoning-budget-v1:multiplier=<resolved value>`, including explicit 1x and
+preflight requests without a token count. Changing the multiplier invalidates
+AI-output caches on native OpenAI, supported OpenRouter and Azure v1 paths.
+Model-default inference adds `model-default-reasoning-v1` to that identity;
+non-scaling, unknown-default, `none` and explicit reasoning-omission paths do not
+gain that multiplier identity. `AIRequestReport.EffectiveMaxTokens` is read from the final draft
 after policy evaluation and therefore records the actual wire value, including
 on later transport, provider-response, or decode failure paths that retain a
 prepared request report.
 
 Explicit-omission drafts additionally version their policy identity with
 `reasoning-omission-v1`, preventing reuse of cached output prepared under the
-old default-refill behavior. Inherited/set effort identities are unchanged.
+old default-refill behavior. Active inherited/set effort additionally carries
+the multiplier identity above.
+
+Wire token validation, reviewed output ceilings and effective integer reports
+share a checked numeric reader. Integral JSON numbers such as `1e3` and
+`1000.0` are accepted and reported as 1000 without rewriting their wire
+representation. Fractional, non-finite, string and out-of-Go-int-range values
+are rejected for token limits; decimal JSON values are checked exactly rather
+than rounded through float64. The draft API rejects multiplication overflow
+unless a reviewed limit safely bounds added headroom.
+The legacy map-only `BuildRequestBody` helper instead saturates at `math.MaxInt`
+because it cannot return an error; this is not a model output ceiling.
 
 ### GPT-6 Family Compatibility and Developer Overrides
 
@@ -151,22 +180,32 @@ Resolved model identity already participates in request fingerprints, so the
 default change does not require a new global policy version.
 The existing multiplier applies to effective nonempty reasoning effort other
 than `none`, including inherited client/chain defaults. A call that supplies no
-effort can therefore still trigger scaling. Empty effective effort and `none`
-keep the configured token budget unmultiplied. No new effort is imposed.
+effort can therefore still trigger scaling. Reviewed exact native GPT-6
+Astra/Sol/Luna and GPT-6.1 Sol, and routed GPT-6 Luna/GPT-6.1 Sol, also scale
+when effort is absent because their upstream defaults reason. No wire effort
+is imposed. `none`, explicit omission and native-extra-only reasoning remain
+exact. Unknown models/snapshots and Azure default reasoning are not inferred.
 
-**Known budget limitation:** the adapter does not enforce per-model output
-ceilings. The default multiplier of five applies equally to every effective
-active effort, explicit or inherited, so a 30,000-token budget becomes 150,000,
-exceeding the currently documented 128,000-token output limit of Astra, Sol and Luna. Applications can
-select multiplier one through `WithReasoningTokenMultiplier(1)` or
-`WithChainReasoningTokenMultiplier(1)` and choose an appropriate total budget;
+The default multiplier is three; explicit scaling applies equally to every
+effective active effort, explicit or inherited. The OpenAI-compatible adapter
+enforces reviewed 128,000-token ceilings for exact native GPT-5.6 Sol,
+GPT-6 Astra/Sol/Luna and GPT-6.1 Sol IDs, and exact OpenRouter GPT-5.6 Luna,
+GPT-6 Luna/GPT-6.1 Sol IDs. The two GPT-5.6 entries add capacity only, not
+model-default reasoning inference. Added headroom for a valid base is bounded
+in both policy modes: base 50,000 with multiplier 3 becomes 128,000, including
+in Strict mode. For an over-cap caller base, Compatible mode clamps and reports
+a built-in adjustment; Strict rejects an unacknowledged explicit change.
+Final validation also checks
+application patches. Unreviewed variants and other models retain unknown
+capacity; this is not a context-window calculation or endpoint-availability
+guarantee. Applications can select multiplier one through
+`WithReasoningTokenMultiplier(1)` or `WithChainReasoningTokenMultiplier(1)`;
 `AIRequestReport.EffectiveMaxTokens` records the final wire value. This is not
 a visible-output reservation or a spending guarantee. Provider handling of
-over-limit requests has not been live-tested. Generic model-limit validation
-remains a separate follow-up requiring an explicit contract for known/unknown
-limits, endpoint/model overrides, framework scaling versus caller intent, and
-post-policy validation/reporting. This change adds neither clamping nor a new
-global budget policy. See the [documented model limits](README.md#gpt-6-token-budgets).
+over-limit requests has not been live-tested. Cached provider metadata, route-aware
+limits and broader model-default reasoning coverage remain a separate implementation
+slice; this guard deliberately makes no claims for unknown models or endpoint
+eligibility. See the [documented model limits](README.md#gpt-6-token-budgets).
 
 The native provider wraps its codec draft with GPT-6 final validation, after
 application rules, middleware and per-request patches. Its versioned contract
@@ -246,10 +285,11 @@ API translation. The shared codec's pre-policy validation remains unchanged.
 An inherited `none` is not silently translated into active reasoning. Applications
 select a supported effort or explicitly omit effort through the presence-aware
 request API. Native reasoning budgets still use the configured multiplier;
-OpenRouter budgets remain exact. Apart from the separately documented
-default/fast-alias changes, chain order, retries, token ceilings and orchestration flow
-are unchanged. The model's currently advertised
-128,000 output limit remains an application configuration responsibility.
+OpenRouter budget scaling and reviewed ceilings follow the budget contract above.
+Apart from the separately documented
+default/fast-alias and budget changes, chain order, retries and orchestration flow
+are unchanged. Reviewed model-output ceilings do not replace application
+responsibility for remaining context capacity and routed endpoint constraints.
 
 OpenRouter's exact `openai/gpt-6-luna` capability row is independent of native
 GPT-6 classification. Endpoint metadata reviewed on 2026-09-28 advertises
@@ -652,99 +692,90 @@ The `detectBestProvider()` function delegates to `DetectAvailableProviders()` an
 
 ### Factory Implementation
 
-Each provider implements this pattern:
+Providers register factories; constructors consume resolved configuration and
+propagate the configured logger. The OpenAI-compatible factory implements the
+error-capable `ValidatedProviderFactory` and `RequestProviderFactory` seams as
+well as the legacy factory. This excerpt shows its entry points, not the full
+configuration pipeline:
 
 ```go
 // providers/openai/factory.go
 package openai
 
-func init() {
-    if err := ai.Register(&Factory{}); err != nil {
-        panic(fmt.Sprintf("failed to register openai provider: %v", err))
-    }
-}
-
 type Factory struct{}
 
-func (f *Factory) Name() string        { return "openai" }
-func (f *Factory) Description() string { return "OpenAI GPT models" }
+var _ ai.ValidatedProviderFactory = (*Factory)(nil)
+var _ ai.RequestProviderFactory = (*Factory)(nil)
 
-func (f *Factory) DetectEnvironment() (priority int, available bool) {
-    if os.Getenv("OPENAI_API_KEY") != "" {
-        return 100, true  // High priority when key exists
-    }
-    return 0, false
+func (f *Factory) CreateValidated(config *ai.AIConfig) (core.AIClient, error) {
+    return f.createClient(config)
 }
 
 func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
-    // Extract configuration
-    apiKey := firstNonEmpty(config.APIKey, os.Getenv("OPENAI_API_KEY"))
-    baseURL := firstNonEmpty(config.BaseURL, os.Getenv("OPENAI_BASE_URL"), DefaultBaseURL)
-
-    // CRITICAL: Get logger from config, wrap with component
-    logger := config.Logger
-    if logger != nil {
-        if cal, ok := logger.(core.ComponentAwareLogger); ok {
-            logger = cal.WithComponent("framework/ai")
-        }
+    client, err := f.createClient(config)
+    if err != nil {
+        panic(fmt.Sprintf("create OpenAI client: %v", err))
     }
-
-    return NewClient(apiKey, baseURL, logger)
+    return client
 }
 ```
 
+Root AI constructors use the error-capable seam when available. The legacy
+`Create` signature cannot return an error and panics on invalid configuration;
+it is not the recommended application entry point. In
+[`providers/openai/factory.go`](providers/openai/factory.go), `createClient`
+validates the endpoint, resolves alias-specific credentials without changing
+environment variables, wraps a component-aware logger as `framework/ai` (or
+uses a no-op logger), and applies resolved timeout, retry, telemetry, reasoning
+and request settings. `CreateRequestClient` additionally installs application
+policy and injected credential, endpoint and HTTP-client seams. Native OpenAI's
+environment detection priority is 1000; priorities for aliases are declared in
+the factory's `subProviders` table.
+
 ### Client Implementation
+
+The direct provider constructor supplies baseline defaults; root AI constructors
+and the factory apply application/environment configuration. The constructor and
+legacy bridge below are excerpts from
+[`providers/openai/client.go`](providers/openai/client.go). `Client` also owns
+the request-policy and integration fields described in this document.
 
 ```go
 // providers/openai/client.go
 package openai
 
-type Client struct {
-    *providers.BaseClient  // Embedded for retry, logging
-    apiKey  string
-    baseURL string
-}
-
-func NewClient(apiKey, baseURL string, logger core.Logger) *Client {
-    base := providers.NewBaseClient(180*time.Second, logger)  // 3 min default for reasoning models
-    base.DefaultModel = "gpt-3.5-turbo"
-    base.DefaultMaxTokens = 1000
-
+func NewClient(apiKey, baseURL, providerAlias string, logger core.Logger) *Client {
+    if baseURL == "" {
+        baseURL = "https://api.openai.com/v1"
+    }
+    base := providers.NewBaseClient(5*time.Minute, logger)
+    base.ProviderName = "openai"
+    base.DefaultModel = "default"
     return &Client{
-        BaseClient: base,
-        apiKey:     apiKey,
-        baseURL:    baseURL,
+        BaseClient:       base,
+        apiKey:           apiKey,
+        baseURL:          strings.TrimRight(baseURL, "/"),
+        providerAlias:    providerAlias,
+        requestPolicy:    newRequestPolicyEngine(),
+        requestTimeout:   5 * time.Minute,
+        sseEventMaxBytes: openaiwire.DefaultMaxSSEEventBytes,
     }
 }
 
 func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
-    // Apply defaults
-    options = c.ApplyDefaults(options)
-    semanticModel := ResolveModel("openai", options.Model)
-
-    // Log only context-correlated, sanitized request metadata.
-    c.LogRequestMetadata(ctx, providers.RequestObservation{
-        Provider:      "openai",
-        ProviderAlias: "openai",
-        SemanticModel: semanticModel,
-        PromptLength:  len(prompt),
-    })
-    startTime := time.Now()
-
-    // Build and execute request...
-
-    // Keep provider-reported wire model data out of metric dimensions.
-    c.LogResponseMetadata(ctx, providers.ResponseObservation{
-        Provider:      "openai",
-        ProviderAlias: "openai",
-        SemanticModel: semanticModel,
-        Usage:         result.Usage,
-        Duration:      time.Since(startTime),
-    })
-
-    return result, nil
+    result, err := c.Generate(ctx, core.NewAIRequestFromLegacy(prompt, "", options))
+    if result != nil && result.Response != nil {
+        return result.Response, err
+    }
+    return nil, err
 }
 ```
+
+`Generate` owns the provider span and request deadline, prepares call-local
+route/policy/wire state, and executes the shared decoded-attempt loop. Legacy
+calls use that same path rather than implementing a second transport or policy
+pipeline. Metadata observations use the semantic provider/model identity;
+provider-reported wire model data does not become a metric label.
 
 ### OpenAI-Compatible Providers (Provider Aliases)
 
@@ -779,8 +810,14 @@ through unchanged. Router models remain capability-conservative unless the
 catalog carries positive, offline-enforced evidence for the requested portable
 feature.
 
-The adapter always uses `max_completion_tokens` with an exact token budget and
+The adapter always uses `max_completion_tokens` and
 translates supported portable reasoning to `reasoning.effort`. Portable effort
+activates the configured multiplier when nonempty and other than `none`;
+reviewed exact Luna/Sol default reasoning also activates it without a wire effort.
+Explicit omission and `none` retain exact budgeting. Unknown default reasoning
+and native-extra-only reasoning are not inferred. Default inference changes
+budget preparation only, not sampling or `require_parameters` routing rules.
+Portable effort
 preserves provider-native sibling controls such as `reasoning.exclude`. If
 native and portable effort values conflict, the portable value wins and
 `AIRequestReport.Adjustments` records the sanitized `/reasoning/effort`
@@ -1050,6 +1087,14 @@ honor `Retry-After` without rewriting the actual HTTP status. Constructors retai
 their defaults; consequently standalone/default heterogeneous OpenAI-compatible
 entries now also cover eligible decoded failures without an option change.
 
+Both base retry paths log first-attempt success as `ai_http_success` at Debug
+and recovered success as `ai_request_recovery` at Info. Both include
+`duration_ms` for the successful attempt, excluding previous attempts and
+backoff. Decode-aware duration includes response consumption and closure and
+matches the attempt span; transport-only duration ends at response headers.
+Decoded errors and partial-stream failures do not emit success logs. These
+metadata-only, context-correlated logs add no logical request/token counters.
+
 **Compatibility change for OpenRouter:** this classifier also handles actual
 non-HTML HTTP error responses. Unlike the former status-only loop, an unknown
 nonempty error type stops same-provider retries even on HTTP 429/5xx, and untyped
@@ -1164,9 +1209,17 @@ type AITool struct {
 
 // Can only process requests, cannot discover
 func (t *AITool) ProcessWithAI(ctx context.Context, input string) (string, error) {
-    return t.aiClient.GenerateResponse(ctx, input, opts)
+    response, err := t.aiClient.GenerateResponse(ctx, input, nil)
+    if err != nil {
+        return "", err
+    }
+    return response.Content, nil
 }
 ```
+
+This is a simplified ownership example. The concrete `AITool.ProcessWithAI`
+implementation also supplies its own model/options and emits correlated logs;
+it does not discover or orchestrate other services.
 
 ### When to Use Each
 
@@ -1190,7 +1243,7 @@ func (t *AITool) ProcessWithAI(ctx context.Context, input string) (string, error
 | `registry.go` | INFO/DEBUG | Provider detection, auto-selection |
 | `providers/*/factory.go` | INFO | Provider initialization |
 | `providers/*/client.go` | INFO/DEBUG | Request/response, errors |
-| `providers/base.go` | INFO/WARN | Retries, failures |
+| `providers/base.go` | DEBUG/INFO/WARN | First-attempt success, retry recovery, retries and failures |
 | `chain_client.go` | INFO/WARN | Failover events |
 | `ai_agent.go` | INFO | Orchestration phases |
 
@@ -1239,10 +1292,10 @@ recorder stores that field verbatim and does not parse provider payloads.
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
 | `ai.request.duration_ms` | Histogram | module, provider, status | Latency tracking |
-| `ai.request.tokens` | Counter | module, provider, token_type | Usage tracking |
-| `ai.request.errors` | Counter | provider, error_type | Error rates |
+| `ai.request.total` | Counter | module, provider, status | Logical request counts from the response-metric helper |
+| `ai.tokens.used` | Counter | module, provider, type (`input` or `output`) | Reported token usage |
 | `ai.chain.failover` | Counter | module, status/reason | Failover frequency; provider/entry identities remain in logs and spans |
-| `ai.provider.available` | Gauge | provider | Health monitoring |
+| `ai.chain.attempt` | Counter | module, status | Chain-entry outcomes, separate from wire retries |
 
 Metric labels are deliberately bounded. Semantic model identity belongs in
 logs, reports, and spans, where it remains distinguishable from the wire
@@ -1252,24 +1305,22 @@ identity is added as a provider metric label. This also prevents an Azure
 deployment or Vertex publisher-model ID returned in `AIResponse.Model` from
 silently becoming a time-series dimension.
 
-**Implementation Pattern**:
+**Implementation Pattern**: provider completion uses the shared metadata helper
+once for a successful logical response, not once per HTTP attempt. The helper
+emits the unified request/token metrics as well as the context-aware response
+log. Do not add a second set of counters around it. Failures remain visible in
+failed spans and bounded error logs; the table is not a promise of a separate
+`ai.request.errors` metric.
 
 ```go
-// In providers/*/client.go
-func (c *Client) GenerateResponse(ctx context.Context, prompt string, options *core.AIOptions) (*core.AIResponse, error) {
-    startTime := time.Now()
-
-    // ... execute request ...
-
-    duration := time.Since(startTime).Milliseconds()
-
-    // Emit metrics (if telemetry is initialized)
-    telemetry.RecordAIRequest(telemetry.ModuleAI, "openai", float64(duration), "success")
-    telemetry.RecordAITokens(telemetry.ModuleAI, "openai", "prompt", int64(usage.PromptTokens))
-    telemetry.RecordAITokens(telemetry.ModuleAI, "openai", "completion", int64(usage.CompletionTokens))
-
-    return result, nil
-}
+// In the provider's successful-response completion path:
+c.LogResponseMetadata(ctx, providers.ResponseObservation{
+    Provider:      "openai",
+    ProviderAlias: c.getProviderName(),
+    SemanticModel: semanticModel,
+    Usage:         response.Usage,
+    Duration:      time.Since(started),
+})
 ```
 
 ### Component Filtering
@@ -1323,7 +1374,7 @@ client, err := ai.NewClient(
     ai.WithMaxTokens(1000),              // Token limit
 
     // Connection settings
-    ai.WithTimeout(180 * time.Second),   // Request timeout (default, supports reasoning models)
+    ai.WithTimeout(300 * time.Second),   // Explicit request timeout override
     ai.WithMaxRetries(3),                // Retry count
 
     // Observability
@@ -1399,6 +1450,31 @@ Anthropic, and Gemini have built-in request adapters, and Bedrock provides one
 behind its build tag. Providers without a request adapter return
 `core.ErrAIRequestFeatureUnsupported`.
 
+### Anthropic Cost-Focused Alias Refresh
+
+The Anthropic catalog maps `fast` to `claude-haiku-5-5` and `smart`/`code`/`vision`
+to `claude-opus-5-5`. `default` and `premium` retain Sonnet 5 and Fable 5:
+their newer versions lower cache-read prices but not standard token prices.
+This is provider-owned configuration, not orchestration routing. Nonempty
+environment overrides and explicit model pins retain precedence. Vertex Claude
+resolvers receive the new semantic IDs; publisher/deployment mappings remain
+application-owned. Bedrock and OpenRouter catalogs are independent and unchanged.
+
+Haiku 5.5 joins the existing built-in sampling-omission table with a narrow
+family-boundary prefix. Opus 5.5 already matches the Opus 5 rule. Policy order,
+Compatible/Strict handling, application patch seams and request-report/log/span
+adjustment reporting remain unchanged. Existing resolved-model and policy-rule
+fingerprints represent the migration; the added built-in rule participates in
+the policy identity only when it matches. Unrelated concrete model identities
+are unchanged. No separate global identity bump is needed.
+No new dependency, prompt transformation, retry behavior, budget multiplier,
+effort default or native-tool lifecycle is introduced. Old Haiku 4.5 pins retain
+their sampling behavior. Unknown model handling is unchanged.
+
+Adaptive thinking and changed native extra contracts require adopter review;
+exact configured budgets are not silently raised. See the
+[migration and verification scope](README.md#anthropic-october-2026-alias-refresh).
+
 ### Effective Request-Report Contract
 
 The AI module owns population of provider-effective request evidence. Every
@@ -1460,10 +1536,10 @@ type ProviderRequestTimeoutFactory interface {
 
 Factories validate and wire configuration only. They do not invoke middleware
 or take ownership of application-supplied lifecycle components. The timeout
-interface is optional: providers that omit it retain 180 seconds. A positive
+interface is optional: providers that omit it retain 300 seconds. A positive
 factory value applies only to an explicitly selected standalone provider when
-the application did not supply a positive `WithTimeout`. Auto-detected clients
-and framework-managed chain entries retain the failover-safe 180-second
+the application did not supply a positive `WithTimeout` or `TRUVAG3_AI_TIMEOUT`. Auto-detected clients
+and framework-managed chain entries retain the 300-second
 framework default; caller-owned `ClientEntry` values remain untouched.
 
 ### Enterprise Credentials, Routing, and HTTP Transport
@@ -1672,16 +1748,27 @@ policy even when the protected wire deployment is an opaque profile or ARN.
 
 Provider factories may implement the additive
 `ProviderRequestTimeoutFactory` contract when their documented operation
-headroom differs from the framework's 180-second default. The root constructor
+headroom differs from the framework's 300-second default. The root constructor
 applies that factory default only to an explicitly selected standalone
-provider when the application does not provide a positive `WithTimeout`;
+provider when neither positive code nor `TRUVAG3_AI_TIMEOUT` overrides it;
 Bedrock declares 60 minutes. Auto-detected clients and framework-managed
-failover entries retain 180 seconds so a long provider default cannot stall
+failover entries retain 300 seconds so a long provider default cannot stall
 provider selection. Direct `bedrock.NewClient` construction also retains the
 60-minute default, while caller-owned chain clients remain untouched. This
 keeps provider-specific operation policy in the provider module while explicit
 positive application configuration retains precedence. Zero and negative
 durations mean unset; they do not request an unbounded provider call.
+
+Root AI constructors (`NewClient`, `NewRequestClient`, `NewChainClient` and
+managed `ProviderEntry` values) validate `TRUVAG3_AI_TIMEOUT` as a positive Go
+duration. Positive code wins over environment, then the applicable default.
+Invalid present environment values fail construction even with a code override.
+Direct provider constructors/factory calls and injected clients remain caller-owned;
+`core.Config.LoadFromEnv` does not populate this field. This total provider-call
+deadline covers retries and streaming. Earlier caller, phase, auxiliary-stage
+or injected HTTP-client deadlines still win. Token ceilings do not imply a
+completion-time guarantee: no throughput-derived or idle-only deadline is added,
+and deadline/cancellation failover remains unchanged.
 
 The Bedrock-specific embedding helper defaults to Titan Text Embeddings V2
 (`amazon.titan-embed-text-v2:0`, 1024 dimensions by default). The exported
@@ -1875,7 +1962,7 @@ import (
 // In factory.go (BROKEN)
 func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
     var logger core.Logger  // Nil!
-    return NewClient(apiKey, baseURL, logger)
+    return NewClient(apiKey, baseURL, config.ProviderAlias, logger)
 }
 ```
 
@@ -1890,7 +1977,7 @@ func (f *Factory) Create(config *ai.AIConfig) core.AIClient {
             logger = cal.WithComponent("framework/ai")
         }
     }
-    return NewClient(apiKey, baseURL, logger)
+    return NewClient(apiKey, baseURL, config.ProviderAlias, logger)
 }
 ```
 
@@ -2014,6 +2101,12 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.23 | 2026-10-09 | Close decoded-success log parity gap with successful-attempt duration; preserve retry, payload and metric ownership; refresh provider factory/constructor examples against the request-aware implementation |
+| 1.22 | 2026-10-08 | Bound derived reasoning headroom before Strict intent checks; retain over-cap base rejection and final capacity validation; add capacity-only native GPT-5.6 Sol and routed GPT-5.6 Luna rows; report/fingerprint the bounded-headroom contract |
+| 1.21 | 2026-10-08 | Provider-reviewed default-reasoning budget fact with report/cache identity; root AI timeout environment wiring and fail-fast validation; effort, routing, caller deadlines and retry/failover contracts preserved |
+| 1.20 | 2026-10-08 | Fingerprint active reasoning multipliers; unify exact numeric token validation/reporting; prevent legacy token-product overflow; preserve raw wire numeric representations |
+| 1.19 | 2026-10-08 | General request default 5m; default reasoning multiplier 3x including supported OpenRouter effort; reviewed exact-model output ceilings through Compatible/Strict rules; explicit scaling, retry ownership and final-wire reporting preserved |
+| 1.18 | 2026-10-07 | Cost-focused Anthropic Haiku 5.5 and Opus 5.5 aliases; reuse sampling policy for Haiku, preserve overrides and budgets, document Vertex mapping and adaptive-thinking migration |
 | 1.17 | 2026-10-07 | Set native OpenAI and OpenRouter fast aliases to GPT-6 Luna; reuse existing compatibility policies, preserve explicit/environment overrides and budgets, cover shared Azure semantic resolution |
 | 1.16 | 2026-10-07 | Change only OpenAI's general default alias to GPT-6.1 Sol; preserve other roles/providers, environment and concrete overrides, and document inherited-call/Azure semantic-resolution impact |
 | 1.15 | 2026-10-07 | Native GPT-6.1 Sol family classification (hyphen-suffixed variants/snapshots) and independent exact OpenRouter contract; routed v3 guard preserves typed/named maps, validates reasoning siblings and rejects disabled reasoning/conflicting controls; preserve overrides, privacy, reports and unrelated provider behavior |

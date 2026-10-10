@@ -21,8 +21,8 @@ and [shared memory](#shared-memory).
 
 | What | Default | Env Var | Programmatic Override |
 |------|---------|---------|----------------|
-| Plan generation output | 15000 | `TRUVAG3_PLAN_MAX_TOKENS` | `WithPlanAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
-| Synthesis output | 5000 | `TRUVAG3_SYNTHESIS_MAX_TOKENS` | `WithSynthesisAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
+| Plan generation output | 20000 | `TRUVAG3_PLAN_MAX_TOKENS` | `WithPlanAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
+| Synthesis output | 30000 | `TRUVAG3_SYNTHESIS_MAX_TOKENS` | `WithSynthesisAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
 | Synthesis temperature | 0.5 | `TRUVAG3_SYNTHESIS_TEMPERATURE` | `WithSynthesisAIOptions(&AIOptionsOverride{Temperature: Float32Ptr(t)})` |
 | Plan model override | — | `TRUVAG3_PLAN_MODEL` | `WithPlanAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
 | Synthesis model override | — | `TRUVAG3_SYNTHESIS_MODEL` | `WithSynthesisAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
@@ -37,8 +37,8 @@ and [shared memory](#shared-memory).
 
 | What | Default / Limit | Environment | Programmatic Override |
 |---|---|---|---|
-| General provider request timeout for direct `ai` constructors | 180s | `TRUVAG3_AI_TIMEOUT` is not read by `core.Config.LoadFromEnv` or direct `ai` constructors | `ai.WithTimeout(d)` |
-| Auto-detected client / framework-managed chain-entry timeout | 180s, including Bedrock | — | `ai.WithTimeout(d)` / `ai.WithChainTimeout(d)` |
+| General provider request timeout for root `ai` constructors | 300s | `TRUVAG3_AI_TIMEOUT` (positive Go duration; read by AI constructors, not `core.Config.LoadFromEnv`) | `ai.WithTimeout(d)` |
+| Auto-detected client / framework-managed chain-entry timeout | 300s, including Bedrock | `TRUVAG3_AI_TIMEOUT` | `ai.WithTimeout(d)` / `ai.WithChainTimeout(d)` |
 | Request-policy model selector glob | At most 256 bytes | — | `core.AIProviderSelector.Model` |
 | Heterogeneous chain entry name | 1–256 bytes; no surrounding whitespace or controls; unique within the chain | — | First argument to `ai.ProviderEntry` / `ai.ClientEntry` |
 | Heterogeneous `ProviderEntry` provider alias | 1–256 bytes; no surrounding whitespace or controls | — | Second argument to `ai.ProviderEntry` |
@@ -112,19 +112,25 @@ and [Titan Text Embeddings V2](https://docs.aws.amazon.com/bedrock/latest/usergu
 
 | Surface / family | Enforced behavior |
 |---|---|
-| Direct Anthropic and Vertex Claude: Opus 4.7/4.8, Sonnet 5, Fable 5, Mythos 5, Mythos Preview | Built-in policy omits `temperature`, `top_p`, and `top_k` |
+| Direct Anthropic and Vertex Claude: Haiku 5.5, Opus 4.7/4.8/5 (including 5.5), Sonnet 5, Fable 5, Mythos 5, Mythos Preview | Built-in policy omits `temperature`, `top_p`, and `top_k`; Haiku 4.5 pins retain sampling |
 | Azure OpenAI v1 reasoning families | Uses `max_completion_tokens`, top-level `reasoning_effort`, and reasoning-restricted sampling |
 | Azure OpenAI classic | Ordinary `max_tokens` profile only; reasoning-family requests are rejected because no classic reasoning contract is verified |
-| Stock OpenAI reasoning families | Uses `max_completion_tokens`; the default reasoning token multiplier is 5 |
+| Stock OpenAI reasoning families | Uses `max_completion_tokens`; multiplier 3 for active effective effort or reviewed model-default reasoning (exact IDs below) |
 | Native OpenAI GPT-6 family, including GPT-6.1 Sol | Efforts `low`, `medium`, `high`, `xhigh`, `max`; `none` only for original GPT-6 Sol and GPT-6 Luna, not GPT-6.1 Sol. Active/default reasoning rejects sampling/logprob and native Chat Completions tool controls after policy |
 | Exact OpenRouter `openai/gpt-6-luna` | Built-in temperature removal; Compatible reports adaptation, Strict requires acknowledgement for explicit values. Exact model row declares JSON object/schema and OpenAI-style reasoning |
-| Exact OpenRouter `openai/gpt-6.1-sol` | JSON object/schema and OpenAI-style reasoning; scoped temperature removal with the same Compatible/Strict semantics. Final validation accepts `low`, `medium`, `high`, `xhigh`, `max` or omitted effort; rejects `none`, noncanonical keys and remaining sampling/logprob controls. Budget remains exact; native tool restrictions are not copied to this routed contract |
+| Exact OpenRouter `openai/gpt-6.1-sol` | JSON object/schema and OpenAI-style reasoning; scoped temperature removal with the same Compatible/Strict semantics. Final validation accepts `low`, `medium`, `high`, `xhigh`, `max` or omitted effort; rejects `none`, noncanonical keys and remaining sampling/logprob controls. Supported active effort uses the configured multiplier; native tool restrictions are not copied to this routed contract |
 | Exact OpenRouter DeepSeek v4.1 Flash / GLM 5.3 Flash | JSON object supported by adapter capability rows; schema and reasoning style not declared |
 | `openai.ollama` non-reasoning models | Retains `max_tokens` and ordinary sampling; nested reasoning effort is emitted only when effort is set |
 
 Compatible policy mode reports built-in adjustments. Strict mode rejects a
 built-in adjustment to explicit request-aware intent unless application policy
 acknowledges the affected path.
+
+Anthropic `fast` now selects Haiku 5.5, and smart/code/vision select Opus 5.5.
+Their configured `max_tokens` remains exact and includes thinking, not just
+final text; small budgets can end before an answer. The alias migration does
+not raise budgets or impose effort. See the [Anthropic migration note](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#anthropic-october-2026-alias-refresh)
+for native-extra requirements, tokenizer changes and override/rollback options.
 
 GPT-6.1 Sol native matching also includes all hyphen-suffixed variants/snapshots;
 this includes `-pro` but does not certify its endpoint contract. Routed
@@ -140,14 +146,46 @@ is passed to OpenRouter for budget-to-effort mapping, not enforced as a local
 reasoning-token ceiling. Final `effort` plus `max_tokens` is rejected, including
 conflicts involving inherited effort. Application policy may remove a conflict.
 
-The default ×5 token multiplier applies only to a scaling reasoning profile
+The token multiplier defaults to **3×**; explicit **1×** keeps output caps exact.
+`TRUVAG3_AI_REASONING_TOKEN_MULTIPLIER` supplies the default unless a positive code
+option overrides it. Invalid explicit environment values or negative code values
+fail construction. Explicit
+scaling applies only to a scaling reasoning profile
 with effective nonempty effort other than `none`, including client/chain
-defaults inherited by calls that supply no effort. An empty effective effort
-or `none` leaves the configured budget unmultiplied. Explicit request-aware
+defaults inherited by calls that supply no effort. Reviewed exact native GPT-6
+Astra/Sol/Luna/GPT-6.1 Sol and routed Luna/Sol defaults also scale with absent
+effort, without adding a wire effort. Unknown defaults and `none` remain exact. Explicit request-aware
 `OmitAIParameter[string]()` also suppresses inherited effort and its multiplier;
 it leaves upstream default reasoning in control rather than requesting `none`.
-There is **no per-model output-token ceiling clamp**; developers must choose a budget/multiplier accepted by that
-model. No new model defaults or automatic model discovery were introduced.
+The OpenAI-compatible adapter uses a reviewed **128000** output-token capacity
+for exact native GPT-5.6 Sol/GPT-6 Astra/Sol/Luna/GPT-6.1 Sol and routed GPT-5.6 Luna/
+GPT-6 Luna/GPT-6.1 Sol IDs. GPT-5.6 rows add capacity only, not default reasoning.
+Added headroom for an in-capacity base is bounded in both policy modes:
+50000 × 3 → 128000, including Strict. Over-cap caller bases are clamped with a
+built-in report adjustment in Compatible mode; Strict rejects an unacknowledged
+explicit change. Final capacity validation also applies after application patches.
+This is provider capability data, not an operator-adjustable budget. Other models/variants remain unknown;
+no universal cap or remaining-context estimate is imposed. Supported OpenRouter
+portable effort and the reviewed defaults activate scaling; native-extra-only
+reasoning and unknown model/snapshot defaults remain exact. Azure default
+reasoning is not inferred.
+
+The provider timeout is a total deadline, not an idle timeout or a promise that
+the output cap can be exhausted. Positive code overrides the timeout environment;
+invalid present environment values fail construction. Raising it does not extend
+earlier phase, caller, auxiliary-stage or injected HTTP-client deadlines. Provider
+deadline errors remain terminal to chain failover; no automatic timeout scaling
+or new retry behavior is introduced. Configure longer bounded deadlines explicitly
+when measured latency warrants them.
+
+Changing an active multiplier changes the AI-output cache fingerprint, including
+preflight calls without a token count. A reviewed headroom limit also participates
+in active-scaling identity. Draft construction rejects multiplication overflow
+unless a reviewed limit safely bounds added headroom; legacy
+`openaiwire.BuildRequestBody` saturates at `math.MaxInt`, which
+is an integer safety boundary, not a provider limit. Numeric token patches
+must be positive integral values fitting Go `int`; JSON decimal/exponent
+notation is checked exactly and reported consistently without wire rewriting.
 
 Final/reasoning separation defaults on for compatible codecs. The legacy
 opt-in is code-only: `ai.WithReasoningContentFallback(true)` or
@@ -185,9 +223,9 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
 | Enabled | true | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | — |
-| Max phases per request | 5 | `TRUVAG3_ITERATIVE_MAX_PHASES` | — |
+| Max phases per request | 20 | `TRUVAG3_ITERATIVE_MAX_PHASES` | — |
 | Max total steps (all phases) | 200 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | — |
-| Configured phase budget (may be enlarged; see [Execution Limits](#execution-limits)) | 180s | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | — |
+| Configured phase budget (may be enlarged; see [Execution Limits](#execution-limits)) | 25m | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | — |
 | Max validation rounds | 4 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | Regen attempts after first validation failure; phase fails if exceeded |
 | Regeneration feedback | 16384 bytes | `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `IterativePlanning.RegenerationFeedbackMaxBytes`; effective value must be > 0 when validated. Encoded added correction context, not the full prompt |
 | Distinct prior validation errors retained per phase | 8 | — | Internal bounded history; the encoded feedback limit can omit entries earlier |
@@ -211,8 +249,8 @@ this is a structural invariant, not a tunable retry budget. Actual work resets i
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
 | Max parallel steps | 25 | `TRUVAG3_EXECUTION_MAX_CONCURRENCY` | `WithMaxConcurrency(n)` |
-| Delegation execution allowance | 120s | `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `WithStepTimeout(d)` |
-| Base outbound HTTP timeout | 600s | `TRUVAG3_ORCHESTRATION_TIMEOUT` | `WithTotalTimeout(d)` |
+| Delegation execution allowance | 15m | `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `WithStepTimeout(d)` |
+| Base outbound HTTP timeout | 20m | `TRUVAG3_ORCHESTRATION_TIMEOUT` | `WithTotalTimeout(d)` |
 | Execution-debug store write timeout | 5s | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `WithExecutionStoreWriteTimeout(d)` |
 | Request resource cleanup | 5s | `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` | `WithExecutionCleanupTimeout(d)`; explicit non-positive/invalid values fail startup in both config modes. Cancellation-independent, joined optional cleanup; providers honor context |
 
@@ -232,6 +270,16 @@ timeout and this delegation allowance, even when the plan contains no delegated
 call. Parent cancellation, the effective phase deadline, and the target server's
 write timeout remain independent limits. `TotalTimeout` does not impose an
 end-to-end workflow deadline; the caller/task context must supply that bound.
+
+The default hierarchy is AI request **5m**, delegation **15m + 5m HITL = 20m**,
+outbound HTTP **20m**, phase **25m**, and server write **35m**. The task worker's
+existing default is **30m**; direct orchestration calls use their caller's context,
+not an automatic 30m task deadline. These are nested ceilings, not additive time
+reservations. A late phase gets only the remaining parent time. Retries and chain
+failover also consume that remaining time; optional summarization/compaction keep
+their own shorter limits. A server write deadline bounds socket writes, not a
+durable workflow or a guaranteed cancellation of handler work. Ingress, callers,
+and delegated agents may impose shorter limits and must be configured separately.
 
 ## Scheduled Executor
 
@@ -273,8 +321,10 @@ conflicts fail validation.
 
 | What | Default | Env Var | Code Override |
 |------|---------|---------|---------------|
-| LLM debug TTL | 24h | `TRUVAG3_LLM_DEBUG_TTL` | `redisprovider.WithLLMDebugRetention(ttl, errorTTL)` |
-| LLM debug error TTL | 7d | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `redisprovider.WithLLMDebugRetention(ttl, errorTTL)` |
+| Execution debug TTL | 72h (3 days) | `TRUVAG3_EXECUTION_DEBUG_TTL` | `redisprovider.WithExecutionStoreConfig(config)` |
+| Execution debug error TTL | 72h (3 days) | `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `redisprovider.WithExecutionStoreConfig(config)` |
+| LLM debug TTL | 72h (3 days) | `TRUVAG3_LLM_DEBUG_TTL` | `redisprovider.WithLLMDebugRetention(ttl, errorTTL)` |
+| LLM debug error TTL | 72h (3 days) | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `redisprovider.WithLLMDebugRetention(ttl, errorTTL)` |
 | HITL checkpoint TTL | 24h | `TRUVAG3_HITL_CHECKPOINT_TTL` | `redisprovider.WithCheckpointTTL(d)` |
 | Workflow state TTL | 24h | `TRUVAG3_WORKFLOW_STATE_TTL` | `redisprovider.WithWorkflowStateTTL(d)` |
 | Task queue retry attempts | 3 | `TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS` | `redisprovider.WithTaskQueueRetryPolicy(n, d)` |
@@ -284,8 +334,10 @@ conflicts fail validation.
 | Schedules per deployment | 10000; positive | `TRUVAG3_SCHEDULER_MAX_SCHEDULES` | `redisprovider.WithMaxSchedules(n)` |
 
 The preset remains environment-free under `NewOptions`. Deployment values are
-loaded explicitly through `redisprovider.LoadOptionsFromEnvironment`, and later
-`ConfigureOptions` calls retain code-over-environment precedence.
+loaded through `redisprovider.LoadOptionsFromEnvironment` (automatically by
+`NewDefaultBackends` for selected roles). Later `ConfigureOptions` calls retain
+code-over-environment precedence for valid values. Invalid present durations
+fail loading; unselected roles' settings are ignored by `NewDefaultBackends`.
 
 ## Continuation Prompt Limits
 
@@ -294,7 +346,7 @@ loaded explicitly through `redisprovider.LoadOptionsFromEnvironment`, and later
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
 | Non-JSON floor preview (per-step) | 10000 (~2500 tokens) | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | — |
-| Aggregate digest budget (whole `<completed_steps>`) | 32768 (32 KB) | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | — |
+| Aggregate digest budget (whole `<completed_steps>`) | 196608 (192 KiB) | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | — |
 | Max non-JSON → distiller escalations / phase | 8 (`0` disables) | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | — |
 | Digest array head-sample size | 3 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | — |
 | Digest inline-string cap (elision threshold) | 200 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | — |
@@ -355,8 +407,8 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
 | Enabled | true | `TRUVAG3_RESULT_TRIM_ENABLED` | `WithResultTrimming(bool, n)` |
-| Per-result max | 16384 (16 KB) | `TRUVAG3_RESULT_TRIM_MAX_BYTES` | `WithResultTrimming(bool, n)` |
-| Total synthesis results | 32768 (32 KB) | `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | — |
+| Per-result max | 65536 (64 KiB) | `TRUVAG3_RESULT_TRIM_MAX_BYTES` | `WithResultTrimming(bool, n)` |
+| Total synthesis results | 196608 (192 KiB) | `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | — |
 | Micro-resolution source | 65536 (64 KB) | `TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES` | — |
 | Agent input per-param | 0 (disabled) | `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | — |
 | Schema mapping threshold | 16384 (16 KB) | `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` | — |
@@ -467,7 +519,7 @@ They are distinct from the implemented [retry budgets](#retry-budgets) above.
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
 | Read timeout | 300s | `TRUVAG3_HTTP_READ_TIMEOUT` | — |
-| Write timeout | 300s | `TRUVAG3_HTTP_WRITE_TIMEOUT` | — |
+| Write timeout | 35m | `TRUVAG3_HTTP_WRITE_TIMEOUT` | — |
 | Idle timeout | 120s | `TRUVAG3_HTTP_IDLE_TIMEOUT` | — |
 | Max header bytes | 1 MB | `TRUVAG3_HTTP_MAX_HEADER_BYTES` | — |
 | Shutdown timeout | 10s | `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT` | — |
@@ -506,7 +558,8 @@ Sweep interval for the in-process eviction sweeper used by `Framework.AutoRegist
 | Enrichment view budget (4 encoded bytes/token) | 2000 (8000 bytes) | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` | `WithEnrichmentMaxTokens(n)` (direct hook) |
 | Recent events limit | 20 | `TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT` | `WithEnrichmentRecentEventsLimit(n)` |
 | Summarizer model override | — | `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `WithSummarizerModel(m)` |
-| Event summary output tokens per call | Calculated: max(300, 150 × batch size) | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` | `WithSummarizerMaxTokens(n)` |
+| Event summary output tokens per call | 10000 | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` | `WithSummarizerMaxTokens(n)` |
+| Stored event-summary prose per entry | 1024 bytes | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_SUMMARY_MAX_BYTES` | `WithSummarizerSummaryMaxBytes(n)`; minimum 32; rune-safe explicit shortening; exact entities/raw debug preserved |
 | Event summary tokens per admitted step | 150, with 300-token call floor | None | `WithSummarizerTokensPerStep(n)`; positive; a fixed max-tokens override wins |
 | Event summary admitted steps per call | 20 | None | `WithSummarizerMaxStepsPerBatch(n)`; positive; excess steps use heuristic fallback, not extra batches |
 | Event summary invocation timeout | 2m | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` | `WithSummarizerTimeout(d)`; positive; earlier parent deadline wins |
@@ -646,11 +699,11 @@ typed bounded reason.
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
 | LLM debug enabled | false | `TRUVAG3_LLM_DEBUG_ENABLED` | `WithLLMDebug(bool)` |
-| LLM debug TTL | 24h | `TRUVAG3_LLM_DEBUG_TTL` | `WithLLMDebugTTL(d)` |
-| LLM debug error TTL | 7d | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `WithLLMDebugErrorTTL(d)` |
+| LLM debug TTL | 72h (3 days) | `TRUVAG3_LLM_DEBUG_TTL` | `WithLLMDebugTTL(d)` |
+| LLM debug error TTL | 72h (3 days) | `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `WithLLMDebugErrorTTL(d)` |
 | Execution store enabled | false | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | — |
-| Execution store TTL | 24h | `TRUVAG3_EXECUTION_DEBUG_TTL` | `WithExecutionStoreTTL(d)` |
-| Execution store error TTL | 7d | `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `WithExecutionStoreErrorTTL(d)` |
+| Execution store TTL | 72h (3 days) | `TRUVAG3_EXECUTION_DEBUG_TTL` | `WithExecutionStoreTTL(d)` |
+| Execution store error TTL | 72h (3 days) | `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `WithExecutionStoreErrorTTL(d)` |
 | Conversation execution query limit | 1000 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `ExecutionStoreConfig.ConversationQueryLimit` |
 | Conversation index scan limit | 5000 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `ExecutionStoreConfig.ConversationIndexScanLimit` |
 
@@ -683,7 +736,7 @@ eligibility. Other skill environment values fill only code fields left unset.
 | Resource catalog | 2000 tokens | `TRUVAG3_SKILL_RESOURCE_CATALOG_TOKEN_BUDGET` | `SkillConfig.Limits.ResourceCatalogTokenBudget` |
 | Resources per phase / execution | 2 / 8 | `TRUVAG3_SKILL_MAX_RESOURCES_PER_PHASE`, `TRUVAG3_SKILL_MAX_RESOURCES_PER_EXECUTION` | `SkillConfig.Limits` |
 | Selector output | 512 tokens | `TRUVAG3_SKILL_RESOLUTION_MAX_TOKENS` | `SkillConfig.Limits.ResolutionMaxTokens` |
-| Synthesis skill projection | 2048 tokens | `TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET` | `SkillConfig.Limits.SynthesisTokenBudget` |
+| Synthesis skill projection | 6000 tokens | `TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET` | `SkillConfig.Limits.SynthesisTokenBudget` |
 | Effective-input allowance | disabled (`0`); skills use at most 10% when set | `TRUVAG3_SKILL_EFFECTIVE_INPUT_TOKEN_BUDGET` | `SkillConfig.Limits.EffectiveInputTokenBudget` |
 | Registry operation timeout | 5s | `TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT` | `SkillConfig.Limits.RegistryReadTimeout` |
 | Resource AI attempt timeout | 0s (inherit parent) | `TRUVAG3_SKILL_RESOURCE_SELECTION_ATTEMPT_TIMEOUT` | `SkillConfig.Limits.ResourceSelectionAttemptTimeout`; resource v2 only, two attempts total |
@@ -768,9 +821,9 @@ operator-tunable deployment limit.
 
 **Complex multi-tool requests (truncation issues):**
 ```bash
-export TRUVAG3_PLAN_MAX_TOKENS=20000
+export TRUVAG3_PLAN_MAX_TOKENS=60000
 export TRUVAG3_TIERED_SELECTION_MAX_TOKENS=3000
-export TRUVAG3_SYNTHESIS_MAX_TOKENS=10000
+export TRUVAG3_SYNTHESIS_MAX_TOKENS=40000
 ```
 
 ### Event-summary invocation budget
@@ -792,8 +845,8 @@ export TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS=4000
 
 **Large API responses (data overflow):**
 ```bash
-export TRUVAG3_RESULT_TRIM_MAX_BYTES=32768
-export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=65536
+export TRUVAG3_RESULT_TRIM_MAX_BYTES=131072
+export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=262144
 export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=131072
 ```
 

@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.20
+**Version**: 1.21
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -139,7 +139,7 @@ field.
 ```go
 // ✅ Justified external dependencies
 require (
-    github.com/redis/go-redis/v9 v9.22.0  // Redis implementation of discovery
+    github.com/redis/go-redis/v9 v9.23.0  // Redis implementation of discovery
     github.com/google/uuid v1.6.0          // ID generation
     github.com/stretchr/testify v1.11.1    // Testing only
 )
@@ -300,6 +300,13 @@ func WithDiscovery(enabled bool, provider string) Option {
 Precedence applies only to compatible representations. Contradictory Redis
 topology forms—for example `REDIS_URL` plus structured mode/address fields—fail
 validation instead of silently overriding one another.
+
+`DefaultConfig` provides a 35-minute HTTP server write allowance and a
+five-minute AI config timeout. The write deadline bounds response socket writes,
+not a durable task lifetime or guaranteed handler cancellation. The AI timeout
+field is not automatically wired to an AI client, and its env tag is not loaded;
+use the AI module's supported timeout options. The task-worker default remains
+30 minutes. Application overrides and earlier context deadlines stay authoritative.
 
 ---
 
@@ -1221,6 +1228,7 @@ for composition, panic behavior, and the approved-checkpoint resume boundary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.21 | 2026-10-08 | Generous HTTP write default 35m and AI config timeout 5m; retain explicit overrides and existing 30m worker-task bound |
 | 1.20 | 2026-10-04 | Optional AI response finish/source/reasoning facts and separate stream reasoning channel; legacy dispatchers preserve supplied facts |
 | 1.19 | 2026-10-02 | Additive optional error facts on StepSummaryInput; unchanged summarizer interface and opaque event provenance |
 | 1.18 | 2026-09-30 | Additive observed episodic read-health contract; no provider dependency or change to legacy fail-open API |

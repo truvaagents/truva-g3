@@ -398,7 +398,7 @@ These environment variables **must** be set for the framework to function:
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `60s` | HTTP client timeout for orchestrator tool/agent calls. For long-running AI workflows, set higher values (e.g., `5m`, `10m`). Uses Go duration format. |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `20m` | Base HTTP client timeout for orchestrator tool/agent calls; earlier phase/parent deadlines still apply. Uses Go duration format. |
 
 #### Feature Flags (Opt-In)
 

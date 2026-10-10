@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — three-day debug retention
+
+- Align the standalone Redis LLM recorder with orchestration: successful and
+  failed records both default to 72 hours (3 days), instead of 24 hours and
+  7 days respectively. Preserve explicit overrides and existing longer or
+  persistent lifetimes; no existing keys are retroactively rewritten.
+
 ## Unreleased — singleton teardown
 
 - Use a typed atomic registry pointer and serialize public shutdown, including

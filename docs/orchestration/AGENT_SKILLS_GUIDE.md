@@ -1678,7 +1678,7 @@ recipes.
 | `TRUVAG3_SKILL_MAX_RESOURCES_PER_PHASE` | `2` | Admitted resources at one boundary |
 | `TRUVAG3_SKILL_MAX_RESOURCES_PER_EXECUTION` | `8` | Distinct resources across the execution |
 | `TRUVAG3_SKILL_RESOLUTION_MAX_TOKENS` | `512` | Selector output ceiling |
-| `TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET` | `2048` | Skill projection at synthesis |
+| `TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET` | `6000` | Skill projection at synthesis |
 | `TRUVAG3_SKILL_EFFECTIVE_INPUT_TOKEN_BUDGET` | `0` | Optional model-context allowance; see below |
 | `TRUVAG3_SKILL_REGISTRY_READ_TIMEOUT` | `5s` | Each runtime registry operation |
 

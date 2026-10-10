@@ -1,6 +1,54 @@
 # Changelog
 
+## Unreleased — three-day debug retention
+
+- Default successful and failed execution records and LLM debug records to
+  72 hours (3 days). Success retention increases from 24 hours; error retention
+  decreases from 7 days. Explicit overrides and longer existing retention floors
+  remain supported. This changes defaults for newly constructed stores, not
+  existing Redis keys or running deployments. Checkpoint, workflow-state and
+  memory retention are unchanged.
+- Forward `TRUVAG3_EXECUTION_DEBUG_TTL` and
+  `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` into the Redis preset's execution store.
+  Invalid present durations fail loading for the selected execution role;
+  explicit provider options still override valid environment values. Pure
+  constructors, debug enablement and retention-floor behavior are unchanged.
+
+## Unreleased — terminal attribution and summary deadlines
+
+- Attribute returned and stored terminal execution results to the owning request
+  segment with copy-on-write metadata, including early failure publishers.
+- Bound builtin event-summary AI calls to a configurable 2m default; distinguish
+  child timeout from parent cancellation and retain successful late responses.
+- These attribution and summary-deadline changes preserve plan validation,
+  regeneration and executor behavior; other changes are listed separately below.
+
+## Unreleased — framework review corrections
+
+- Keep distinct validation errors in bounded recency order when a regeneration
+  repeats an earlier failure, retaining feedback about intervening errors.
+- Recognize wrapped/joined partial-stream errors, preserving delivered content
+  and available usage without retrying or marking the lifecycle successful.
+  Interrupted synthesis calls now record failure and retain their original cause
+  in debug storage and response errors. Delivery distinguishes interruption,
+  cancellation and deadline expiry; its span receives bounded failure evidence.
+- Preserve same-attempt provider request-policy evidence in authoritative
+  planning, correction, tiered-selection and synthesis debug records.
+- Deduplicate admitted memory detail by domain and event ID, matching storage
+  identity; equal custom IDs in different domains no longer hide each other.
+
 ## Unreleased — compatibility and adoption clarification
+
+- Generous defaults: 20000 planning / 30000 synthesis output tokens; 6000
+  synthesis skill-input tokens; 20 phases at 25m; 15m delegation execution
+  allowance; 20m outbound HTTP; 64 KiB individual and 192 KiB aggregate result
+  budgets. Continuation totals also default to 192 KiB. Parent deadlines and
+  explicit overrides win; these ceilings are not reservations or model-limit
+  guarantees. Default configuration/skill-budget fingerprints change accordingly.
+- Event summaries default to 10000 output tokens per call. Explicit
+  `WithSummarizerTokensPerStep` retains calculated budgeting; explicit fixed
+  max-tokens wins regardless of option order. Parsing and fail-open semantics
+  are unchanged. These larger caps may increase latency/cost and retained context.
 
 - Explicit structured `retryable:false` stops all same-step resends and
   correction. Eligible non-transient 4xx may be corrected but are no longer
@@ -179,6 +227,10 @@
 
 ## Unreleased
 
+- Separate event-summary generation allowance from stored prose: configurable
+  1024-byte per-summary default, rune-safe shortening marker and observable
+  counts, with raw debug completions and exact entity IDs preserved.
+
 - Compact request-local memory event provenance into self-contained tuples with
   a budgeted field legend and `event-detail/v1` view identity in hook effects and
   traces. Preserve exact admitted IDs, named entity fields, section priority and
@@ -298,11 +350,3 @@ request-local atomicity, and separate advisory debug indexes.
 The subsequent API cleanup does not change the new canonical key schema
 further. This is not compatibility with the v0.4.0 numbered-DB layout. See the
 [root changelog](../CHANGELOG.md) for the development-only cleanup authorization.
-
-### Pending-work completion — 2026-10-01
-
-- Attribute returned and stored terminal execution results to the owning request
-  segment with copy-on-write metadata, including early failure publishers.
-- Bound builtin event-summary AI calls to a configurable 2m default; distinguish
-  child timeout from parent cancellation and retain successful late responses.
-- Preserve plan validation, regeneration and executor behavior unchanged.

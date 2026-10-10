@@ -1798,13 +1798,16 @@ Decode-aware AI provider retries reuse the existing `ai_request_retry`,
 `ai_request_retry_wait`, `ai_request_recovery` and `ai_request_final_failure`
 operations. HTTP-200 decoded errors are classified independently of the real
 HTTP status. Retry logs contain bounded error classification, attempt counts and
-delay, not prompts, response bodies or credentials. The decoded path emits an
-`ai_request_recovery` log after successful retry; earlier failed content remains
-failure evidence. **Current parity gap:** unlike the transport-only helper, a
-first-attempt decoded success does not emit the `ai_http_success` Debug log, and
-its recovery log omits `duration_ms`. Attempt spans and logical response
-instrumentation remain available; do not depend on those two log fields/events
-until that separate follow-up is implemented.
+delay, not prompts, response bodies or credentials. Both retry paths emit one
+`ai_http_success` Debug log for a first-attempt success, with `status_code` and
+`duration_ms`, or one `ai_request_recovery` Info log after a successful retry,
+with `successful_attempt`, `total_attempts` and `duration_ms`. The duration is
+for the successful attempt only, excluding earlier attempts and retry waits.
+For decoded attempts it includes response consumption and body closure and
+matches that attempt span's duration; transport-only attempts end at response
+headers. A decoded error or partial-stream failure does not emit a success log.
+Earlier failed content remains failure evidence. These context-aware logs
+preserve request/trace correlation without adding response payloads.
 Available attempt usage and validated response IDs live on owned attempt spans,
 not additional logical request/token counters or metric labels. This applies to
 adapters adopting the shared decoded-attempt loop; it does not change other
@@ -1816,6 +1819,18 @@ adjustment retained. It does not increment degraded-translation warning metrics
 or add the degraded event. Explicit unsupported options and legacy native-extra
 paths retain their existing error/warning behavior; this distinction does not
 change provider routing or retry budgets.
+
+Reviewed model-default reasoning headroom is recorded in the existing request
+report as `source=wire-profile`, `rule=model-default-reasoning-headroom-v1`.
+It changes the policy fingerprint and effective token maximum without adding
+an effort field, a degraded-translation warning, a new metric label or a raw
+payload log. Multiplier 1 preserves exact budgets and emits no scale adjustment.
+Bounding added headroom uses the same metadata-only report surface with
+`source=wire-profile`, `rule=reasoning-headroom-ceiling-v1`, `action=cap`.
+It is distinct from the `built-in-rule` / `model-output-ceiling@1` adjustment
+for an over-cap base budget in Compatible mode. No additional warning/metric
+is emitted for ordinary headroom bounding; effective wire limits stay visible
+in the existing request report.
 
 When telemetry is enabled, framework logs emit
 `truvag3.framework.operations`. Labels have two sources:
@@ -2628,6 +2643,10 @@ Following these guidelines ensures your logs are useful in production, easy to s
 - **[core/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/core/interfaces.go)** - Logger interface and `ComponentAwareLogger` interface definitions
 
 ### Bounded event-summary failures
+
+Successful `event_summarization` logs include `summaries_shortened` and
+`summary_max_bytes` when applying the separate stored-summary prose limit.
+Counts describe derived text only; structured entity IDs remain exact.
 
 The existing `event_summarization` operation distinguishes `summary_timeout`
 (child deadline), `parent_cancelled`, and `llm_unavailable`. Logs keep request ID,

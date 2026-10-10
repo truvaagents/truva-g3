@@ -125,14 +125,14 @@ Defaults that matter most (full tables in the [Limits Cheatsheet](../reference/L
 | Setting | Default | Env Var |
 |---|---|---|
 | Result trimming enabled | `true` | `TRUVAG3_RESULT_TRIM_ENABLED` |
-| Per-result trim budget | 16 KB | `TRUVAG3_RESULT_TRIM_MAX_BYTES` |
+| Per-result trim budget | 64 KiB | `TRUVAG3_RESULT_TRIM_MAX_BYTES` |
 | Distillation enabled | `true` | `TRUVAG3_RESULT_DISTILL_ENABLED` |
 | Distill trigger size | 16 KB | `TRUVAG3_RESULT_DISTILL_THRESHOLD` |
 | Distill target output | 4 KB | `TRUVAG3_RESULT_DISTILL_TARGET` |
 | Distill model | `fast` alias | `TRUVAG3_RESULT_DISTILL_MODEL` |
 | Map-reduce trigger (tokens) | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` |
 | Map-reduce trigger (bytes) | `0` (disabled) | `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` |
-| Continuation aggregate budget | 32 KB | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` |
+| Continuation aggregate budget | 192 KiB | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` |
 | Continuation non-JSON floor | 10000 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` |
 
 > All byte budgets are integers in bytes (16 KB = `16384`). All values are env-tunable without a code change.
@@ -147,8 +147,8 @@ It runs in several spots, each with its own budget:
 
 | Budget | Default | Env Var | Purpose |
 |---|---|---|---|
-| Per-result cap | 16 KB | `TRUVAG3_RESULT_TRIM_MAX_BYTES` | per-result ceiling when **several** results share one synthesis prompt (multi-result allocation) |
-| Total prompt | 32 KB | `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | all results combined in one synthesis prompt — and the per-call budget when a **single** result is processed |
+| Per-result cap | 64 KiB | `TRUVAG3_RESULT_TRIM_MAX_BYTES` | per-result ceiling when **several** results share one synthesis prompt (multi-result allocation) |
+| Total prompt | 192 KiB | `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | all results combined in one synthesis prompt — and the per-call budget when a **single** result is processed |
 | Micro-resolution source | 64 KB | `TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES` | source data fed to parameter micro-resolution / semantic retry |
 | Agent input per-param | **0 (no cap)** | `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | tool→tool data flow |
 | Schema-mapping threshold | 16 KB | `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` | switch micro-resolution to schema-guided mapping above this |
@@ -261,7 +261,7 @@ Digests are **lossy on values but complete on structure**, and that's deliberate
 
 ### 6.3 The budget: greedy recency-fill
 
-`TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` (32 KB) is a **target** that drives eviction — not a hard cap. The fill rule:
+`TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` (192 KiB) is a **target** that drives eviction — not a hard cap. The fill rule:
 
 - **Failed steps are always kept** — they carry a lot of signal but take little space (they're short `[FAILED: …]` markers). They count against the budget but are never evicted.
 - **Successful steps fill newest-first** until the budget is spent; older ones are evicted with a `[showing N of M completed steps]` note (they remain referenceable by step-ID at execution).
@@ -278,7 +278,7 @@ Not every result is JSON (logs, markdown, CSV). A non-JSON result can't be diges
 
 | Knob | Default | Env Var | What it controls |
 |---|---|---|---|
-| Aggregate budget | 32768 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | Soft byte target before enclosing prompt encoding; failed steps and the newest successful step are retained, with markers allowed beyond the target |
+| Aggregate budget | 196608 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | Soft byte target before enclosing prompt encoding; failed steps and the newest successful step are retained, with markers allowed beyond the target |
 | Non-JSON floor | 10000 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | floor-preview size for a non-JSON step (JSON steps are digested, not floored) |
 | Max escalations | 8 (`0` disables) | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | newest non-JSON steps that may escalate to the distiller per phase |
 | Array sample | 3 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | head-sample size for arrays in a digest |
@@ -445,7 +445,7 @@ export TRUVAG3_RESULT_DISTILL_DEADLINE=30s     # fall back to floor/partial soon
 
 **"Continuation prompts evicting too many steps on big fan-outs."**
 ```bash
-export TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS=65536   # larger aggregate budget
+export TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS=262144  # larger aggregate budget (256 KiB)
 ```
 
 ---

@@ -73,7 +73,7 @@ response, _ := client.GenerateResponse(ctx, "Hello AI!", nil)
 | **Request-Aware Client** | Presence-aware parameters, policy, reports, and enterprise hooks | `ai.NewRequestClient(ai.WithProvider("openai"))` |
 | **Heterogeneous Chain** | Independently configured or injected failover entries | `ai.NewChain(ai.ProviderEntry(...), ai.ClientEntry(...))` |
 | **Provider Aliases** | Clean identifiers with auto-configuration | `openai.groq` auto-configures Groq endpoint and API key |
-| **Model Aliases** | Portable model names | `smart` → `gpt-5.6-sol` (OpenAI), `claude-opus-5` (Anthropic) |
+| **Model Aliases** | Portable model names | `smart` → `gpt-5.6-sol` (OpenAI), `claude-opus-5-5` (Anthropic) |
 | **Env Overrides** | Runtime model configuration | `TRUVAG3_OPENAI_MODEL_SMART=gpt-4.1` overrides the "smart" alias |
 
 **Failover behavior**: Authentication errors (401) **allow failover** because each provider has its own API key. True client errors (400, malformed input) **do not failover** because the same input would fail everywhere.
@@ -267,9 +267,16 @@ included in TruvaG3's normalized text response.
 An explicitly selected standalone Bedrock client defaults to a 60-minute
 request timeout, as does a client created directly with
 `bedrock.NewClient`. Auto-detected clients and framework-managed failover-chain
-entries retain the failover-safe 180-second framework default. Explicit
-positive `ai.WithTimeout` or `ai.WithChainTimeout` values win. Zero and
-negative values mean unset; they do not disable request deadlines.
+entries retain the failover-safe 300-second framework default. Explicit
+positive `ai.WithTimeout` or `ai.WithChainTimeout` values win over
+`TRUVAG3_AI_TIMEOUT`, then the applicable default. Root AI constructors and
+managed entries validate that environment value as a positive Go duration;
+invalid present values fail even with a code override. Direct provider
+constructors/factory calls and injected clients remain caller-owned. Nonpositive
+code durations mean unset, not unbounded. Earlier caller, phase, auxiliary-stage
+and injected HTTP-client deadlines still win. The provider deadline covers the
+whole call including retries/streaming; large token caps do not guarantee
+completion within it, and deadline errors still stop chain failover.
 
 `GetEmbeddings` is a Bedrock-specific, single-text helper. It uses
 `amazon.titan-embed-text-v2:0` and supports validated per-call model,
@@ -389,12 +396,13 @@ These are `NewClient` defaults:
 | Setting | Default |
 |---------|---------|
 | Provider | "auto" (auto-detects) |
-| Timeout | 180 seconds; explicitly selected standalone Bedrock declares 60 minutes |
+| Timeout | 300 seconds; explicitly selected standalone Bedrock declares 60 minutes |
 | MaxRetries | 3 |
 | Temperature | 0.7 |
 | MaxTokens | 1000 |
 
-`NewChainClient` uses a 180-second entry timeout and defaults each provider's
+`NewChainClient` defaults to a 300-second entry timeout (code/environment
+overrides described above) and defaults each provider's
 retry budget to `0`. Independently constructed `ProviderEntry` values use the
 single-client default of `3`; `ClientEntry` retains the injected client's policy.
 Override deliberately with `WithChainMaxRetries` (legacy chain) or
@@ -991,16 +999,76 @@ groq, _ := ai.NewClient(
 )
 ```
 
+### Anthropic October 2026 alias refresh
+
+The `anthropic` catalog selects `claude-haiku-5-5` for `fast` and
+`claude-opus-5-5` for `smart`, `code`, and `vision`. As checked on October 7,
+2026, standard input/output prices per million tokens are:
+
+| Selection | Previous | New |
+|---|---|---|
+| Haiku 4.5 → Haiku 5.5, prompts up to 100k tokens | $1 / $5 | $0.10 / $0.50 |
+| Haiku 4.5 → Haiku 5.5, prompts over 100k tokens | $1 / $5 | $0.50 / $2.50 |
+| Opus 5 → Opus 5.5 | $5 / $25 | $4 / $20 |
+
+These are per-token rates, not measured workload savings. Sonnet 5.5 and Fable
+5.1 have the same standard input/output rates as their predecessors (with lower
+cache-read prices), so `default=claude-sonnet-5` and `premium=claude-fable-5`
+remain unchanged in this cost-focused refresh. See [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing).
+
+Compatibility and rollout considerations:
+
+- Haiku 5.5 uses adaptive thinking by default. Thinking consumes `max_tokens`;
+  its newer tokenizer also changes token counts. Small budgets can produce no
+  final text. The adapter preserves configured budgets; benchmark your workload
+  rather than treating the alias as a latency or spending guarantee.
+- Existing built-in request rules now omit sampling fields for Haiku 5.5,
+  as they already do for Opus 5/5.5. Compatible mode records the adjustment;
+  Strict mode requires application acknowledgement for explicit sampling intent.
+  Haiku 4.5 pins still retain sampling support.
+- Both new selections reject manual-budget thinking. Opus 5.5 also rejects
+  disabled thinking and forced native tool choices. Provider-native extras
+  are passed through, not silently migrated.
+  Review them when adopting these aliases. The framework's ordinary text/JSON
+  prompting does not impose native tool calls or a thinking configuration.
+- To set native effort, use `AIOptions.Extra` with
+  `map[string]interface{}{"output_config": map[string]interface{}{"effort": "low"}}`
+  or an application request-policy patch at `/output_config/effort`. The portable
+  presence-aware reasoning-effort field remains unsupported by this adapter.
+- Concrete model pins and nonempty `TRUVAG3_ANTHROPIC_MODEL_<ALIAS>` overrides
+  retain precedence. For rollback, set `TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5`
+  and the affected Opus aliases to `claude-opus-5`. `anthropic.vertex` shares
+  these semantic aliases: update application-owned publisher mappings or pin
+  previous models. Bedrock and OpenRouter catalogs are unchanged.
+
+Read the [Haiku migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide)
+and [Opus migration guide](https://platform.claude.com/docs/en/models/opus-5-5/migration-guide)
+for native conversation/tool migrations. Unit tests and recording transports
+cover alias/override resolution, sampling policies and sync/stream behavior.
+
+A live local-Kind check on October 7, 2026 rebuilt `devops-chat-agent` from the
+workspace with Anthropic-only credentials. Execution
+`orch-1791411248571291407` completed one read-only deployment inspection in
+17.76 seconds: Haiku 5.5 served skill activation/resource selection and event
+summarization, Opus 5.5 served planning and streaming synthesis, and unchanged
+Sonnet 5 served capability selection and knowledge extraction. All eight
+recorded provider calls succeeded; the final replica counts matched Kubernetes.
+The event summary reached its existing 300-token budget and needed partial-array
+recovery (one complete entry retained). This verifies basic live compatibility,
+not adequate budgets for all tasks, latency guarantees, every account/region,
+native tool calling, or live Vertex support. Temporary planning/synthesis model
+overrides were removed after the check.
+
 ### Standard Model Aliases
 
 | Alias | Purpose | OpenAI | Anthropic | OpenRouter | Gemini | DeepSeek | Groq | Together | xAI | Qwen |
 |-------|---------|--------|-----------|------------|--------|----------|------|----------|-----|------|
 | **`default`** | General use, balanced | `gpt-6.1-sol` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `deepseek-ai/DeepSeek-V4-Flash-0731` | `grok-3-beta` | `qwen-plus` |
-| **`fast`** | Latency-oriented catalog choice | `gpt-6-luna` | `claude-haiku-4-5` | `openai/gpt-6-luna` | `gemini-3.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `google/gemma-4-31B-it` | `grok-2` | `qwen-turbo` |
-| **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-beta` | `qwen-max` |
+| **`fast`** | Latency-oriented catalog choice | `gpt-6-luna` | `claude-haiku-5-5` | `openai/gpt-6-luna` | `gemini-3.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `google/gemma-4-31B-it` | `grok-2` | `qwen-turbo` |
+| **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-beta` | `qwen-max` |
 | **`premium`** | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | _(N/A)_ | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
-| **`code`** | Code generation & analysis | `gpt-5.6-sol` | `claude-opus-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `deepseek-chat` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-mini-beta` | `qwen3-coder-plus` |
-| **`vision`** | Image understanding | `gpt-4.1` | `claude-opus-5` | _(N/A)_ | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | _(N/A)_ | `grok-2-vision-latest` | _(N/A)_ |
+| **`code`** | Code generation & analysis | `gpt-5.6-sol` | `claude-opus-5-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `deepseek-chat` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-mini-beta` | `qwen3-coder-plus` |
+| **`vision`** | Image understanding | `gpt-4.1` | `claude-opus-5-5` | _(N/A)_ | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | _(N/A)_ | `grok-2-vision-latest` | _(N/A)_ |
 
 > **Note**: The `premium` alias is available for OpenAI (`gpt-5.6-sol`),
 > Anthropic (`claude-fable-5`), and Gemini (`gemini-3.1-pro-preview`). Other
@@ -1052,8 +1120,8 @@ export TRUVAG3_OPENAI_MODEL_DEFAULT=gpt-5.6-terra
 export TRUVAG3_OPENAI_MODEL_SMART=gpt-5.6-sol
 
 # Override Anthropic aliases
-export TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5
-export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-4-5
+export TRUVAG3_ANTHROPIC_MODEL_SMART=claude-opus-5-5
+export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-5-5
 
 # Override Gemini aliases
 export TRUVAG3_GEMINI_MODEL_FAST=gemini-3.5-flash
@@ -1190,9 +1258,18 @@ ceiling enforced by the framework. Validation reads the final post-policy object
 so application patches can remove conflicting controls. The guard's cache
 identity is `openrouter-sol-6.1-v3`. See [OpenRouter's reasoning controls](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
 
-For native calls, `WithReasoningTokenMultiplier(1)` keeps the configured output
-budget exact; OpenRouter budgets are already exact. Configure at most 128,000
-output tokens for this model. The framework does not add automatic clamping.
+`WithReasoningTokenMultiplier(1)` keeps the configured output budget exact on
+both native and OpenRouter calls. The default is 3× when a supported effective
+effort is active, including reviewed model-default reasoning on the exact native
+GPT-6 Astra/Sol/Luna/GPT-6.1 Sol and routed Luna/Sol IDs. This default-aware
+headroom does not inject an effort field. Explicit `none`, reasoning omission,
+and native-extra-only reasoning retain exact budgets; unknown models/snapshots
+and Azure defaults are not inferred. Reviewed exact native GPT-5.6 Sol,
+GPT-6 Astra/Sol/Luna and GPT-6.1 Sol, and routed GPT-5.6 Luna/GPT-6 Luna/GPT-6.1 Sol,
+are bounded to 128,000 output tokens. The GPT-5.6 rows add capacity only, not
+default-reasoning inference. Headroom is bounded before Compatible/Strict policy;
+that policy still governs over-cap caller base budgets. Unknown models/variants are not capped by this
+table. A ceiling is not a guarantee of route availability or remaining context.
 OpenAI's general `default` alias now selects `gpt-6.1-sol`; this affects planning,
 synthesis and other calls that inherit it, not just planning. Separately, `fast`
 now selects `gpt-6-luna` for OpenAI and `openai/gpt-6-luna` for OpenRouter.
@@ -1269,8 +1346,9 @@ reuse of results prepared under the earlier default-refill behavior.
 
 All three models accept `low`, `medium`, `high`, `xhigh` and `max`; only Sol and
 Luna accept `none`. Empty effective effort after client/chain inheritance leaves
-the provider default unchanged and does not activate the framework token multiplier.
-An inherited active effort does activate scaling. With active/default
+the provider's effort unchanged; the reviewed exact IDs still receive budget
+headroom for their active defaults. An inherited active effort also activates
+scaling. Unknown snapshot defaults are not inferred. With active/default
 reasoning, remove `temperature`, `top_p`, `top_logprobs` and `logprobs` (default
 temperature is already omitted by the codec). Invalid final combinations fail
 locally, including ones introduced by application policy; overrides do not
@@ -1293,15 +1371,26 @@ those routes.
 #### GPT-6 Token Budgets
 
 With effective nonempty reasoning effort other than `none` (including a client
-or chain default), the native adapter applies its existing
-default token multiplier of five: `WithMaxTokens(30000)` becomes
-`max_completion_tokens: 150000`. The same multiplier applies to `low` through
-`max`; empty effective effort and `none` keep the original budget. The adapter currently
-does **not** clamp or locally enforce model-specific output ceilings. Astra,
-Sol and Luna each document a 128,000-token output limit as of 2026-09-26.
+or chain default), the native adapter applies the configured multiplier,
+now **3 by default**: `WithMaxTokens(30000)` becomes
+`max_completion_tokens: 90000`. The same multiplier applies to `low` through
+`max`, and to absent effort on the reviewed default-active IDs below. Explicit
+`none`, reasoning omission and native-extra-only controls keep the original budget. Exact native
+Astra/Sol/Luna and GPT-6.1 Sol, plus exact routed GPT-6 Luna/GPT-6.1 Sol, have a
+reviewed 128,000-token ceiling. Capacity-only rows also cover native `gpt-5.6-sol`
+(the `smart`/`code`/`premium` aliases) and routed `openai/gpt-5.6-luna`; absent
+effort does not gain new scaling for those two entries. Added headroom is bounded
+in both modes: base 50,000 × 3 becomes 128,000, including in Strict mode.
+For over-cap base budgets, Compatible policy clamps with a built-in adjustment;
+Strict rejects an unacknowledged explicit change. Application patches remain
+subject to final capacity validation. Unknown variants/snapshots and Azure
+capacity remain unknown. These ceilings were checked on 2026-10-08.
 See the official [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra),
 [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) and
 [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) model pages.
+The added capacity rows use the official
+[GPT-5.6 Sol page](https://developers.openai.com/api/docs/models/gpt-5.6-sol) and
+[OpenRouter model metadata](https://openrouter.ai/api/v1/models) for `openai/gpt-5.6-luna`.
 
 Use `ai.WithReasoningTokenMultiplier(1)` for a standalone client or
 `ai.WithChainReasoningTokenMultiplier(1)` for a chain when the configured value
@@ -1309,8 +1398,19 @@ should be the exact total token cap, and keep it within the selected model's
 limits. `AIRequestReport.EffectiveMaxTokens` reports the final wire value after
 request policy. That cap includes reasoning and visible output; it does not
 reserve a fixed amount for the final answer. Over-limit provider behavior has
-not been live-tested. Automatic clamping and generic model-limit validation are
-deferred, not included in GPT-6 support; no existing application budget changes.
+not been live-tested. Only the reviewed exact-model ceilings above are clamped;
+cached metadata, route-aware limits and generic model-limit recovery remain
+deferred to separate work. Applications relying on the old implicit
+5× scaling can opt back in explicitly; already explicit multipliers are preserved.
+
+Active scaling fingerprints include the resolved multiplier, so changing it
+invalidates AI-output cache reuse. Numeric request patches may use integral
+`json.Number` values such as `1e3` or `1000.0`: the wire spelling is preserved
+and the effective report contains 1000. Invalid fractions, strings and values
+outside the Go `int` range fail before dispatch. Draft construction rejects
+token multiplication overflow. The older map-only `openaiwire.BuildRequestBody`
+helper saturates at `math.MaxInt` instead of wrapping; new integrations should
+use the error-returning codec. Saturation does not establish provider capacity.
 
 #### GPT-6 Prompt-Cache Migration
 
@@ -1629,7 +1729,7 @@ client, _ := ai.NewClient(
 #### Default Configuration Values
 
 - **Provider**: "auto" (auto-detects from environment)
-- **Timeout**: 180 seconds; explicitly selected standalone Bedrock clients
+- **Timeout**: 300 seconds; explicitly selected standalone Bedrock clients
   declare 60 minutes
 - **MaxRetries**: 3 for `NewClient`; 0 per entry for `NewChainClient`
 - **Temperature**: 0.7
@@ -1947,7 +2047,7 @@ Each provider applies sensible defaults that can be overridden:
 // These defaults are applied if not specified:
 // - Temperature: 0.7
 // - MaxTokens: 1000
-// - Timeout: 180 seconds (explicit standalone Bedrock: 60 minutes)
+// - Timeout: 300 seconds (explicit standalone Bedrock: 60 minutes)
 // - MaxRetries: 3 for NewClient (NewChainClient defaults each entry to 0)
 // - RetryDelay: 1 second (with exponential backoff)
 ```

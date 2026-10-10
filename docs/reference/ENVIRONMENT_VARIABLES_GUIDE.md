@@ -47,13 +47,18 @@ does not configure them.
 | Behavior | Programmatic control | Default / scope |
 |---|---|---|
 | Reasoning-as-answer compatibility | `ai.WithReasoningContentFallback(bool)`, `ai.WithChainReasoningContentFallback(bool)`, direct codec `ReasoningContentFallback` | false; compatible-codec response policy, not a model/token limit |
-| Reasoning token multiplier | `ai.WithReasoningTokenMultiplier(int)` / `WithChainReasoningTokenMultiplier(int)` | 5 when scaling applies; no per-model ceiling clamp |
 | Shared-memory lookback | `WithMemoryLookback(d)` / direct `WithEnrichmentLookback(d)` | 24h; independent of event retention and digest TTL |
 | Event-summary batch size | `WithSummarizerMaxStepsPerBatch(n)` | 20; excess steps get heuristic fallback |
-| Calculated summary tokens per step | `WithSummarizerTokensPerStep(n)` | 150, floor 300 per call; fixed max-tokens override wins |
+| Calculated summary tokens per step | `WithSummarizerTokensPerStep(n)` | Explicit option selects calculated budgeting (floor 300 per call); otherwise 10000 fixed; explicit fixed override wins |
 | Failed-input disclosure restriction | `FailedOperationViewConfig.InputPolicy` | nil permits bounded views; applications can restrict or disable |
 | Recording-only request entities | `WithBuilderRecordRequestEntityExtractor` / direct `WithRecordRequestEntityExtractor` | unset; enrichment/claim acquisition unchanged |
 | Per-acquisition claim expiry | `core.InvestigationLeaseRequest.TTL` | 0 selects provider default; negative invalid |
+
+The reasoning token multiplier is configurable by environment:
+`TRUVAG3_AI_REASONING_TOKEN_MULTIPLIER` (default 3). A positive
+`ai.WithReasoningTokenMultiplier(int)` or `ai.WithChainReasoningTokenMultiplier(int)`
+overrides it; explicit 1 keeps caps exact. Reviewed-model ceiling checks still
+apply. See [AI Configuration](#ai-configuration).
 
 Returned completion provenance, request lifecycle revisions and physical
 dispatch counts need no new enablement flag. Existing debug-store enablement,
@@ -231,8 +236,8 @@ Configure HTTP server timeouts and health check settings.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_HTTP_READ_TIMEOUT` | `30s` | **Implemented** | Maximum duration for reading the entire request | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_HTTP_WRITE_TIMEOUT` | `30s` | **Implemented** | Maximum duration for writing the response | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_HTTP_READ_TIMEOUT` | `300s` in `DefaultConfig` | **Implemented** | Maximum duration for reading the entire request | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_HTTP_WRITE_TIMEOUT` | `35m` | **Implemented** | Maximum duration for writing the response | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_HTTP_READ_HEADER_TIMEOUT` | `10s` | Struct Tag Only | Maximum duration for reading request headers | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_HTTP_IDLE_TIMEOUT` | `120s` | Struct Tag Only | Maximum duration to wait for the next request | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_HTTP_MAX_HEADER_BYTES` | `1048576` (1MB) | Struct Tag Only | Maximum size of request headers | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
@@ -243,7 +248,7 @@ Configure HTTP server timeouts and health check settings.
 ### Example
 
 ```bash
-# For long-running AI workflows (these are implemented)
+# Explicit overrides; the write timeout below is shorter than the 35m default
 export TRUVAG3_HTTP_READ_TIMEOUT="5m"
 export TRUVAG3_HTTP_WRITE_TIMEOUT="5m"
 ```
@@ -386,8 +391,9 @@ construction. `core.Config.LoadFromEnv` reads rows marked **Implemented** into
 constructors must pass the corresponding `ai.With*` options. Rows marked
 **Struct Tag Only** are metadata declarations that `LoadFromEnv` does not
 currently read. Provider-specific variables in the next section and
-`TRUVAG3_AI_RETRY_ATTEMPTS`, `TRUVAG3_AI_RETRY_DELAY`, and
-`TRUVAG3_AI_SSE_EVENT_MAX_BYTES` are read directly by the `ai` module as
+`TRUVAG3_AI_RETRY_ATTEMPTS`, `TRUVAG3_AI_RETRY_DELAY`,
+`TRUVAG3_AI_SSE_EVENT_MAX_BYTES`, and `TRUVAG3_AI_REASONING_TOKEN_MULTIPLIER`
+are read directly by the `ai` module as
 documented.
 
 | Variable | Default | Status | Description | Source |
@@ -397,10 +403,11 @@ documented.
 | `OPENAI_API_KEY` | (fallback) | **Implemented** | Fallback API key (auto-enables AI) | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_MODEL` | `gpt-4` | **Implemented** | Model name to use | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_BASE_URL` | Provider-specific | **Implemented** | Custom base URL for API calls | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_AI_REASONING_TOKEN_MULTIPLIER` | `3` | **Implemented** | Reasoning headroom on reviewed scaling profiles. Positive code values win; code zero is unset. Empty, malformed, non-positive or overflowing environment values and negative code values fail construction. Explicit `1` keeps budgets exact. Active scaling binds the resolved multiplier into AI-output cache identity. | [ai/reasoning_budget.go](../../ai/reasoning_budget.go) |
 | `TRUVAG3_AI_PROVIDER` | `openai` | Struct Tag Only | AI provider | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_TEMPERATURE` | `0.7` | Struct Tag Only | Sampling temperature declaration; permitted values and field support are provider/model-specific | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_AI_MAX_TOKENS` | `2000` | Struct Tag Only | Maximum tokens in response | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_AI_TIMEOUT` | `30s` in `core.DefaultConfig` (the unused struct tag says `180s`) | Struct Tag Only | `core.Config.LoadFromEnv` does not read this variable. Direct `ai.NewClient` / `ai.NewRequestClient` construction also does not read it: those constructors use 180s unless an explicitly selected standalone provider declares another default (Bedrock: 60m) or `ai.WithTimeout(d)` supplies a positive override. Auto-detected clients and framework-managed chain entries use 180s. Programmatic zero and negative values mean unset and do not disable provider deadlines. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go), [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/registry.go](https://github.com/truvaagents/truva-g3/blob/main/ai/registry.go) |
+| `TRUVAG3_AI_TIMEOUT` | `5m`; explicit standalone Bedrock `60m` | **Implemented in AI constructors** | Read by `ai.NewClient`, `ai.NewRequestClient`, `ai.NewChainClient` and managed `ProviderEntry` construction, not `core.Config.LoadFromEnv` or direct provider constructors/factory calls. Positive code > environment > applicable default. A present value must be a positive Go duration (for example `12m`); empty, malformed, zero, negative and overflowing values fail construction even with a code override. Nonpositive code means unset. Injected clients remain caller-owned; earlier caller/phase/HTTP-client deadlines still win. | [ai/request_timeout.go](https://github.com/truvaagents/truva-g3/blob/main/ai/request_timeout.go), [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go) |
 | `TRUVAG3_AI_RETRY_ATTEMPTS` | `3` for independently constructed clients and heterogeneous `ProviderEntry`; `0` per provider in legacy `NewChainClient` | **Implemented** | Per-provider retry budget. `ai/providers/openai` and its registered aliases share this one budget across transport/HTTP and eligible decoded/in-body failures; direct Azure remains transport-only. Retry permission comes from the adapter classifier, and `Retry-After` can affect delay without adding attempts. Precedence is explicit `WithMaxRetries(n)` / `WithChainMaxRetries(n)` > positive environment value > constructor-specific default. `NewClient`, `NewRequestClient`, and each `NewChain` `ProviderEntry` default to 3. Legacy `NewChainClient` defaults each provider to 0 so provider retries do not multiply ordered failover attempts. `ClientEntry` is caller-owned. Zero, negative, and non-integer environment values are rejected and fall through; use an explicit programmatic 0 to disable retries. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/chain_client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_client.go), [ai/chain_entries.go](https://github.com/truvaagents/truva-g3/blob/main/ai/chain_entries.go) |
 | `TRUVAG3_AI_SSE_EVENT_MAX_BYTES` | `1048576` (1 MiB) | **Implemented** | Maximum bytes in one OpenAI-compatible server-sent event. A positive `AIConfig.SSEEventMaxBytes` wins; invalid, zero, and negative environment values fall back to 1 MiB. The ceiling is per event, not per response. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/providerkit/openaiwire/sse.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providerkit/openaiwire/sse.go) |
 | `TRUVAG3_AI_RETRY_DELAY` | `1s` | **Implemented** | Initial exponential delay between provider attempts, including eligible decoded retries in adopting adapters. A positive `AIConfig.RetryDelay` wins over a positive Go-duration environment value, then the one-second default. Invalid, zero, and negative environment values fall back safely. For an eligible HTTP 429/503 or decoded semantic 429/503, a valid response `Retry-After` seconds/date value is honored only when it is greater than exponential backoff. It does not grant retry permission or add attempts. Every retry wait ends at the earlier caller deadline or an absolute wait cap: the positive HTTP-client timeout, or the 180-second framework fallback when that timeout is disabled. The cap applies to the wait timer rather than the transport context, so it does not make a successful streaming response body unreadable. | [ai/client.go](https://github.com/truvaagents/truva-g3/blob/main/ai/client.go), [ai/providers/base.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/base.go) |
@@ -816,7 +823,8 @@ precedence rules.
 | `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS` | `2000` | **Implemented** | `BuildMemoryHooks` reads this at startup for both raw and compacted memory views. Bounds the hook's own contribution at four encoded bytes per token; complete records and omission markers fit inside that budget. Invalid/empty/non-positive/overflowing values fail construction. Direct construction uses `WithEnrichmentMaxTokens`, which rejects invalid values. | [memory_hook_builder.go](../../orchestration/memory_hook_builder.go) |
 | `TRUVAG3_SHARED_MEMORY_RECENT_EVENTS_LIMIT` | `20` | **Implemented** | Recent domain events for baseline situational awareness (without compactor). Higher values show more cross-agent activity but consume more prompt tokens. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `""` (agent default) | **Implemented** | Model for LLM event summarization and activity compaction calls. Accepts aliases such as `fast` and `smart` only when the selected provider defines them, or a concrete model ID. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` | Unset: max(300, 150 × batch size) | **Implemented** | Positive fixed output-token allowance per event-summary call. Read at startup by `BuildMemoryHooks`; invalid explicit values fail construction, including without an AI client. Independent of synthesis and compaction. Direct constructors use `WithSummarizerMaxTokens(n)` instead. | [orchestration/memory_hook_builder.go](../../orchestration/memory_hook_builder.go) |
+| `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` | `10000` | **Implemented** | Positive fixed base output-token allowance per event-summary batch, before provider reasoning expansion. Read at startup by `BuildMemoryHooks`; invalid explicit values fail construction, including without an AI client. Independent of synthesis, compaction and stored summary size. Direct constructors use `WithSummarizerMaxTokens(n)` instead. | [orchestration/memory_hook_builder.go](../../orchestration/memory_hook_builder.go) |
+| `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_SUMMARY_MAX_BYTES` | `1024` | **Implemented** | Per-entry stored derived prose limit (minimum 32 UTF-8 bytes). Overlong prose is explicitly marked shortened; exact entity IDs and raw LLM debug completions remain intact. Invalid explicit values fail builder construction. Direct constructor: `WithSummarizerSummaryMaxBytes(n)`. | [orchestration/event_summarizer.go](../../orchestration/event_summarizer.go) |
 | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` | `2m` | **Implemented** | Positive builtin AI-invocation deadline, not a memory-write timeout. Earlier parent deadline wins; invalid/empty/non-positive values fail `BuildMemoryHooks` even without dependencies. Direct constructor: `WithSummarizerTimeout(d)`. | [orchestration/memory_hook_tuning.go](../../orchestration/memory_hook_tuning.go) |
 | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_RESPONSE_BYTES` | `4000` | **Implemented** | Positive per-step encoded payload allowance shared by failure facts and response in the built-in summary prompt. Invalid/empty/overflow values fail builder construction, including without AI/memory dependencies. Direct construction uses `WithSummarizerMaxResponseChars(n)` (legacy name; byte units). Independent of output-token limits. | [orchestration/event_summarizer.go](../../orchestration/event_summarizer.go) |
 | `TRUVAG3_SHARED_MEMORY_RECORD_FAILURE_CAUSE_MAX_BYTES` | `256` | **Implemented** | Positive UTF-8 byte allowance for the cause in heuristic failure summaries. Framing and explicit shortening marker are additional. Invalid/empty/overflow values fail builder construction even without AI/memory dependencies. Direct option: `WithRecordFailureCauseMaxBytes(n)`. Original execution errors and model/custom summaries stay unchanged. | [orchestration/memory_hooks.go](../../orchestration/memory_hooks.go) |
@@ -929,6 +937,11 @@ without recompiling—for example,
 `TRUVAG3_GROQ_MODEL_FAST=llama-3.1-8b-instant`. See
 [Semantic Model Alias Overrides](#semantic-model-alias-overrides) for the exact
 supported prefixes and the hosted-provider semantic/wire boundary.
+
+The Anthropic example above deliberately pins the previous fast model. The
+built-in fast model is now Haiku 5.5; smart/code/vision select Opus 5.5. For
+migration requirements and Vertex mapping impact, see the
+[Anthropic alias refresh](https://github.com/truvaagents/truva-g3/blob/main/ai/README.md#anthropic-october-2026-alias-refresh).
 
 To set the model programmatically (Layer 3, bypassing the env var):
 
@@ -1067,9 +1080,9 @@ budget does not bypass refusal, immutable inputs or the delegated-call limit.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `600s` | **Implemented** | Base shared HTTP-client timeout per tool/agent call, not the whole execution. Orchestrator construction raises it to `HITL.DefaultTimeout + ExecutionOptions.StepTimeout` when that allowance is larger. Earlier enclosing deadlines still apply. | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `20m` | **Implemented** | Base shared HTTP-client timeout per tool/agent call, not the whole execution. Orchestrator construction raises it to `HITL.DefaultTimeout + ExecutionOptions.StepTimeout` when that allowance is larger. Earlier enclosing deadlines still apply. | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
 | `TRUVAG3_EXECUTION_MAX_CONCURRENCY` | `25` | **Implemented** | Max parallel step executions in DAG. Controls goroutine concurrency during plan execution. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `120s` | **Implemented** | Go-duration execution allowance added to `HITL.DefaultTimeout` for an orchestrator capability's per-call context deadline. Ordinary tool calls have no separate deadline from this setting; they use the shared HTTP timeout and enclosing context. The delegation allowance can also enlarge the shared client timeout and phase budget. | [orchestration/executor.go](../../orchestration/executor.go), [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
+| `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `15m` | **Implemented** | Go-duration execution allowance added to `HITL.DefaultTimeout` for an orchestrator capability's per-call context deadline. Ordinary tool calls have no separate deadline from this setting; they use the shared HTTP timeout and enclosing context. The delegation allowance can also enlarge the shared client timeout and phase budget. | [orchestration/executor.go](../../orchestration/executor.go), [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
 | `TRUVAG3_CONVERSATION_TOKEN_BUDGET` | `48000` | **Implemented** | Maximum estimated tokens allowed for prepared `<conversation_history>` before Tier 1 truncation/elision. Default-on safety net for metadata and hook ingress paths. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONVERSATION_RECENT_TURNS_PRESERVED` | `4` | **Implemented** | Number of newest turns always kept verbatim when turn-aware conversation preparation needs to shed context. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONVERSATION_SUMMARY_CACHE_SIZE` | `256` | **Implemented** | LRU capacity for the optional Tier 2 recursive conversation-summary cache. Only used when the application injects a compaction-enabled conversation-history preparer. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1087,8 +1100,8 @@ budget does not bypass refusal, immutable inputs or the delegated-call limit.
 | `TRUVAG3_CAPABILITY_THRESHOLD` | `0.7` | **Implemented** | Minimum similarity threshold | [orchestration/capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/capability_provider.go) |
 | `TRUVAG3_PLAN_RETRY_ENABLED` | `true` | **Implemented** | Retry initial/continuation generation on syntax or routing-intent decoding failures; other recovery paths have their own budgets | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_PLAN_RETRY_MAX` | `2` | **Implemented** | Maximum retry attempts for plan parsing (0 = disabled) | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_PLAN_MAX_TOKENS` | `15000` | **Implemented** | Max output tokens for plan generation LLM calls (including hallucination and validation retries) | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_SYNTHESIS_MAX_TOKENS` | `5000` | **Implemented** | Max output tokens for response synthesis LLM calls | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_PLAN_MAX_TOKENS` | `20000` | **Implemented** | Max output tokens for plan generation LLM calls (including hallucination and validation retries) | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_SYNTHESIS_MAX_TOKENS` | `30000` | **Implemented** | Max output tokens for response synthesis LLM calls | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_SYNTHESIS_TEMPERATURE` | `0.5` | **Implemented** | LLM temperature for response synthesis (0.0–2.0). Lower = more deterministic | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_PLAN_MODEL` | `""` | **Implemented** | Portable alias or model name for plan generation LLM calls. Aliases work across catalog-backed chain entries; leave unset for a chain containing Bedrock so each entry uses its configured default | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_SYNTHESIS_MODEL` | `""` | **Implemented** | Portable alias or model name for response synthesis LLM calls (streaming + non-streaming) | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1098,13 +1111,13 @@ budget does not bypass refusal, immutable inputs or the delegated-call limit.
 | `TRUVAG3_HALLUCINATION_RETRY_ENABLED` | `true` | **Implemented** | Retry plan generation with enhanced context when hallucination is detected | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_HALLUCINATION_MAX_RETRIES` | `1` | **Implemented** | Maximum retry attempts for hallucination correction (0 = disabled) | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | `true` | **Implemented** | Enable multi-phase iterative planning. LLM planner can generate partial plans that execute in phases. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_ITERATIVE_MAX_PHASES` | `5` | **Implemented** | Maximum planning phases per request. Forces termination with synthesis if reached. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_ITERATIVE_MAX_PHASES` | `20` | **Implemented** | Maximum planning phases per request. Forces termination with synthesis if reached. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | **Implemented** | Maximum total steps across all phases. Prevents runaway plan generation. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | **Implemented** | Configured phase budget (plan generation + execution). The phase loop raises it to the delegation allowance (`HITL.DefaultTimeout + StepTimeout`) when larger, even if the plan has no delegated step. Earlier parent deadlines still apply. | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
+| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `25m` | **Implemented** | Configured phase budget (plan generation + execution). The phase loop raises it to the delegation allowance (`HITL.DefaultTimeout + StepTimeout`) when larger, even if the plan has no delegated step. Earlier parent deadlines still apply. | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | **Implemented** | Regeneration attempts after the first validation failure; at most 1 + N validations. Malformed or intent-invalid regenerated JSON spends a round without validation; provider/boundary/cancellation errors and persistent continuation step-ID conflicts can stop earlier. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | **Implemented** | Byte limit on encoded correction context added to a selected phase prompt. The effective value must be greater than zero when validated; environment handling follows the selected configuration-resolution mode. Omitted prior evidence is marked; failure to fit required feedback stops preparation. Not a whole-prompt/token limit. | [orchestration/plan_attempt.go](../../orchestration/plan_attempt.go) |
 | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Floor-preview size in bytes (legacy setting name) for a non-JSON completed-step result. JSON results use a structural digest; delegation summaries have a separate projection. Visibility remains subject to digest and enclosing budgets. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `32768` | **Implemented** | Soft byte target (legacy setting name) for completed-step views before enclosing prompt encoding. Older successful steps may be omitted; failed steps and the newest successful step are retained, and markers can exceed the target. Failed-operation evidence is sub-allocated and also bounded by its own encoded-byte limits. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `196608` | **Implemented** | Soft byte target (legacy setting name) for completed-step views before enclosing prompt encoding. Older successful steps may be omitted; failed steps and the newest successful step are retained, and markers can exceed the target. Failed-operation evidence is sub-allocated and also bounded by its own encoded-byte limits. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | `8` | **Implemented** | Phase 14: max non-JSON steps escalated to the continuation distiller (a fast-model summary) per phase, newest-first. Sequential fast-model calls on the phase-gating path, so the cap bounds latency. `0` disables; fires ~never on all-JSON workloads. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | `3` | **Implemented** | Phase 14: per-array head-sample size in a continuation digest (arrays render as the first N elements + a length sentinel). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | `200` | **Implemented** | Phase 14: max length of a string value kept inline in a digest before elision. Raise it so the planner sees longer salient values (status/error strings) at plan time. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1113,8 +1126,8 @@ budget does not bypass refusal, immutable inputs or the delegated-call limit.
 | `TRUVAG3_FAILURE_PATTERN_SIGNATURE_LEN` | `120` | **Implemented** | Max chars of error text used to bucket failures into a shared signature for classification. Wider than the display cap to reduce false-positive collisions between distinct errors that share a common prefix. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_FAILURE_PATTERN_DISPLAY_LEN` | `80` | **Implemented** | Max chars of the shared error rendered into the remediation prompt (trailing `…` on truncation). Kept short so the continuation prompt stays slim per EFFECTIVE_PROMPTS_GUIDE §4.5. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_ENABLED` | `true` | **Implemented** | Enable structural trimming of large step results before prompt construction. Prevents token budget overflow. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_TRIM_MAX_BYTES` | `16384` | **Implemented** | Maximum bytes per individual step result (~4K tokens). Results exceeding this are structurally trimmed. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | `32768` | **Implemented** | Maximum total bytes across all step results in a synthesis prompt (~8K tokens). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_TRIM_MAX_BYTES` | `65536` | **Implemented** | Maximum bytes per individual step result (~16K tokens). Results exceeding this are structurally trimmed. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | `196608` | **Implemented** | Maximum total bytes across all step results in a synthesis prompt (~48K tokens). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES` | `65536` | **Implemented** | Maximum bytes for source data in micro-resolution and semantic retry prompts (~26K tokens). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | `0` | **Implemented** | Maximum bytes per parameter value for agent/tool HTTP calls. Default `0` = no cap (fidelity-first): tool→tool data flows raw so downstream steps receive the full upstream output. Set `> 0` (or supply `deps.AgentInputProcessor`) to enable the byte-budget guard. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` | `16384` | **Implemented** | Result size threshold above which schema-guided mapping replaces direct value extraction. Set to 0 to disable. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1212,14 +1225,21 @@ export TRUVAG3_PLAN_RETRY_MAX=0
 
 ### LLM Synthesis Parameters
 
-Controls the maximum output tokens and temperature for LLM calls during plan generation and response synthesis. The plan generation default is 15000 to prevent JSON truncation on complex plans. The synthesis default is 5000 tokens at temperature 0.5 (deterministic). Streaming chat applications typically use a higher temperature (0.7) for more natural responses.
+Controls the base output-token allowance and temperature for LLM calls during
+plan generation and response synthesis. Planning defaults to 20000 tokens;
+synthesis defaults to 30000 tokens at temperature 0.5. These are base allowances,
+not guarantees against truncation: active reasoning profiles may expand them,
+reviewed model ceilings may bound the result, and hidden reasoning can consume
+the same output budget. Provider deadlines and model/context capacity still
+apply. Sampling controls are subject to the selected model's compatibility
+policy; a requested temperature is not guaranteed to reach every provider.
 
 ```bash
-# Increase plan generation token limit (default: 15000)
-export TRUVAG3_PLAN_MAX_TOKENS=20000
+# Increase plan generation token limit (default: 20000)
+export TRUVAG3_PLAN_MAX_TOKENS=60000
 
-# Increase synthesis token limit (default: 5000)
-export TRUVAG3_SYNTHESIS_MAX_TOKENS=8000
+# Increase synthesis token limit (default: 30000)
+export TRUVAG3_SYNTHESIS_MAX_TOKENS=40000
 
 # Adjust synthesis temperature (default: 0.5, range: 0.0-2.0)
 # Higher values produce more creative responses (good for streaming chat)
@@ -1319,9 +1339,9 @@ Iterative planning allows the LLM planner to generate partial plans (`terminal: 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | `true` | **Implemented** | Enable multi-phase iterative planning. When enabled, the LLM planner can signal partial plans that execute in phases. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_ITERATIVE_MAX_PHASES` | `5` | **Implemented** | Maximum number of planning phases per request. If reached without a terminal plan, the orchestrator forces termination and synthesizes with available results. Most queries need at most 2. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_ITERATIVE_MAX_PHASES` | `20` | **Implemented** | Maximum number of planning phases per request. If reached without a terminal plan, the orchestrator forces termination and synthesizes with available results. Most queries need at most 2. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | **Implemented** | Maximum total steps across all phases. Prevents runaway plan generation. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `180s` | **Implemented** | Configured phase budget (plan generation + execution), raised to the delegation allowance when larger. Earlier parent deadlines still apply; see [Execution Limits](LIMITS_CHEATSHEET.md#execution-limits). | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
+| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `25m` | **Implemented** | Configured phase budget (plan generation + execution), raised to the delegation allowance when larger. Earlier parent deadlines still apply; see [Execution Limits](LIMITS_CHEATSHEET.md#execution-limits). | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | **Implemented** | Regeneration attempts after the first validation failure; at most 1 + N validations. Malformed or intent-invalid regenerated JSON spends a round without validation; provider/boundary/cancellation errors and persistent continuation step-ID conflicts can stop earlier. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | **Implemented** | Byte limit on encoded correction context added to a selected phase prompt. The effective value must be greater than zero when validated; environment handling follows the selected configuration-resolution mode. Omitted prior evidence is marked; failure to fit required feedback stops preparation. Not a whole-prompt/token limit. | [orchestration/plan_attempt.go](../../orchestration/plan_attempt.go) |
 
@@ -1346,7 +1366,7 @@ Phase 2: geocode(Vancouver, Banff, ...) + weather(coordinates) → terminal: tru
 export TRUVAG3_ITERATIVE_PLANNING_ENABLED=true
 
 # Allow up to 5 phases for complex queries
-export TRUVAG3_ITERATIVE_MAX_PHASES=5
+export TRUVAG3_ITERATIVE_MAX_PHASES=20
 
 # Allow up to 30 total steps across all phases
 export TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS=30
@@ -1371,15 +1391,15 @@ When tool/agent responses are large (e.g., full web pages, large API payloads), 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Non-JSON floor-preview size in continuation prompts (JSON is digested). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `32768` | **Implemented** | **Soft target** for all step digests in the continuation prompt (newest-first; N-of-M eviction) — not a hard cap: failed steps and the newest successful step are always kept, and notes are appended after the budget decision. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `196608` | **Implemented** | **Soft target** for all step digests in the continuation prompt (newest-first; N-of-M eviction) — not a hard cap: failed steps and the newest successful step are always kept, and notes are appended after the budget decision. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | `8` | **Implemented** | Max non-JSON→fast-model-summary escalations per continuation phase (`0` disables). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | `3` | **Implemented** | Digest array head-sample size. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | `200` | **Implemented** | Digest inline-string elision threshold. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS` | `50` | **Implemented** | Digest per-object key cap. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_ENABLED` | `true` | **Implemented** | Enable structural trimming of large step results before prompt construction. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_TRIM_MAX_BYTES` | `16384` | **Implemented** | Maximum bytes per individual step result (~4K tokens). Results exceeding this are structurally trimmed. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | `32768` | **Implemented** | Maximum total bytes across all step results in a synthesis prompt (~8K tokens). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES` | `65536` | **Implemented** | Maximum bytes for source data in micro-resolution and semantic retry prompts (~26K tokens). Controls how much of the original step result is included when the LLM resolves missing parameters or retries failed steps. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_TRIM_MAX_BYTES` | `65536` | **Implemented** | Maximum bytes per individual step result (~16K tokens). Results exceeding this are structurally trimmed. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES` | `196608` | **Implemented** | Maximum total bytes across all step results in a synthesis prompt (~48K tokens). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES` | `65536` | **Implemented** | Maximum bytes for source data in micro-resolution and semantic retry prompts (64 KiB, not a token allowance). Controls how much of the original step result is included when the LLM resolves missing parameters or retries failed steps. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES` | `0` | **Implemented** | Maximum bytes per parameter value for agent/tool HTTP calls. Default `0` = no cap (fidelity-first): tool→tool data flows raw so downstream steps receive the full upstream output. Set `> 0` (or supply `deps.AgentInputProcessor`) to enable the byte-budget guard that trims large parameter values before they are sent to downstream agents or tools. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD` | `16384` | **Implemented** | Result size threshold (bytes) above which schema-guided mapping is used instead of direct value extraction for micro-resolution. Set to `0` to disable schema-guided mapping entirely. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 
@@ -1397,10 +1417,10 @@ When tool/agent responses are large (e.g., full web pages, large API payloads), 
 # Disable result trimming (not recommended for production — may cause token overflow)
 export TRUVAG3_RESULT_TRIM_ENABLED=false
 
-# Increase per-result limit for larger individual results
+# Example of a smaller per-result limit for tighter contexts
 export TRUVAG3_RESULT_TRIM_MAX_BYTES=32768   # 32 KB per result
 
-# Increase total budget for queries with many steps
+# Example of a smaller total result budget
 export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=65536  # 64 KB total
 
 # Increase micro-resolution budget for complex data dependencies
@@ -1419,8 +1439,8 @@ export TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD=0
 config := orchestration.DefaultConfig()
 config.ResultTrim = orchestration.ResultTrimConfig{
     Enabled:                      true,
-    MaxResultBytes:               16384, // 16 KB per result
-    MaxTotalPromptBytes:          32768, // 32 KB total
+    MaxResultBytes:               65536, // 64 KiB per result
+    MaxTotalPromptBytes:          196608, // 192 KiB total
     MaxMicroResolutionBytes:      65536, // 64 KB for micro-resolution source data
     MaxAgentInputBytes:           0,     // 0 = no cap (fidelity-first); set > 0 to enable the guard
     SchemaGuidedMappingThreshold: 16384, // 16 KB — use schema mapping above this
@@ -1555,13 +1575,13 @@ export TRUVAG3_SEMANTIC_RETRY_INDEPENDENT_STEPS=true
 
 # For iterative planning (multi-phase DAG)
 export TRUVAG3_ITERATIVE_PLANNING_ENABLED=true
-export TRUVAG3_ITERATIVE_MAX_PHASES=5
+export TRUVAG3_ITERATIVE_MAX_PHASES=20
 export TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS=200
-export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s
+export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=25m
 
 # Continuation prompt budgeting (Phase 14: JSON results are digested; non-JSON gets a floor preview)
 export TRUVAG3_CONTINUATION_RESULT_MAX_CHARS=10000        # non-JSON floor-preview size
-export TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS=32768  # soft target (~32 KB); newest-first, N-of-M eviction (failed + newest kept)
+export TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS=196608 # soft target (192 KiB); newest-first, N-of-M eviction (failed + newest kept)
 export TRUVAG3_CONTINUATION_MAX_ESCALATIONS=8            # max non-JSON→fast-model-summary escalations/phase (0 disables)
 export TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE=3        # digest array head-sample size
 export TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX=200        # digest inline-string elision threshold
@@ -1569,8 +1589,8 @@ export TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS=50           # digest per-object key
 
 # For result trimming (enabled by default)
 export TRUVAG3_RESULT_TRIM_ENABLED=true
-export TRUVAG3_RESULT_TRIM_MAX_BYTES=16384
-export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=32768
+export TRUVAG3_RESULT_TRIM_MAX_BYTES=65536
+export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=196608
 export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=65536
 export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=0       # 0 = no cap (fidelity-first); set > 0 to enable the guard
 export TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD=16384
@@ -1607,8 +1627,8 @@ Configure LLM debug payload storage for debugging orchestration issues. This fea
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_LLM_DEBUG_ENABLED` | `false` | **Implemented** | Enable LLM debug payload storage | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | **Implemented** | Base retention for successful debug records; a longer execution-lineage floor is preserved | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Base retention for error debug records; lineage, HITL, or investigation retention may extend it | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
+| `TRUVAG3_LLM_DEBUG_TTL` | `72h` (3 days) | **Implemented** | Base retention for successful debug records; a longer execution-lineage floor is preserved | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `72h` (3 days) | **Implemented** | Base retention for error debug records; lineage, HITL, or investigation retention may extend it | [orchestration/redis_llm_debug_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_llm_debug_store.go) |
 
 ### How It Works
 
@@ -1631,7 +1651,7 @@ data.
 # Enable LLM debug storage
 export TRUVAG3_LLM_DEBUG_ENABLED=true
 
-# Increase retention for debugging (optional)
+# Customize retention for debugging (optional; defaults are 72h for both)
 export TRUVAG3_LLM_DEBUG_TTL=48h
 export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h
 ```
@@ -1668,8 +1688,8 @@ Configure execution debug storage for DAG visualization and debugging. This feat
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
 | `TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED` | `false` | **Implemented** | Enable/disable execution debug storage | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_EXECUTION_DEBUG_TTL` | `24h` | **Implemented** | Base retention for successful execution records; related-lineage promotion may extend it | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
-| `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Base retention when the execution result fails or request lifecycle is `failed`/`cancelled`, including post-tool synthesis failures with successful steps. Existing longer/persistent retention, HITL approval windows and investigation extensions may retain records longer | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
+| `TRUVAG3_EXECUTION_DEBUG_TTL` | `72h` (3 days) | **Implemented** | Base retention for successful execution records; related-lineage promotion may extend it | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
+| `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `72h` (3 days) | **Implemented** | Base retention when the execution result fails or request lifecycle is `failed`/`cancelled`, including post-tool synthesis failures with successful steps. Existing longer/persistent retention, HITL approval windows and investigation extensions may retain records longer | [orchestration/redis_execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redis_execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_KEY_PREFIX` | `truvag3:v1:default:execution-debug:` | **Generic provider only** | Logical prefix for generic StorageProvider execution keys; rejected by selected Redis backends. Use `TRUVAG3_REDIS_NAMESPACE` or typed Redis keyspace options for Redis isolation. | [orchestration/execution_store.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/execution_store.go) |
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | **Implemented** | Maximum executions returned by one framework conversation lookup | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | **Implemented** | Maximum conversation-index members scanned by one framework lookup, including stale members | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1750,7 +1770,7 @@ separate single-key operations when they cannot participate in that slot.
 # Enable execution debug storage
 export TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED=true
 
-# Use default TTLs (24h for success, 7 days for errors)
+# Use default TTLs (72h / 3 days for both success and errors)
 # Or customize retention:
 export TRUVAG3_EXECUTION_DEBUG_TTL=48h
 export TRUVAG3_EXECUTION_DEBUG_ERROR_TTL=336h  # 14 days
@@ -2002,14 +2022,19 @@ See [Async Orchestration Guide](../orchestration/ASYNC_ORCHESTRATION_GUIDE.md) f
 
 ### Default Redis orchestration preset limits
 
-These variables are read only when the application explicitly calls
-`redisprovider.LoadOptionsFromEnvironment`. Apply
-`redisprovider.ConfigureOptions` afterward when code configuration must win.
+`redisprovider.NewDefaultBackends` loads these variables automatically for the
+selected backend roles. Lower-layer callers use
+`redisprovider.LoadOptionsFromEnvironment` explicitly, then
+`redisprovider.ConfigureOptions` when code configuration must win. Present
+empty, malformed, non-positive, or overflowing durations are rejected before
+backends are returned; later code options do not suppress that validation.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_LLM_DEBUG_TTL` | `24h` | **Implemented** | Successful LLM-debug retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
-| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `168h` (7 days) | **Implemented** | Failed LLM-debug retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_EXECUTION_DEBUG_TTL` | `72h` (3 days) | **Implemented** | Successful execution retention applied to the actual Redis execution store by the preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_EXECUTION_DEBUG_ERROR_TTL` | `72h` (3 days) | **Implemented** | Failed/cancelled execution retention applied by the Redis preset; `WithExecutionStoreConfig` overrides valid environment values | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_LLM_DEBUG_TTL` | `72h` (3 days) | **Implemented** | Successful LLM-debug retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
+| `TRUVAG3_LLM_DEBUG_ERROR_TTL` | `72h` (3 days) | **Implemented** | Failed LLM-debug retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 | `TRUVAG3_HITL_CHECKPOINT_TTL` | `24h` | **Implemented** | Checkpoint retention applied by the Redis preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 | `TRUVAG3_WORKFLOW_STATE_TTL` | `24h` | **Implemented** | Retention for workflow execution state composed by the default Redis backend preset | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
 | `TRUVAG3_TASK_QUEUE_RETRY_ATTEMPTS` | `3` | **Implemented** | Positive number of Redis task-queue operation attempts | [orchestration/redisprovider/options.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/redisprovider/options.go) |
@@ -2194,7 +2219,7 @@ is diagnosed, while parent cancellation remains terminal.
 | `TRUVAG3_SKILL_MAX_RESOURCES_PER_PHASE` | `2` | **Implemented** | Resource bodies admitted at one boundary. |
 | `TRUVAG3_SKILL_MAX_RESOURCES_PER_EXECUTION` | `8` | **Implemented** | Distinct resource bodies admitted across an execution. |
 | `TRUVAG3_SKILL_RESOLUTION_MAX_TOKENS` | `512` | **Implemented** | Fixed upper output budget used by selectors. |
-| `TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET` | `2048` | **Implemented** | Skill contribution budget at synthesis. |
+| `TRUVAG3_SKILL_SYNTHESIS_TOKEN_BUDGET` | `6000` | **Implemented** | Skill contribution budget at synthesis. |
 | `TRUVAG3_SKILL_EFFECTIVE_INPUT_TOKEN_BUDGET` | `0` | **Implemented** | Optional model-context allowance. When positive, the effective total skill budget is `min(total_token_budget, floor(effective_input_token_budget/10))`; `0` disables this additional 10% cap. |
 
 Response-cache short-circuits are eligible only when the behavior projection is
@@ -2271,9 +2296,9 @@ export TRUVAG3_DEBUG=true
 ```bash
 # Enable multi-phase planning (default: true)
 export TRUVAG3_ITERATIVE_PLANNING_ENABLED=true
-export TRUVAG3_ITERATIVE_MAX_PHASES=5          # Max planning phases per request
+export TRUVAG3_ITERATIVE_MAX_PHASES=20          # Max planning phases per request
 export TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS=200   # Max total steps across all phases
-export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s    # Configured phase budget; delegation may enlarge it
+export TRUVAG3_ITERATIVE_PHASE_TIMEOUT=25m    # Configured phase budget; delegation may enlarge it
 ```
 
 ### Step Retry Backoff Variables (for Retry Tuning)
@@ -2289,8 +2314,8 @@ export TRUVAG3_STEP_RETRY_MAX_DELAY=10s          # Delay cap regardless of attem
 ```bash
 # Result trimming (enabled by default — prevents token overflow)
 export TRUVAG3_RESULT_TRIM_ENABLED=true
-export TRUVAG3_RESULT_TRIM_MAX_BYTES=16384                # 16 KB per result (~4K tokens)
-export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=32768          # 32 KB total (~8K tokens)
+export TRUVAG3_RESULT_TRIM_MAX_BYTES=65536                # 64 KiB per result (~16K tokens)
+export TRUVAG3_RESULT_TRIM_MAX_TOTAL_BYTES=196608          # 192 KiB total (~48K tokens)
 export TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES=65536          # 64 KB for micro-resolution prompts
 export TRUVAG3_RESULT_TRIM_MAX_AGENT_INPUT_BYTES=0        # 0 = no cap (fidelity-first); set > 0 to enable the guard
 export TRUVAG3_RESULT_TRIM_SCHEMA_MAPPING_THRESHOLD=16384 # 16 KB — schema mapping above this
@@ -2334,8 +2359,8 @@ export TRUVAG3_ACTIVITY_SIGNAL_MAX_IN_PROMPT=10         # Max signals in prompt
 ```bash
 # Enable debug payload storage (disabled by default)
 export TRUVAG3_LLM_DEBUG_ENABLED=true
-export TRUVAG3_LLM_DEBUG_TTL=24h           # Success record retention
-export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h    # Error record retention (7 days)
+export TRUVAG3_LLM_DEBUG_TTL=72h           # Success record retention (3 days)
+export TRUVAG3_LLM_DEBUG_ERROR_TTL=72h     # Error record retention (3 days)
 export TRUVAG3_REDIS_NAMESPACE=production  # Shared DB-0 deployment namespace
 ```
 

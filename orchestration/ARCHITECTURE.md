@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.45
+**Version**: 1.46
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -769,9 +769,9 @@ The orchestrator's `executePhaseLoop()` method drives the cycle:
 ```go
 type IterativePlanConfig struct {
     Enabled                      bool          // Default: true
-    MaxPhases                    int           // Default: 5
+    MaxPhases                    int           // Default: 20
     MaxTotalSteps                int           // Default: 200
-    PhaseTimeout                 time.Duration // Default: 180s per phase
+    PhaseTimeout                 time.Duration // Default: 25m per phase
     MaxValidationRounds          int           // Default: 4 — regenerations after first validation failure
     RegenerationFeedbackMaxBytes int           // Default: 16 KiB of added correction context
 }
@@ -908,9 +908,9 @@ This enables the registry-viewer to show which phase each LLM call belongs to.
 
 ```bash
 TRUVAG3_ITERATIVE_PLANNING_ENABLED=true   # Default: true
-TRUVAG3_ITERATIVE_MAX_PHASES=5            # Default: 5
+TRUVAG3_ITERATIVE_MAX_PHASES=20           # Default: 20
 TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS=200     # Default: 200
-TRUVAG3_ITERATIVE_PHASE_TIMEOUT=180s      # Default: 180s
+TRUVAG3_ITERATIVE_PHASE_TIMEOUT=25m       # Default: 25m
 TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS=4 # Default: 4
 ```
 
@@ -1516,7 +1516,9 @@ repay the legend; duplicate IDs do not inflate that estimate. This choice does
 not reinterpret summary content or change admission priority. The version and
 chosen `event_format` (`named` or `tuple`) are included in the hook view report
 and `view_bounded` trace event.
-Only admitted event IDs are deduplicated. Display summaries may be shortened at
+Only admitted `(AgentDomain, EventID)` pairs are deduplicated; the same custom
+event ID in another domain remains a distinct record. Empty IDs are not
+deduplicated. Display summaries may be shortened at
 UTF-8 boundaries and explicitly labelled; immutable provenance either fits or
 the record is omitted. Stored events, query order, entity/claim semantics, other
 hooks' RAG context and compactor generation budgets are unchanged. Detail views
@@ -1552,9 +1554,10 @@ terminal omission owned by admission, after its parent-cancellation check.
 
 Event-summary output budgeting remains owned by the orchestration memory-hook
 builder, independently of planning and synthesis. The optional
-`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` startup setting replaces the
-calculated per-batch allowance with a positive fixed per-call allowance. Unset
-preserves the existing calculation; invalid explicit values fail construction.
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` startup setting overrides the
+default 10000-token fixed per-call allowance. Invalid explicit values fail construction.
+Direct `WithSummarizerTokensPerStep(n)` opts into the calculated batch allowance;
+an explicit fixed allowance wins regardless of option order.
 Direct callers use
 `WithSummarizerMaxTokens(n)` and receive an error for non-positive values.
 Requests continue through the existing AI, debug, and tracing paths.
@@ -2037,7 +2040,7 @@ The orchestration module includes a debug store that captures complete LLM reque
 - **Provider-neutral runtime contract**: Runtime behavior consumes
   `LLMDebugStore`; the included Redis preset is one DB-0 adapter and is not a
   neutral storage requirement
-- **TTL-based cleanup**: 24h for success and 168h (7 days) for errors;
+- **TTL-based cleanup**: 72h (3 days) for both success and errors;
   final execution outcome and lineage promotion may retain the current and
   root records longer
 - **Async recording**: Uses goroutines with WaitGroup for non-blocking capture
@@ -2047,6 +2050,11 @@ The orchestration module includes a debug store that captures complete LLM reque
   responses. Missing provider facts stay unknown. Validation-only audit records
   do not manufacture another completion. These payload fields remain in opt-in
   debug storage, not logs, span attributes or metric labels.
+- **Request preparation evidence**: Authoritative planning, correction, tiered
+  selection and synthesis interactions use the shared effective-request
+  projection. Requested/resolved model, compatibility adjustments, policy
+  fingerprint and stability come from that same call's provider report, alongside
+  effective generation settings. An absent report does not imply a stable policy.
 - **Graceful fallback**: Never fails orchestration if debug store fails
 - **Payload fidelity**: Built-in stores preserve application and model
   payloads without framework-inferred redaction. Sanitization, access control,
@@ -2270,6 +2278,15 @@ some text reached the client. `request_lifecycle.go` also treats a returned erro
 or response errors as failure; partial output is not authoritative successful
 completion and must not be displayed as such.
 
+Native partial-stream delivery retains content and available usage without a
+retry. Its authoritative synthesis debug interaction records `Success=false`
+and the exact returned error; the response's `Errors` also retains that cause.
+The delivery `FinishReason` is `cancelled` or `deadline_exceeded` only when the
+returned error wraps the corresponding context sentinel, otherwise `interrupted`.
+The provider's own finish reason remains unchanged in the debug record. The
+synthesis span records a bounded partial-stream exception and
+`synthesis.interruption_reason`, not raw provider error text.
+
 Workflow-mode `ExecutePlanWithSynthesis` executes a caller-supplied plan and
 synthesizes its results, but it does not run pipeline hooks and does not
 currently persist `FinalResponse`. Older records also predate these fields.
@@ -2286,6 +2303,10 @@ rules:
 - a failed execution receives the configured error TTL; and
 - an interrupted execution receives at least the maximum of normal TTL, error
   TTL, and the checkpoint's remaining approval lifetime.
+
+The normal and error TTLs both default to 72 hours (3 days). Changing a default
+does not rewrite existing Redis keys or revive expired records; longer existing
+or explicitly extended retention remains protected by the minimum-TTL contract.
 
 Each execution `Store` also attempts to persist a small retention-link record
 containing only its trace ID, conversation ID, and related-root ID. Normal TTL
@@ -2343,8 +2364,8 @@ identity is scrubbed rather than inherited.
 export TRUVAG3_LLM_DEBUG_ENABLED=true
 
 # TTL settings
-export TRUVAG3_LLM_DEBUG_TTL=24h       # Success records
-export TRUVAG3_LLM_DEBUG_ERROR_TTL=168h # Error records (7 days)
+export TRUVAG3_LLM_DEBUG_TTL=72h       # Success records (3 days)
+export TRUVAG3_LLM_DEBUG_ERROR_TTL=72h # Error records (3 days)
 
 # Optional deployment namespace shared by every Redis-backed role.
 export TRUVAG3_REDIS_NAMESPACE=production
@@ -3162,7 +3183,7 @@ client cleanup. `WithDefaultBackendClientConfig`,
 code-over-environment precedence and per-capability replacement without forcing
 the caller to abandon the convenience layer.
 `NewOptions` and `NewOrchestrationBackends` are deterministic and environment-
-free. `LoadOptionsFromEnvironment` applies the preset's LLM-debug retention,
+free. `LoadOptionsFromEnvironment` applies the preset's execution-debug and LLM-debug retention,
 checkpoint retention, workflow TTL, task-queue service scope and retry,
 task-index reconciliation, and schedule-capacity limits; `ConfigureOptions`
 applies later code overrides, including `WithTaskQueueScope`. `WithLogger`
@@ -3503,6 +3524,14 @@ modularity and flexibility.
 
 ## Version History
 
+Version 1.46 (2026-10-08): centralize generous defaults: planning 20000,
+synthesis 30000, synthesis skill input 6000 tokens; 20 phases at 25m,
+15m delegation execution allowance, 20m outbound HTTP, 64 KiB per-result and
+192 KiB aggregate result views. Event summaries default to 10000 output tokens;
+explicit per-step calculation and fixed-budget overrides remain available.
+Parent deadlines, validation, retries, telemetry and domain-independent execution
+contracts are unchanged. Larger default values change configuration fingerprints.
+
 Version 1.45 (2026-10-04): classify transient failures before analyzer,
 contextual and legacy correction; keep configured budgets but narrow correction
 eligibility. Explicit false stops retries, non-transient 4xx cannot be resent
@@ -3601,6 +3630,12 @@ records may lack the key. Applications may bind this ID with `WithRequestID` whe
 projecting failure evidence after the request returns.
 
 The builtin event summarizer bounds only its AI invocation to 2m by default.
+Its 10000-token base generation allowance is per batch, not per entry. A separate
+1024-byte stored-prose limit (`WithSummarizerSummaryMaxBytes`, builder environment
+`TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_SUMMARY_MAX_BYTES`, minimum 32) marks
+rune-safe shortened summaries and exposes counts in coverage/log/span evidence.
+Exact entity IDs and pre-parse raw debug completions are untouched. Custom
+summarizers retain ownership of their output policy.
 `WithSummarizerTimeout` configures direct construction; `BuildMemoryHooks` resolves
 `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` before optional-dependency checks.
 Absent values use the constructor default; explicit empty, malformed, non-positive

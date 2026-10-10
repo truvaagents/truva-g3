@@ -83,7 +83,7 @@ By participating in this project, you agree to abide by our Code of Conduct:
 
 ### Prerequisites
 
-- **Go 1.27.0 or higher** (every framework module is pinned to `go 1.27.0`)
+- **Go 1.27.2 or higher** (the shared gate script selects the patch-pinned toolchain from `go.work`)
 - **Docker** (recommended) for running the in-tree Redis/Valkey backend used by integration tests and example deployments
 - **kind** (Kubernetes-in-Docker) for running the example multi-agent system locally
 
@@ -94,11 +94,8 @@ The framework's service registry is pluggable behind the `core.Discovery` interf
 The repo is a Go workspace with seven modules — the root (`.`) plus `ai`, `core`, `memory`, `orchestration`, `resilience`, `telemetry`. Each has its own `go.mod`. Commands run from the repo root only cover the root module; to exercise everything, iterate over the workspace modules the same way CI does:
 
 ```bash
-# Build and unit-test every workspace module (mirrors CI's "test" job)
-for mod in . ai core memory orchestration resilience telemetry; do
-  echo "── $mod ──"
-  (cd "$mod" && go build ./... && go test -race -coverprofile=coverage.out -covermode=atomic ./...)
-done
+# Build and race-test the framework, including Bedrock (same entry point as CI).
+bash scripts/framework-ci.sh test
 
 # Integration tests (also workspace-aware; require Redis on localhost:6379 or via REDIS_URL)
 for mod in . ai core memory orchestration resilience telemetry; do
@@ -285,20 +282,55 @@ it supplies. Provider tests may import these packages; runtime code must not.
 
 ## Pre-commit Gates
 
-Before opening a PR, every Go-touching change must pass the local contributor gate set. This is a **superset** of CI: it includes everything CI checks plus a few standalone tools that are redundant with `golangci-lint` (which already runs `govet`, `gosec`, `misspell`, and others per [`.golangci.yml`](.golangci.yml)) but are useful as fast targeted checks. The PR template at [`.github/pull_request_template.md`](.github/pull_request_template.md) lists them as a checklist:
+Before opening a PR, every Go-touching change must pass the framework gates.
+The authoritative commands and tool pins live in
+[`scripts/framework-ci.sh`](scripts/framework-ci.sh), called directly by
+[GitHub Actions](.github/workflows/ci.yml). Run the same entry point locally:
 
 ```bash
-# Run each over every workspace module (use the same per-module loop shown above).
-go vet ./...                                              # redundant with golangci-lint's govet, but quick
-go build ./...                                            # CI runs this in its "test" job
-go test -race -coverprofile=coverage.out -covermode=atomic ./...  # CI runs this in its "test" job
-goimports -l . | tee /tmp/goimports.out && [ ! -s /tmp/goimports.out ]  # local-only
+bash scripts/framework-ci.sh install-lint
+bash scripts/framework-ci.sh install-vuln
+bash scripts/framework-ci.sh all
+```
+
+The script selects the Go version from `go.work`, installs exact tool versions
+into the Go build cache (or an absolute `TRUVAG3_CI_TOOLS_DIR`), and reports the
+compiler, scanner and embedded analyzer versions. It rejects missing or
+incorrectly versioned tools. Re-run the install commands after a tool-pin
+change; do not substitute floating `latest` versions. Review tool pins together
+with Go upgrades and validate the same commands on Linux before pushing.
+
+The `test`, `lint`, and `vuln` commands can also run separately. Tests are
+uncached and race-enabled, with coverage profiles. The lint command explicitly
+runs read-only `gofmt`/`goimports` checks through `golangci-lint fmt --diff`,
+followed by `go vet` and `golangci-lint run` (including `gosec` and `misspell`
+under [`.golangci.yml`](.golangci.yml)). Formatting differences fail the gate;
+the script does not fix files automatically. Bedrock's build, race tests, vet,
+lint and vulnerability scan are included. Root framework checks target `.`;
+the six optional/foundation submodules target `./...`. Example packages are
+handled by the separate build-only job, not the framework gates.
+
+Standalone utilities remain useful as targeted contributor checks. Their
+versions must support the selected Go toolchain; the `gosec` embedded in the
+pinned linter is CI's security-lint implementation. The PR template at
+[`.github/pull_request_template.md`](.github/pull_request_template.md) lists
+the contributor checklist:
+
+```bash
+# These targeted examples assume a framework submodule as the working directory.
+# At repository root, use package '.' and root '*.go' files to exclude examples.
+go vet ./...                                              # also run by the shared lint command
+go build ./...                                            # shared test command
+go test -count=1 -race -coverprofile=coverage.out -covermode=atomic ./...
+goimports -l . | tee /tmp/goimports.out && [ ! -s /tmp/goimports.out ]  # standalone equivalent of the import-format check
 golangci-lint run                                         # CI runs this as its "lint" job (includes gosec via .golangci.yml)
 gosec ./...                                               # redundant with golangci-lint, but quick
 govulncheck ./...                                         # CI runs this as its "vuln" job
 ```
 
-CI itself runs four jobs — `test`, `lint`, `vuln`, and `examples` (build-only) — over each workspace module. The standalone `go vet`, `goimports`, and `gosec` invocations above are not separate CI jobs; they're convenience checks that catch the same issues earlier with crisper output.
+CI runs five jobs: `release-state` (workspace resolution), `test`, `lint`,
+`vuln`, and `examples` (build-only). The shared script covers the three
+framework utility jobs; it does not replace the release-state or examples jobs.
 
 Partial passes are not acceptable — the merge gate is all green or none.
 
@@ -370,11 +402,12 @@ Do not include AI/assistant attribution lines (`Co-Authored-By: <bot>`, "Generat
 
    This is a review checkpoint, not a suggestion.
 3. **Run Pre-commit Gates**: All gates listed in [Pre-commit Gates](#pre-commit-gates) must pass locally.
-4. **Pass CI**: The repository runs four jobs on every PR:
-   - **test** — `go build ./...` + `go test -race -coverprofile=coverage.out -covermode=atomic ./...` across the root module and each sub-module (`ai`, `core`, `memory`, `orchestration`, `resilience`, `telemetry`)
-   - **lint** — `golangci-lint` (currently pinned to v2.13.1 in [`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-   - **vuln** — `govulncheck` against the current dependency tree
-   - **examples** — build-only smoke check on every example to catch framework changes that break consumers
+4. **Pass CI**: Go-touching PRs run five jobs:
+   - **release-state** — verify workspace-local module resolution and release bootstraps
+   - **test** — `bash scripts/framework-ci.sh test` (build and uncached race tests, including Bedrock)
+   - **lint** — `bash scripts/framework-ci.sh lint` (formatting, vet and security/static analysis)
+   - **vuln** — `bash scripts/framework-ci.sh vuln` against the current vulnerability database
+   - **examples** — build-only smoke check on every example module and the shared deployment helper
 5. **Mark Ready for Review** once CI is green.
 6. **Address Feedback** promptly; rebase on `main` if requested.
 7. **Clean History**: squash commits if requested.

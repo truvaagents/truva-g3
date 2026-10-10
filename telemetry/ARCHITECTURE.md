@@ -403,6 +403,10 @@ created by those factories are wrapped normally.
 
 2. **Format-compatible**: The JSON structure written by `RedisLLMCallRecorder` matches `orchestration.LLMInteraction` exactly. Both writers produce records that the registry-viewer can read seamlessly.
 
+   Both writers default to 72-hour (3-day) base retention for successful and
+   failed records. Their existing environment and code overrides remain
+   available; longer existing retention floors and persistent keys are preserved.
+
    Additive `reasoning_content`, `finish_reason` and `content_source` fields retain
    supplied completion facts verbatim in opt-in debug records. Missing fields
    remain unknown for legacy adapters/records. Telemetry neither interprets

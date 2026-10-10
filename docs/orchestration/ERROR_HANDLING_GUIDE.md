@@ -435,7 +435,7 @@ not guaranteed when planning budgets are exhausted.
 | `TRUVAG3_STEP_RETRY_INITIAL_DELAY` | `500ms` | Initial backoff delay for step retries |
 | `TRUVAG3_STEP_RETRY_MAX_DELAY` | `10s` | Maximum backoff delay cap |
 | `TRUVAG3_STEP_RETRY_MAX_ATTEMPTS` | `3` | Max step attempts (initial + retries). Values `<1` are rejected and the default is kept. |
-| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `600s` | Base HTTP-call timeout; delegation may enlarge it, while phase/parent deadlines may end calls sooner. See [execution limits](../reference/LIMITS_CHEATSHEET.md#execution-limits). |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `20m` | Base HTTP-call timeout; delegation may enlarge it, while phase/parent deadlines may end calls sooner. See [execution limits](../reference/LIMITS_CHEATSHEET.md#execution-limits). |
 
 ### Programmatic Configuration
 
