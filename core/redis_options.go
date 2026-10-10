@@ -128,5 +128,9 @@ func universalOptionsFromSimple(options *redis.Options) *redis.UniversalOptions 
 		ClientSideCacheConfig:     options.ClientSideCacheConfig,
 		ClientSideCache:           options.ClientSideCache,
 		ClientSideCacheStrategy:   options.ClientSideCacheStrategy,
+
+		ClientSideCacheRefreshOnInvalidate:     options.ClientSideCacheRefreshOnInvalidate,
+		ClientSideCacheCoalesceMisses:          options.ClientSideCacheCoalesceMisses,
+		ClientSideCacheInvalidationBatchWindow: options.ClientSideCacheInvalidationBatchWindow,
 	}
 }
