@@ -88,6 +88,21 @@ type PolicyError struct {
 	Err   error
 }
 
+// Is classifies deterministic local policy rejection as caller configuration,
+// not provider health. Middleware and unknown extension stages retain their
+// cause's identity, including genuine transport failures and cancellation.
+func (e *PolicyError) Is(target error) bool {
+	if e == nil || target != core.ErrInvalidConfiguration {
+		return false
+	}
+	switch e.Stage {
+	case "request-patch-validation", "mutation", "compatibility", "draft-validation", "output-capacity":
+		return true
+	default:
+		return false
+	}
+}
+
 func (e *PolicyError) Error() string {
 	if e == nil {
 		return "request policy failed"

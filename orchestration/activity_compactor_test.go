@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,67 @@ func TestNewLLMActivityCompactor_ComponentAwareLogger(t *testing.T) {
 }
 
 // --- CompactEvents Tests ---
+
+func TestActivityCompactionGenerationBudget(t *testing.T) {
+	for _, incremental := range []bool{false, true} {
+		for _, target := range []int{0, -1, 1, 500, math.MaxInt / 5, math.MaxInt/5 + 1, math.MaxInt} {
+			t.Run(fmt.Sprintf("incremental=%t/target=%d", incremental, target), func(t *testing.T) {
+				ai := &compactorMockAI{}
+				c, err := NewLLMActivityCompactor(ai)
+				require.NoError(t, err)
+				events := []core.AgentEvent{{EventID: "one", Summary: "Completed an action."}}
+				var result string
+				if incremental {
+					result, err = c.UpdateDigest(t.Context(), "previous digest", events, target)
+				} else {
+					result, err = c.CompactEvents(t.Context(), events, target)
+				}
+				if target <= 0 || target > math.MaxInt/5 {
+					require.ErrorIs(t, err, core.ErrInvalidConfiguration)
+					require.Zero(t, ai.calls, "invalid arithmetic must not reach an AI client")
+					if incremental {
+						require.Equal(t, "previous digest", result)
+					} else {
+						require.Empty(t, result)
+					}
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, 1, ai.calls)
+				require.Equal(t, target*5, ai.lastOpts.MaxTokens, "retain existing generation headroom")
+				require.Contains(t, ai.lastPrompt, fmt.Sprintf("%d tokens", target), "retain the concise digest target")
+			})
+		}
+	}
+}
+
+func TestMemoryEnrichmentBuiltInCompactionBudget(t *testing.T) {
+	c, err := NewLLMActivityCompactor(&compactorMockAI{})
+	require.NoError(t, err)
+	for _, target := range []int{math.MaxInt / 5, math.MaxInt/5 + 1} {
+		for _, budgetFirst := range []bool{false, true} {
+			opts := []MemoryEnrichmentOption{WithActivityCompactor(c), WithCompactionMaxTokens(target)}
+			if budgetFirst {
+				opts[0], opts[1] = opts[1], opts[0]
+			}
+			hook, err := NewMemoryEnrichmentHook(&core.MockEpisodicMemory{}, nil, "test", "domain", opts...)
+			if target > math.MaxInt/5 {
+				require.ErrorIs(t, err, core.ErrInvalidConfiguration)
+				require.Nil(t, hook)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, hook)
+			}
+		}
+	}
+	// Custom/no compaction does not use the built-in multiplier.
+	for _, compactor := range []core.ActivityCompactor{nil, &core.MockActivityCompactor{}} {
+		hook, err := NewMemoryEnrichmentHook(&core.MockEpisodicMemory{}, nil, "test", "domain",
+			WithActivityCompactor(compactor), WithCompactionMaxTokens(math.MaxInt))
+		require.NoError(t, err)
+		require.NotNil(t, hook)
+	}
+}
 
 func TestCompactEvents_EmptyEvents(t *testing.T) {
 	ai := &compactorMockAI{}

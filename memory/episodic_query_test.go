@@ -116,9 +116,10 @@ func TestEpisodicQueryReadFailures(t *testing.T) {
 	for _, corrupt := range []string{"domain-stream", "global-stream", "index", "hash-type", "hash-json", "missing-id", "cancelled"} {
 		t.Run(corrupt, func(t *testing.T) {
 			_, client := setupMiniRedis(t)
-			mem, err := NewStreamEpisodicMemory(WithEpisodicRedisClient(client))
+			logger := &memoryCaptureLogger{}
+			mem, err := NewStreamEpisodicMemory(WithEpisodicRedisClient(client), WithEpisodicLogger(logger))
 			require.NoError(t, err)
-			ctx := context.Background()
+			ctx := core.WithRequestID(t.Context(), "read-failure-probe")
 			require.NoError(t, mem.RecordEvent(ctx, core.AgentEvent{EventID: "one", AgentName: "worker", Scope: core.ScopeGlobal}))
 			filter := core.EventFilter{Limit: 1}
 			switch corrupt {
@@ -147,6 +148,12 @@ func TestEpisodicQueryReadFailures(t *testing.T) {
 			got, err = mem.QueryEvents(ctx, "default", filter)
 			require.NoError(t, err, "preserve the documented legacy fail-open API")
 			require.Empty(t, got)
+			fields := logger.fieldsForOperation("query_events")
+			require.NotNil(t, fields)
+			require.Equal(t, "memory event read failed", fields["error"])
+			require.Equal(t, "episodic_read", fields["error_type"])
+			require.Equal(t, "read-failure-probe", fields["request_id"])
+			require.Equal(t, "default", fields["caller_domain"])
 		})
 	}
 }

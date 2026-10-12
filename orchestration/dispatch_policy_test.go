@@ -31,6 +31,40 @@ func TestRetryDeclarationPresence(t *testing.T) {
 	}
 }
 
+func TestDeclaredDispatchConstraintsBeforeHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		parameter Parameter
+		params    map[string]interface{}
+		wantError string
+	}{
+		{"missing-required", Parameter{Name: "choice", Type: "string", Required: true}, map[string]interface{}{}, `required parameter "choice" is unresolved`},
+		{"outside-enum", Parameter{Name: "choice", Type: "string", Enum: []string{"one", "two"}}, map[string]interface{}{"choice": "three"}, `parameter "choice" is outside its declared enum`},
+		{"allowed-enum", Parameter{Name: "choice", Type: "string", Enum: []string{"one", "two"}}, map[string]interface{}{"choice": "two"}, ""},
+		{"optional-absent", Parameter{Name: "choice", Type: "string", Enum: []string{"one"}}, map[string]interface{}{}, ""},
+		{"explicit-null", Parameter{Name: "choice", Type: "string", Required: true, Enum: []string{"one"}}, map[string]interface{}{"choice": nil}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := &AgentCatalog{agents: map[string]*AgentInfo{"target": {
+				Registration: &core.ServiceRegistration{ID: "target", Name: "target", Address: "localhost", Port: 8080},
+				Capabilities: []EnhancedCapability{{Name: "call", Endpoint: "/call", Parameters: []Parameter{tc.parameter}}},
+			}}}
+			e := NewSmartExecutor(catalog)
+			rt := NewMockRoundTripper()
+			rt.SetResponse("http://localhost:8080/call", 200, `{"success":true}`)
+			e.httpClient = &http.Client{Transport: rt}
+			result := e.executeStep(t.Context(), RoutingStep{StepID: "step-1", AgentName: "target", Metadata: map[string]interface{}{"capability": "call", "parameters": tc.params}})
+			if tc.wantError != "" {
+				if result.Success || !strings.Contains(result.Error, tc.wantError) || rt.GetCallCount() != 0 || result.DispatchCount != 0 || len(result.Dispatches) != 0 {
+					t.Fatalf("invalid input dispatched or lost rejection: %+v", result)
+				}
+			} else if !result.Success || rt.GetCallCount() != 1 || result.DispatchCount != 1 {
+				t.Fatalf("valid input rejected: %+v", result)
+			}
+		})
+	}
+}
+
 func TestExplicitRetryRefusalStopsEveryHTTPStatus(t *testing.T) {
 	for _, status := range []int{400, 408, 429, 500} {
 		for _, mode := range []string{"enabled", "disabled", "exhausted", "orchestrator"} {

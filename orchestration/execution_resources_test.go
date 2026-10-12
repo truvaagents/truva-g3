@@ -144,6 +144,37 @@ func TestExecutionResourcesAllRequestExits(t *testing.T) {
 	}
 }
 
+func TestDirectConstructorDefaultsCleanupAndReleasesLease(t *testing.T) {
+	released := false
+	provider := &resourceLeaseProvider{release: func(ctx context.Context, _ core.InvestigationLease) (core.InvestigationReleaseOutcome, error) {
+		released = true
+		deadline, ok := ctx.Deadline()
+		if !ok || ctx.Err() != nil || time.Until(deadline) <= 0 || time.Until(deadline) > 5*time.Second {
+			t.Error("cleanup did not receive the default positive bounded deadline")
+		}
+		return core.InvestigationReleased, nil
+	}}
+	hook, err := NewMemoryEnrichmentHook(&core.MockEpisodicMemory{}, provider, "agent", "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := &OrchestratorConfig{}
+	o := NewAIOrchestrator(config, nil, nil)
+	if o.constructionErr != nil || o.config.executionCleanupTimeout != 5*time.Second || config.executionCleanupTimeout != 0 {
+		t.Fatalf("default/ownership failure: %v", o.constructionErr)
+	}
+	o.pipelineHooks = []core.PipelineHook{hook, &resourceEndHook{end: func(context.Context) (*core.PipelineShortCircuit, error) {
+		return &core.PipelineShortCircuit{Response: "done", Source: "fixture"}, nil
+	}}}
+	_, err = o.ProcessRequest(t.Context(), "request", map[string]interface{}{"entity_type": "document", "entity_id": "document"})
+	if err != nil || !released {
+		t.Fatalf("lease not released: %v", err)
+	}
+	if err := o.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExecutionResourcesProviderFailuresAndClose(t *testing.T) {
 	for _, mode := range []string{"error", "panic", "unknown", "invalid_outcome", "deadline", "not_owned", "absent"} {
 		t.Run(mode, func(t *testing.T) {

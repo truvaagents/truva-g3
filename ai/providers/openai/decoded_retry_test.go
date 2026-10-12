@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -27,6 +28,49 @@ type retryBody struct {
 }
 
 func (b *retryBody) Close() error { b.closes++; return nil }
+
+func TestQuotaHTTP429SkipsSameProviderRetriesButChainFailsOver(t *testing.T) {
+	for _, provider := range []string{"openai", "openai.groq", openRouterProviderAlias} {
+		for _, tc := range []struct {
+			name, body            string
+			recover               bool
+			wantFirst, wantBackup int
+		}{
+			{"quota", `{"error":{"code":"insufficient_quota","type":"insufficient_quota","metadata":{"error_type":"insufficient_quota"},"message":"account quota exhausted"}}`, false, 1, 1},
+			{"transient-recovered", `{"error":{"code":429,"type":"rate_limit_exceeded","metadata":{"error_type":"rate_limit_exceeded"}}}`, true, 2, 0},
+			{"transient-exhausted", `{"error":{"code":429,"type":"rate_limit_exceeded","metadata":{"error_type":"rate_limit_exceeded"}}}`, false, 3, 1},
+		} {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				firstCalls, backupCalls := 0, 0
+				first := NewClient("synthetic", "https://synthetic.invalid", provider, &core.NoOpLogger{})
+				first.MaxRetries, first.RetryDelay = 2, 0
+				first.HTTPClient = &http.Client{Transport: googleRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+					_ = req.Body.Close()
+					firstCalls++
+					status, body := 429, tc.body
+					if tc.recover && firstCalls == 2 {
+						status, body = 200, retrySuccess
+					}
+					return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+				})}
+				backup := NewClient("synthetic", "https://backup.invalid", "openai", &core.NoOpLogger{})
+				backup.HTTPClient = &http.Client{Transport: googleRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+					_ = req.Body.Close()
+					backupCalls++
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(retrySuccess)), Request: req}, nil
+				})}
+				chain, err := ai.NewChain(ai.ClientEntry("primary", first), ai.ClientEntry("backup", backup))
+				if err != nil {
+					t.Fatal(err)
+				}
+				response, err := chain.GenerateResponse(t.Context(), "request", &core.AIOptions{Model: "gpt-4.1"})
+				if err != nil || response == nil || response.Content != "recovered" || firstCalls != tc.wantFirst || backupCalls != tc.wantBackup {
+					t.Fatalf("first=%d backup=%d response=%+v error=%v", firstCalls, backupCalls, response, err)
+				}
+			})
+		}
+	}
+}
 
 func TestDecodedRetryUsesOneBudget(t *testing.T) {
 	for _, test := range []struct {

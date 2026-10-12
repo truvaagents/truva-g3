@@ -179,7 +179,8 @@ func (v *StreamEpisodicMemory) walkEventIndex(ctx context.Context, key string, f
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// Retain compatibility with servers lacking ZRANGE REV.
+		// Retain the established sorted-set command. Stream paging separately
+		// requires Redis 6.2+ exclusive range bounds.
 		//nolint:staticcheck // ZRevRangeByScore remains supported by go-redis/v9.
 		ids, err := v.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
 			Min: min, Max: max, Offset: offset, Count: episodicReadBatchSize,

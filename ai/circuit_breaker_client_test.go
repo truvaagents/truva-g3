@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/truvaagents/truva-g3/ai/requestpolicy"
 	"github.com/truvaagents/truva-g3/core"
 )
 
@@ -85,6 +86,11 @@ func TestShouldCountAICircuitBreakerFailure(t *testing.T) {
 	}{
 		{name: "nil", err: nil, want: false},
 		{name: "configuration", err: core.ErrInvalidConfiguration, want: false},
+		{name: "capacity policy", err: &requestpolicy.PolicyError{Stage: "output-capacity", Err: errors.New("over capacity")}, want: false},
+		{name: "wrapped strict policy", err: fmt.Errorf("prepare: %w", &requestpolicy.PolicyError{Stage: "compatibility", Err: errors.New("explicit value")}), want: false},
+		{name: "middleware network", err: &requestpolicy.PolicyError{Stage: "middleware", Err: core.ErrConnectionFailed}, want: true},
+		{name: "middleware deadline", err: &requestpolicy.PolicyError{Stage: "middleware", Err: context.DeadlineExceeded}, want: true},
+		{name: "middleware cancellation", err: &requestpolicy.PolicyError{Stage: "middleware", Err: context.Canceled}, want: false},
 		{name: "unsupported feature", err: core.ErrAIRequestFeatureUnsupported, want: false},
 		{name: "caller cancellation", err: context.Canceled, want: false},
 		{name: "partial stream", err: errors.Join(core.ErrStreamPartiallyCompleted, errors.New("upstream reset")), want: false},

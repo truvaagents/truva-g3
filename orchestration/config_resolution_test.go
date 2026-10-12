@@ -20,6 +20,147 @@ func lookupFromMap(values map[string]string) func(string) (string, bool) {
 	}
 }
 
+func TestCleanupTimeoutDiagnosticReasons(t *testing.T) {
+	const key = "TRUVAG3_EXECUTION_CLEANUP_TIMEOUT"
+	for _, mode := range []EnvironmentMode{EnvironmentCompatible, EnvironmentStrict} {
+		for _, tc := range []struct {
+			raw    string
+			reason ConfigDiagnosticReason
+		}{
+			{"", ConfigReasonEmptyValue},
+			{" \t", ConfigReasonEmptyValue},
+			{"private-invalid-duration", ConfigReasonInvalidDuration},
+			{"999999999999999999999h", ConfigReasonInvalidDuration},
+			{"0s", ConfigReasonOutOfRange},
+			{"-1s", ConfigReasonOutOfRange},
+		} {
+			t.Run(fmt.Sprintf("mode=%d/%s/%q", mode, tc.reason, tc.raw), func(t *testing.T) {
+				resolved, err := ResolveOrchestratorConfig(ConfigResolution{
+					Environment: mode, LookupEnv: lookupFromMap(map[string]string{key: tc.raw}),
+				})
+				var envErr *ConfigEnvironmentError
+				if resolved != nil || !errors.As(err, &envErr) || envErr.Variable != key || envErr.Reason != tc.reason {
+					t.Fatalf("wrong fatal diagnostic: resolved=%v err=%v", resolved, err)
+				}
+				if strings.Contains(err.Error(), "private-invalid-duration") {
+					t.Fatal("diagnostic leaked the rejected environment value")
+				}
+			})
+		}
+		for _, raw := range []string{"", "7s"} {
+			values := map[string]string{}
+			want := 5 * time.Second
+			if raw != "" {
+				values[key], want = raw, 7*time.Second
+			}
+			resolved, err := ResolveOrchestratorConfig(ConfigResolution{Environment: mode, LookupEnv: lookupFromMap(values)})
+			if err != nil || resolved.Config.executionCleanupTimeout != want {
+				t.Fatalf("valid/absent cleanup timeout changed: %v %v", resolved, err)
+			}
+		}
+	}
+}
+
+func TestLegacyConfigurationFatalErrorsFailClosed(t *testing.T) {
+	for _, key := range []string{"TRUVAG3_EXECUTION_CLEANUP_TIMEOUT", "TRUVAG3_SKILL_RESOURCE_SELECTION_ATTEMPT_TIMEOUT"} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv("TRUVAG3_ITERATIVE_MAX_PHASES", "7")
+			t.Setenv("TRUVAG3_HITL_ENABLED", "true")
+			t.Setenv("TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL", "true")
+			t.Setenv("TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED", "true")
+			t.Setenv(key, "invalid")
+			resolved := DefaultConfigWithDiagnostics()
+			var envErr *ConfigEnvironmentError
+			if !errors.As(resolved.Err, &envErr) || envErr.Variable != key || resolved.Config != nil {
+				t.Fatalf("fatal setting replaced by defaults: %+v", resolved)
+			}
+			legacy := DefaultConfig()
+			if err := ValidateOrchestratorConfig(legacy); !errors.As(err, &envErr) || envErr.Variable != key {
+				t.Fatalf("errorless helper lost failure: %v", err)
+			}
+			for _, config := range []*OrchestratorConfig{nil, legacy} {
+				o, err := CreateOrchestrator(config, OrchestratorDependencies{})
+				if o != nil || !errors.As(err, &envErr) || envErr.Variable != key {
+					t.Fatalf("factory did not reject before bootstrap: %v %v", o, err)
+				}
+				direct := NewAIOrchestrator(config, nil, nil)
+				if !errors.As(direct.Start(t.Context()), &envErr) || direct.executor != nil {
+					t.Fatal("errorless constructor created executable components")
+				}
+				if _, err := direct.ProcessRequest(t.Context(), "test", nil); !errors.As(err, &envErr) {
+					t.Fatalf("request bypassed construction failure: %v", err)
+				}
+				if err := direct.Shutdown(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestLegacyCompatibleFallbackPreservesOtherControls(t *testing.T) {
+	t.Setenv("TRUVAG3_EXECUTION_STEP_TIMEOUT", "invalid")
+	t.Setenv("TRUVAG3_ITERATIVE_MAX_PHASES", "7")
+	t.Setenv("TRUVAG3_HITL_ENABLED", "true")
+	t.Setenv("TRUVAG3_HITL_REQUIRE_PLAN_APPROVAL", "true")
+	t.Setenv("TRUVAG3_EXECUTION_DEBUG_STORE_ENABLED", "true")
+	resolved := DefaultConfigWithDiagnostics()
+	if resolved.Err != nil || resolved.Config == nil {
+		t.Fatalf("compatible setting became fatal: %v", resolved.Err)
+	}
+	c := resolved.Config
+	if c.IterativePlanning.MaxPhases != 7 || !c.HITL.Enabled || !c.HITL.RequirePlanApproval || !c.ExecutionStore.Enabled {
+		t.Fatal("compatible fallback discarded independent controls")
+	}
+	if len(resolved.Diagnostics) != 1 || resolved.Diagnostics[0].Variable != "TRUVAG3_EXECUTION_STEP_TIMEOUT" {
+		t.Fatalf("fallback not reported: %+v", resolved.Diagnostics)
+	}
+}
+
+func TestLegacyConstructorsValidateLifecycleAndProjection(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*OrchestratorConfig)
+	}{
+		{"negative-cleanup", func(c *OrchestratorConfig) { c.executionCleanupTimeout = -time.Second }},
+		{"explicit-zero-cleanup", func(c *OrchestratorConfig) { WithExecutionCleanupTimeout(0)(c) }},
+		{"negative-projection", func(c *OrchestratorConfig) { c.FailedOperationView.MaxValueBytes = -1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := NewDefaultOrchestratorConfig()
+			tc.configure(config)
+			if o, err := CreateOrchestrator(config, OrchestratorDependencies{}); o != nil || !errors.Is(err, ErrInvalidOrchestratorConfig) {
+				t.Fatalf("invalid explicit config reached bootstrap: %v %v", o, err)
+			}
+			o := NewAIOrchestrator(config, nil, nil)
+			if !errors.Is(o.Start(t.Context()), ErrInvalidOrchestratorConfig) || o.executor != nil {
+				t.Fatal("direct constructor accepted invalid config")
+			}
+			if err := o.Shutdown(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestFactoryFinishesConstructorOwnedConfiguration(t *testing.T) {
+	config := NewDefaultOrchestratorConfig()
+	config.LLMDebug.Enabled = true
+	o, err := CreateResolvedOrchestrator(config, OrchestratorDependencies{Discovery: NewMockDiscovery(), AIClient: NewMockAIClient()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.LLMDebugStore != nil || o.config == config {
+		t.Fatal("factory mutated or retained caller configuration")
+	}
+	if o.config.LLMDebugStore == nil || o.debugStore != o.config.LLMDebugStore {
+		t.Fatal("factory wired a backend into a different configuration snapshot")
+	}
+	if err := o.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNewDefaultOrchestratorConfig_IsPureAndIndependent(t *testing.T) {
 	t.Setenv("TRUVAG3_EXECUTION_MAX_CONCURRENCY", "99")
 	t.Setenv("TRUVAG3_PLAN_MODEL", "environment-model")
@@ -302,13 +443,13 @@ func TestResolveOrchestratorConfig_StrictIncludesPromptEnvironment(t *testing.T)
 	}
 }
 
-func TestDefaultConfigWithDiagnostics_IsTotalForInvalidEnvironment(t *testing.T) {
+func TestDefaultConfigWithDiagnostics_PreservesCompatiblePerSettingFallbacks(t *testing.T) {
 	result := defaultConfigWithDiagnostics(lookupFromMap(map[string]string{
 		"TRUVAG3_EXECUTION_MAX_CONCURRENCY": "invalid",
 		"TRUVAG3_HITL_DEFAULT_ACTION":       "unknown",
 	}))
-	if result.Config == nil {
-		t.Fatal("DefaultConfigWithDiagnostics returned nil config")
+	if result.Err != nil || result.Config == nil {
+		t.Fatalf("compatible fallback failed: %v", result.Err)
 	}
 	if err := ValidateOrchestratorConfig(result.Config); err != nil {
 		t.Fatalf("compatible result is invalid: %v", err)

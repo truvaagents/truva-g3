@@ -86,6 +86,10 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 	diagnostics := []ConfigDiagnostic(nil)
 	if config == nil {
 		resolved := DefaultConfigWithDiagnostics()
+		if resolved.Err != nil {
+			recordSkillConfigResolutionFailure(deps.Telemetry, resolved.Err, time.Since(validationStarted))
+			return nil, resolved.Err
+		}
 		config = resolved.Config
 		diagnostics = resolved.Diagnostics
 	} else {
@@ -94,15 +98,7 @@ func CreateOrchestrator(config *OrchestratorConfig, deps OrchestratorDependencie
 		if config.SynthesisStrategy == "" {
 			config.SynthesisStrategy = StrategyLLM
 		}
-		if err := validateSynthesisStrategy(config.SynthesisStrategy); err != nil {
-			recordSkillConfigValidation(deps.Telemetry, config, "startup", time.Since(validationStarted), err)
-			return nil, err
-		}
-		if err := validatePromptInvariantConfig(config); err != nil {
-			recordSkillConfigValidation(deps.Telemetry, config, "startup", time.Since(validationStarted), err)
-			return nil, err
-		}
-		if err := validateSkillRuntimeConfig(config); err != nil {
+		if err := validateOrchestratorConstructionConfig(config); err != nil {
 			recordSkillConfigValidation(deps.Telemetry, config, "startup", time.Since(validationStarted), err)
 			return nil, err
 		}
@@ -220,6 +216,12 @@ func createOrchestrator(
 
 	// Create orchestrator
 	orchestrator := NewAIOrchestrator(config, deps.Discovery, deps.AIClient)
+	if orchestrator.constructionErr != nil {
+		return nil, orchestrator.constructionErr
+	}
+	// Finish wiring the constructor-owned snapshot, including legacy AI-option
+	// normalization and backend fields; leave the caller's config untouched.
+	config = orchestrator.config
 	if config.Skills.Enabled && len(config.Skills.Bindings) > 0 {
 		contentCache, err := resolveSkillContentCache(config)
 		if err != nil {
