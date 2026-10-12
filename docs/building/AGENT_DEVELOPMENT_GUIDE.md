@@ -2258,7 +2258,11 @@ ownership for the resumed segment. Keep acquisition handles private rather than
 placing them in checkpoint metadata. Direct hook or `ExecutePlan*` composition
 does not supply this lifecycle. The joined cleanup bound defaults to 5s and is
 configurable with `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` /
-`WithExecutionCleanupTimeout`; explicit invalid values fail construction.
+`WithExecutionCleanupTimeout`; explicit invalid values fail construction through
+error-returning factories. Legacy errorless helpers preserve the failure and
+reject `Start`/execution instead of silently using defaults. Prefer
+`CreateOrchestratorFromEnvironment` or `CreateResolvedOrchestrator` and check the
+returned error before serving requests.
 
 Resume through `ResumeCoordinator`. It claims the approved checkpoint,
 restores context, renews ownership during work, and saves the actual terminal

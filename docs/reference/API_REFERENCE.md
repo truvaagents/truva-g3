@@ -1201,6 +1201,15 @@ type MemoryReflector interface {
 
 `ActivityCompactor` and `EventSummarizer` are LLM-powered — implemented in the orchestration module as `LLMActivityCompactor` and `LLMEventSummarizer`. `MemoryReflector` is also LLM-powered via `LLMMemoryReflector` in the memory module.
 
+For the built-in `LLMActivityCompactor`, a non-empty full or incremental call
+requires a positive target no larger than `math.MaxInt / 5`, so its five-times
+generation allowance fits a Go `int`. Invalid targets return an error matching
+`core.ErrInvalidConfiguration` before AI invocation; incremental rejection also
+returns the previous digest. Empty-event calls retain their no-op behavior.
+An enrichment hook selecting this compactor validates the target at construction.
+This implementation-specific arithmetic bound does not constrain custom
+`ActivityCompactor` implementations or guarantee a provider will accept the budget.
+
 #### Convenience Constructors
 
 **`memory.NewSharedBackends`** — creates all memory backends from a Redis client:
@@ -1273,6 +1282,12 @@ guarantee. These optional contracts are discovered by interface assertion.
 
 **`orchestration.BuildMemoryHooks`** — creates pipeline hooks from backends:
 
+This builder and `memory.NewSharedBackends` do not receive `core.Config`.
+Typed/JSON `SharedMemory` and `ActivityCoordination` values validated by core are
+not automatically applied to these bundles. Use their documented environment
+variables/options, or direct hook/backend constructors for explicit numeric or
+behavioral overrides. Direct constructors do not inherit bundle environment tuning.
+
 ```go
 hooks, activityCoord, err := orchestration.BuildMemoryHooks(
     backends.ToDeps(), aiClient, logger,
@@ -1284,7 +1299,7 @@ if err != nil {
 }
 ```
 
-Returns `([]core.PipelineHook, core.ActivityCoordinator, error)`. Check the error before serving; pass hooks and coordinator to `OrchestratorDependencies`. Invalid explicit numeric settings and options fail construction even without AI or episodic dependencies. With valid configuration, absent episodic memory returns `(nil, nil, nil)`. Runtime memory fail-open behavior is unchanged.
+Returns `([]core.PipelineHook, core.ActivityCoordinator, error)`. Check the error before serving; pass hooks and coordinator to `OrchestratorDependencies`. Generic numeric parsing/range checks and behavioral options are validated even without AI or episodic dependencies. Implementation-specific checks, including the built-in compactor's multiplication bound, run when that implementation is selected. With valid configuration, absent episodic memory returns `(nil, nil, nil)`. Runtime memory fail-open behavior is unchanged.
 
 **Default extractor selection:** when `aiClient != nil`, the record hook defaults to `LLMEntityExtractor` (zero-cost LLM extraction piggybacking on the existing `EventSummarizer` call). The enrichment hook always defaults to `NoOpEntityExtractor` (pre-planning, the summarizer hasn't run yet, so LLM extraction would silently return nothing). When `aiClient == nil`, both default to `NoOpEntityExtractor`.
 
@@ -2190,6 +2205,13 @@ patches, then compatibility and provider-draft validation. Compatible mode
 reports built-in adjustments. Strict mode rejects a built-in adjustment to
 explicit intent unless application policy acknowledges the affected path.
 
+`PolicyError` preserves its cause via `Unwrap`. Deterministic local stages
+`request-patch-validation`, `mutation`, `compatibility`, `draft-validation` and
+`output-capacity` also match `core.ErrInvalidConfiguration` through `errors.Is`.
+The default AI circuit-breaker classifier excludes these caller-side failures.
+Middleware and unknown extension stages retain their cause's classification;
+they are not blanket-exempted from provider-health accounting.
+
 Middleware must be safe for concurrent use and must not retain its call-local
 editor. It is fingerprint-unstable unless it implements
 `requestpolicy.StableRequestMiddleware` and explicitly declares deterministic,
@@ -2439,7 +2461,12 @@ and sanitized by the adapter (base observation allows at most 128 bytes).
 For OpenRouter, recognized transient types can retry; unknown nonempty types
 are conservative, and untyped status-only retries allow 429/500/502/503/504,
 not 501/505. Actual 401/402/403 stop same-provider recovery even if an error body
-claims otherwise. Other compatible HTTP routes retain their existing policy.
+claims otherwise. Native OpenAI and the other aliases served by
+`ai/providers/openai` also stop same-provider retries for classified quota/billing
+exhaustion (including `insufficient_quota` reported as HTTP 429). Their ordinary
+transient 429/5xx status policy is otherwise unchanged. Quota exhaustion still
+permits chain failover when another entry is available; it does not imply an
+automatic wait for quota reset. Azure uses its separate adapter.
 
 #### Model capability lookup and adaptation
 
@@ -4620,6 +4647,12 @@ func ValidateOrchestratorConfig(*OrchestratorConfig) error
 func ResolveOrchestratorConfigIdentity(*OrchestratorConfig) (OrchestratorConfigIdentity, error)
 func CreateResolvedOrchestrator(*OrchestratorConfig, OrchestratorDependencies) (*AIOrchestrator, error)
 func CreateOrchestratorFromEnvironment(OrchestratorDependencies, ...OrchestratorOption) (*AIOrchestrator, error)
+
+type ConfigResolutionResult struct {
+    Config      *OrchestratorConfig
+    Diagnostics []ConfigDiagnostic
+    Err         error // Fatal error from legacy DefaultConfigWithDiagnostics; Config is nil.
+}
 ```
 
 `NewDefaultOrchestratorConfig` is deterministic and never reads process
@@ -4646,8 +4679,22 @@ then calls the canonical constructor. `CreateOrchestrator`,
 compatibility entry points; they preserve their documented environment/bootstrap
 behavior.
 
-`DefaultConfigWithDiagnostics` is the total compatibility helper: it preserves
-legacy environment loading while returning bounded fallback diagnostics.
+`DefaultConfigWithDiagnostics` preserves legacy environment loading and bounded
+per-setting fallback diagnostics. Check its `Err` before reading `Config`:
+fatal resolution failures return a nil config rather than pure defaults that
+could disable valid HITL or execution-store settings. The canonical resolver
+continues to return errors through its second return value.
+
+`DefaultConfig` cannot return an error through its legacy signature; it retains
+fatal failure on a non-executable config. Factories reject that config. The
+errorless `NewAIOrchestrator` instead returns an inert instance whose `Start`
+and execution methods reject it. Prefer error-returning constructors for startup
+validation. Legacy partial configs default absent cleanup to 5s and reject
+explicit non-positive cleanup or negative failed-operation limits before
+component construction; unrelated legacy zero-value semantics are unchanged.
+Cleanup-timeout environment errors use bounded reasons `empty_value`,
+`invalid_duration` or `out_of_range`; their diagnostics do not include the raw
+rejected value.
 `ResolveOrchestratorConfigIdentity` returns a sanitized behavior summary,
 fingerprint, and explicit `CacheEligible` bit. Prompt bodies, credentials,
 endpoints, and raw environment values are excluded. Cache consumers must bypass
@@ -7973,7 +8020,7 @@ TruvaG3 supports configuration through environment variables:
 **Activity Compaction (LLM-powered digest):**
 - `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` - Model for summarization/compaction LLM calls. Accepts aliases such as `fast` and `smart` only when the selected provider defines them, or a concrete model ID (default: agent's model)
 - `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_TOKENS` - Positive fixed output-token allowance per event-summary call, read by `BuildMemoryHooks` at startup. Unset retains 10000; invalid explicit values fail construction, including without an AI client. Direct construction uses `WithSummarizerMaxTokens(n)`, which rejects non-positive values and overrides `WithSummarizerTokensPerStep(n)` regardless of option order. Independent of synthesis and compaction budgets.
-- `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` - Requested digest length (default: `500` tokens). The built-in full/incremental compactor sends `AIOptions.MaxTokens = 5 × target` (default: `2500`); provider reasoning scaling may further alter the wire budget. The target is a prompt instruction, not a tokenizer-enforced output cap. The final enrichment view has its own byte budget.
+- `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` - Requested digest length (default: `500` tokens). The built-in full/incremental compactor sends `AIOptions.MaxTokens = 5 × target` (default: `2500`); provider reasoning scaling may further alter the wire budget. Its positive target must fit `math.MaxInt / 5`, checked at hook construction when that compactor is selected and before direct non-empty AI calls. Custom compactors retain their own generation rules. The target is a prompt instruction, not a tokenizer-enforced output cap. The final enrichment view has its own byte budget.
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` - Max events fetched before compaction (default: `200`)
 - `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` - Raw events appended after digest for detail (default: `15`)
 

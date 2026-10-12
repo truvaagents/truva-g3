@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — construction failure safety
+
+- Reject integer overflow in built-in full and incremental activity-compaction
+  budgets before AI invocation, and at enrichment-hook construction when that
+  compactor is selected. Preserve the five-times-target allowance for valid
+  budgets and leave custom compactor budget rules unchanged.
+- Classify invalid cleanup-timeout environment values accurately as empty,
+  invalid duration or out of range. All remain fatal in both environment modes;
+  rejected raw values are not exposed.
+
+- Preserve fatal environment-resolution errors in legacy defaults instead of
+  silently replacing all settings with pure defaults. Check the new
+  `DefaultConfigWithDiagnostics().Err` before reading its config. Error-returning
+  factories reject the failure before bootstrap. `DefaultConfig` retains the
+  error in a non-executable configuration; legacy errorless constructors return
+  an inert instance whose `Start` and execution methods return that error.
+- Validate cleanup and failed-operation view settings in legacy constructors
+  as well as canonical construction. Unset direct cleanup gets the 5s default;
+  explicitly non-positive cleanup and negative projection limits are rejected.
+  Unrelated legacy partial-config semantics and per-setting compatible fallbacks
+  remain unchanged. Add regression coverage for required/enum dispatch rejection.
+
 ## Unreleased — three-day debug retention
 
 - Default successful and failed execution records and LLM debug records to

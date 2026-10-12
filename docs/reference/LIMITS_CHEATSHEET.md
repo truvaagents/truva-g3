@@ -252,7 +252,7 @@ this is a structural invariant, not a tunable retry budget. Actual work resets i
 | Delegation execution allowance | 15m | `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `WithStepTimeout(d)` |
 | Base outbound HTTP timeout | 20m | `TRUVAG3_ORCHESTRATION_TIMEOUT` | `WithTotalTimeout(d)` |
 | Execution-debug store write timeout | 5s | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `WithExecutionStoreWriteTimeout(d)` |
-| Request resource cleanup | 5s | `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` | `WithExecutionCleanupTimeout(d)`; explicit non-positive/invalid values fail startup in both config modes. Cancellation-independent, joined optional cleanup; providers honor context |
+| Request resource cleanup | 5s | `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` | `WithExecutionCleanupTimeout(d)`; explicit non-positive/invalid values fail resolution in both config modes. Factories return errors; legacy errorless constructors reject `Start`/execution. Unset direct values default to 5s. Cancellation-independent, joined optional cleanup; providers honor context |
 
 The cleanup budget bounds optional activity removal/investigation release after
 a managed request segment; it does not extend task, phase or provider timeouts.
@@ -576,6 +576,13 @@ The digest target is a prompt instruction, not a tokenizer-enforced length.
 Both full and incremental built-in compaction request five times that target as
 their generation allowance; provider reasoning-budget translation may further
 change the wire value. The final enrichment view has its own encoded byte budget.
+The internal `activityCompactionGenerationMultiplier` is fixed at 5 and pinned
+by regression tests. Built-in compaction accepts positive targets through
+`math.MaxInt / 5` (the platform's Go `int` range), rejecting larger values
+instead of wrapping or clamping. A hook selecting the built-in compactor checks
+this at construction; direct non-empty calls check before AI invocation. Custom
+compactors retain their own generation-budget rules. This arithmetic bound is
+not a provider output-capacity guarantee.
 
 Episodic Redis retrieval uses internal batches of 256 references/GETs. This is
 transport chunking, not an event-count cap: all retained candidates are examined

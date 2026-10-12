@@ -795,10 +795,20 @@ memory/activity settings, including when disabled. Compaction recent detail
 allows zero. Absent settings use `DefaultConfig` values; the enrichment budget
 also checks the four-byte conversion bound. File and typed configuration receive
 the same range checks. This startup rule does not alter runtime fail-open behavior.
-The hook builder also validates all hook-owned numeric settings before checking
-optional dependencies; invalid input returns an error, not a partial hook bundle.
+The hook builder also validates generic parsing and ranges for hook-owned numeric
+settings before checking optional dependencies; invalid input returns an error,
+not a partial hook bundle. Implementation-specific arithmetic bounds, such as
+the built-in compactor's five-times-target allowance, are additionally checked
+when that implementation is selected.
 The event-summarizer override is hook-owned, not parsed by core. Core validation
-alone is not backend wiring.
+alone is not backend wiring: `BuildMemoryHooks` and `NewSharedBackends` do not
+accept `core.Config`, and they do not consume `SharedMemory` or
+`ActivityCoordination` values assigned in Go or loaded from JSON. Those fields
+are loaded/validated data, not an automatic runtime override. Until an explicit
+handoff is implemented, configure the standard bundles through their documented
+environment variables/options, or construct hooks/backends directly with their
+typed options. Direct composition must also carry any desired environment tuning;
+it does not inherit tuning from an independently built bundle.
 
 Ownership and precedence matter: `BuildMemoryHooks` reads hook-owned overrides
 and otherwise keeps direct-constructor defaults. Its behavioral options include
@@ -828,7 +838,7 @@ precedence rules.
 | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_TIMEOUT` | `2m` | **Implemented** | Positive builtin AI-invocation deadline, not a memory-write timeout. Earlier parent deadline wins; invalid/empty/non-positive values fail `BuildMemoryHooks` even without dependencies. Direct constructor: `WithSummarizerTimeout(d)`. | [orchestration/memory_hook_tuning.go](../../orchestration/memory_hook_tuning.go) |
 | `TRUVAG3_SHARED_MEMORY_EVENT_SUMMARIZER_MAX_RESPONSE_BYTES` | `4000` | **Implemented** | Positive per-step encoded payload allowance shared by failure facts and response in the built-in summary prompt. Invalid/empty/overflow values fail builder construction, including without AI/memory dependencies. Direct construction uses `WithSummarizerMaxResponseChars(n)` (legacy name; byte units). Independent of output-token limits. | [orchestration/event_summarizer.go](../../orchestration/event_summarizer.go) |
 | `TRUVAG3_SHARED_MEMORY_RECORD_FAILURE_CAUSE_MAX_BYTES` | `256` | **Implemented** | Positive UTF-8 byte allowance for the cause in heuristic failure summaries. Framing and explicit shortening marker are additional. Invalid/empty/overflow values fail builder construction even without AI/memory dependencies. Direct option: `WithRecordFailureCauseMaxBytes(n)`. Original execution errors and model/custom summaries stay unchanged. | [orchestration/memory_hooks.go](../../orchestration/memory_hooks.go) |
-| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | **Implemented** | Requested digest length in the built-in compactor prompt. Full and incremental calls supply `AIOptions.MaxTokens = 5 × target` (2500 by default), before any provider reasoning scaling. The target is not a tokenizer-enforced cap; the final enrichment view has a separate byte budget. | [orchestration/activity_compactor.go](../../orchestration/activity_compactor.go) |
+| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | **Implemented** | Requested digest length in the built-in compactor prompt. Full and incremental calls supply `AIOptions.MaxTokens = 5 × target` (2500 by default), before any provider reasoning scaling. A selected built-in compactor requires `target ≤ math.MaxInt / 5`; hook construction rejects overflow, and direct non-empty compaction calls enforce the same check before invoking AI. Custom compactors retain their own generation rules. The target is not a tokenizer-enforced cap; the final enrichment view has a separate byte budget. | [orchestration/activity_compactor.go](../../orchestration/activity_compactor.go) |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` | `200` | **Implemented** | Max raw events fetched before compaction. Higher values give the compactor more context but increase LLM input size. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RECENT_DETAIL` | `15` | **Implemented** | Raw events appended after the compacted digest for immediate detail access. Set to `0` to disable. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL` | `5m` | **Implemented** | TTL for cached domain activity digests. When expired, next request triggers full compaction. Go duration format. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
@@ -1694,7 +1704,7 @@ Configure execution debug storage for DAG visualization and debugging. This feat
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | **Implemented** | Maximum executions returned by one framework conversation lookup | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | **Implemented** | Maximum conversation-index members scanned by one framework lookup, including stale members | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | **Implemented** | Per-write timeout for asynchronous execution-debug persistence. Code configuration through `WithExecutionStoreWriteTimeout` has higher precedence. | [orchestration/config_resolution.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/config_resolution.go) |
-| `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` | `5s` | **Implemented** | Joined request-resource cleanup deadline, independent of caller cancellation. Explicit empty/invalid/non-positive values fail in strict and compatible modes. `WithExecutionCleanupTimeout` overrides valid env settings. | [orchestration/execution_resources.go](../../orchestration/execution_resources.go) |
+| `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` | `5s` | **Implemented** | Joined request-resource cleanup deadline, independent of caller cancellation. Explicit empty/invalid/non-positive values fail in strict and compatible modes. Error-returning factories reject before bootstrap; legacy errorless constructors retain the error and reject `Start`/execution. `WithExecutionCleanupTimeout` overrides valid env settings. | [orchestration/execution_resources.go](../../orchestration/execution_resources.go) |
 
 The two conversation limits accept only positive integers. Missing, malformed,
 zero, or negative values retain the safe defaults. Environment values populate

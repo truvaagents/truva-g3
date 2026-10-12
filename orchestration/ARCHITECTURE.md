@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.46
+**Version**: 1.47
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -1494,15 +1494,36 @@ Legacy custom coordinators and directly invoked hooks retain their existing
 name-owned behavior; direct `ExecutePlan*` callers do not gain managed ownership.
 An ordinary trace records the ownership mode so this limitation stays visible.
 
+The error-returning factories reject invalid cleanup synchronously. Legacy
+errorless constructors preserve fatal resolution/validation errors and reject
+`Start` and execution without initializing executable components.
+
 `BuildMemoryHooks` also resolves `TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS`
 for both raw and AI-compacted enrichment. The default is 2000, interpreted as
-8000 encoded bytes, not exact model tokens. Invalid explicit numeric tuning fails
-construction, even without AI or episodic dependencies. The builder returns
+8000 encoded bytes, not exact model tokens. Generic numeric parsing and range
+checks fail construction even without AI or episodic dependencies; selected
+implementations enforce their additional arithmetic invariants. The builder returns
 hooks, coordinator and error; applications check it synchronously before serving.
 Absent episodic memory with valid configuration is a successful no-op. All
 selected hooks must construct successfully before a bundle is returned. Direct
 numeric options use the same validation; no new module edge or builder knob is
 added. Runtime backend failures retain their existing fail-open behavior.
+
+`core.Config` shared-memory/activity fields are validated configuration data;
+they are not a runtime handoff into `BuildMemoryHooks` or `NewSharedBackends`.
+Those bundles independently read their documented environment settings. Typed
+numeric/custom summarizer/compactor composition currently uses direct hook
+constructors and their options, with environment tuning supplied by the adopter.
+An explicit resolved-config handoff and builder behavior-injection seams remain
+separate work; this release does not claim typed/JSON values override the bundles.
+
+The built-in activity compactor checks its five-times-target generation allowance
+for integer overflow. A hook selecting that implementation validates its final
+target at construction, independent of option order. Direct non-empty full and
+incremental calls also reject invalid targets before invoking AI; incremental
+rejection preserves the previous digest alongside the error. Custom compactors
+are not constrained by the built-in multiplier. Empty-event no-op behavior and
+valid digest targets, prompts and generation allowances remain unchanged.
 
 The derived historical view reserves scope/headings/counts and admits complete
 JSON records in the existing domain → entity → investigation → knowledge order.
@@ -3052,6 +3073,21 @@ then code options; `CreateResolvedOrchestrator` performs no environment reads.
 Compatibility constructors retain documented environment bootstrap behavior and
 emit bounded diagnostics for fallbacks.
 
+Fatal resolution failures are not compatible fallbacks. In particular, invalid
+cleanup or resource-selector attempt timeouts cannot discard otherwise valid
+HITL, execution-store or phase settings. `DefaultConfigWithDiagnostics` returns
+`Err` with a nil `Config`; `DefaultConfig` preserves that failure on a
+non-executable configuration. Error-returning factories reject it before
+bootstrap. Legacy errorless constructors return an inert instance that rejects
+`Start` and every execution entry point; applications should prefer the
+error-returning factories for synchronous startup validation.
+
+Legacy partial-config constructors normalize absent cleanup to 5s and validate
+explicit cleanup, failed-operation projection, skill and prompt invariants.
+They retain unrelated legacy zero-value semantics; full resolved-limit validation
+belongs to the canonical constructor. Construction snapshots caller configuration
+rather than normalizing it in place.
+
 `ResolveOrchestratorConfigIdentity` returns a sanitized summary plus explicit
 cache eligibility. Prompt bodies, credentials, endpoints, raw environment values,
 and provider extensions never leave through this surface. A deterministic
@@ -3523,6 +3559,13 @@ modularity and flexibility.
 ---
 
 ## Version History
+
+Version 1.47 (2026-10-11): preserve fatal configuration errors through legacy
+helpers and constructors; enforce cleanup/projection invariants before component
+wiring, normalize absent direct cleanup, and preserve caller-owned configuration.
+Clarify the still-unwired core typed/JSON shared-memory configuration boundary.
+Guard built-in activity-compaction multiplication at construction and invocation,
+preserving custom compactor rules; distinguish cleanup-timeout diagnostic reasons.
 
 Version 1.46 (2026-10-08): centralize generous defaults: planning 20000,
 synthesis 30000, synthesis skill input 6000 tokens; 20 phases at 25m,

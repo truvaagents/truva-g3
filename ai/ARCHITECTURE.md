@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.23
+**Version**: 1.24
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -1057,6 +1057,15 @@ rejection may fail over to the next entry. A post-output stream failure neither
 counts against health nor permits replay/failover, preserving the chain's
 commit-after-first-visible-chunk rule.
 
+Deterministic local `requestpolicy.PolicyError` stages (`request-patch-validation`,
+`mutation`, `compatibility`, `draft-validation`, `output-capacity`) match
+`core.ErrInvalidConfiguration` through `errors.Is`, so caller-owned request
+rejections do not degrade dependency health. The original policy stage, path and
+wrapped cause remain available. Middleware and unknown extension-stage errors
+are not automatically configuration errors: their underlying cancellation,
+transport or explicit configuration identity still decides health classification.
+This distinction changes neither provider retry nor chain failover policy.
+
 Application composition examples belong in
 [resilience/README.md](../resilience/README.md); this document defines the
 dependency, lifecycle, ordering, and classification contracts they must obey.
@@ -2101,6 +2110,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.24 | 2026-10-11 | Classify deterministic local policy failures as caller configuration for breaker health, preserving middleware causes; clarify quota HTTP 429 same-provider stop versus chain failover |
 | 1.23 | 2026-10-09 | Close decoded-success log parity gap with successful-attempt duration; preserve retry, payload and metric ownership; refresh provider factory/constructor examples against the request-aware implementation |
 | 1.22 | 2026-10-08 | Bound derived reasoning headroom before Strict intent checks; retain over-cap base rejection and final capacity validation; add capacity-only native GPT-5.6 Sol and routed GPT-5.6 Luna rows; report/fingerprint the bounded-headroom contract |
 | 1.21 | 2026-10-08 | Provider-reviewed default-reasoning budget fact with report/cache identity; root AI timeout environment wiring and fail-fast validation; effort, routing, caller deadlines and retry/failover contracts preserved |
