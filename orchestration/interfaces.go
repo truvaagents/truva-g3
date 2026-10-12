@@ -443,6 +443,10 @@ type ServiceCapabilityConfig struct {
 
 // OrchestratorConfig configures the orchestrator
 type OrchestratorConfig struct {
+	// resolutionErr prevents legacy errorless configuration helpers from turning
+	// a failed environment resolution into an executable default configuration.
+	resolutionErr error
+
 	FailedOperationView FailedOperationViewConfig `json:"failed_operation_view,omitempty"`
 	// Name identifies this orchestrator agent for debugging and DAG visualization.
 	// Examples: "travel-agent", "support-bot", "order-processor"

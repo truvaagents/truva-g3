@@ -72,13 +72,15 @@ type ConfigResolution struct {
 }
 
 // ConfigResolutionResult contains an independent validated configuration and
-// any bounded compatible-mode fallbacks.
+// bounded compatible-mode fallbacks. The legacy DefaultConfigWithDiagnostics
+// helper reports fatal resolution failure in Err, with Config nil.
 type ConfigResolutionResult struct {
 	Config      *OrchestratorConfig
 	Diagnostics []ConfigDiagnostic
+	Err         error
 }
 
-// ConfigEnvironmentError identifies one invalid strict environment setting
+// ConfigEnvironmentError identifies one fatal invalid environment setting
 // without exposing its raw value.
 type ConfigEnvironmentError struct {
 	Variable string
@@ -258,8 +260,8 @@ func ResolveOrchestratorConfig(input ConfigResolution) (*ConfigResolutionResult,
 	}, nil
 }
 
-// DefaultConfigWithDiagnostics preserves the legacy environment-enabled helper
-// while making every fallback observable and the result total.
+// DefaultConfigWithDiagnostics preserves legacy environment loading. Check Err
+// before using Config: fatal errors are not converted to permissive defaults.
 func DefaultConfigWithDiagnostics() ConfigResolutionResult {
 	return defaultConfigWithDiagnostics(os.LookupEnv)
 }
@@ -273,23 +275,18 @@ func defaultConfigWithDiagnostics(lookup func(string) (string, bool)) ConfigReso
 		return *result
 	}
 
-	// Compatible defaults are total. A cross-field failure falls back to pure
-	// defaults and reports only a bounded diagnostic.
-	defaults := NewDefaultOrchestratorConfig()
-	return ConfigResolutionResult{
-		Config: defaults,
-		Diagnostics: []ConfigDiagnostic{{
-			Variable: "orchestrator_config",
-			Reason:   ConfigReasonInvalidConfiguration,
-			Action:   ConfigActionDefaulted,
-		}},
-	}
+	return ConfigResolutionResult{Err: err}
 }
 
-// DefaultConfig returns the same total configuration as
-// DefaultConfigWithDiagnostics and emits bounded fallback metrics.
+// DefaultConfig is the legacy errorless environment helper. On fatal resolution
+// failure it returns a non-executable config carrying the error; validation and
+// every orchestrator constructor reject it. Prefer ResolveOrchestratorConfig
+// or check DefaultConfigWithDiagnostics.Err when inspecting configuration fields.
 func DefaultConfig() *OrchestratorConfig {
 	result := DefaultConfigWithDiagnostics()
+	if result.Err != nil {
+		return &OrchestratorConfig{resolutionErr: result.Err}
+	}
 	emitConfigFallbackMetrics(result.Diagnostics)
 	return result.Config
 }
@@ -328,8 +325,24 @@ func normalizeOrchestratorConfig(config *OrchestratorConfig) {
 // ValidateOrchestratorConfig validates effective behavior after every selected
 // layer has been applied.
 func ValidateOrchestratorConfig(config *OrchestratorConfig) error {
+	if err := validateOrchestratorConstructionConfig(config); err != nil {
+		return err
+	}
+	return validateResolvedOrchestratorConfig(config)
+}
+
+// Legacy constructors accept partial configuration. Enforce the same lifecycle,
+// projection and prompt invariants there without changing unrelated legacy zero
+// semantics. Canonical construction additionally validates every resolved limit.
+func validateOrchestratorConstructionConfig(config *OrchestratorConfig) error {
 	if config == nil {
 		return fmt.Errorf("%w: config is nil", ErrInvalidOrchestratorConfig)
+	}
+	if config.resolutionErr != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidOrchestratorConfig, config.resolutionErr)
+	}
+	if config.executionCleanupTimeout <= 0 {
+		return fmt.Errorf("%w: execution.cleanup_timeout must be greater than zero", ErrInvalidOrchestratorConfig)
 	}
 	if _, err := resolveFailedOperationView(config.FailedOperationView); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidOrchestratorConfig, err)
@@ -343,6 +356,10 @@ func ValidateOrchestratorConfig(config *OrchestratorConfig) error {
 	if err := validateSkillRuntimeConfig(config); err != nil {
 		return fmt.Errorf("%w: %w", errInvalidSkillRuntimeConfig, err)
 	}
+	return nil
+}
+
+func validateResolvedOrchestratorConfig(config *OrchestratorConfig) error {
 	positive := []struct {
 		name  string
 		value int
@@ -1125,8 +1142,14 @@ func (r *configEnvResolver) apply(config *OrchestratorConfig, includePrompt bool
 	// This new lifecycle control fails fast in both environment modes; omission
 	// alone selects its default. Do not silently disable bounded cleanup.
 	if raw, present := r.lookup("TRUVAG3_EXECUTION_CLEANUP_TIMEOUT"); present {
+		if strings.TrimSpace(raw) == "" {
+			return &ConfigEnvironmentError{Variable: "TRUVAG3_EXECUTION_CLEANUP_TIMEOUT", Reason: ConfigReasonEmptyValue}
+		}
 		value, err := time.ParseDuration(raw)
-		if err != nil || value <= 0 {
+		if err != nil {
+			return &ConfigEnvironmentError{Variable: "TRUVAG3_EXECUTION_CLEANUP_TIMEOUT", Reason: ConfigReasonInvalidDuration}
+		}
+		if value <= 0 {
 			return &ConfigEnvironmentError{Variable: "TRUVAG3_EXECUTION_CLEANUP_TIMEOUT", Reason: ConfigReasonOutOfRange}
 		}
 		config.executionCleanupTimeout, config.executionCleanupTimeoutSet = value, true

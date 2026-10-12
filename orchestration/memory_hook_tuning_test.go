@@ -51,6 +51,18 @@ func TestMemoryHookConfigurationInvalid(t *testing.T) {
 	})
 }
 
+func TestMemoryHookBuiltInCompactionOverflowFailsConstruction(t *testing.T) {
+	t.Setenv("TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS", strconv.Itoa(math.MaxInt/5+1))
+	client := &compactorMockAI{}
+	hooks, coordinator, err := BuildMemoryHooks(&core.SharedMemoryDeps{
+		AgentName: "test", Episodic: &core.MockEpisodicMemory{},
+	}, client, nil)
+	require.ErrorIs(t, err, core.ErrInvalidConfiguration)
+	require.Nil(t, hooks)
+	require.Nil(t, coordinator)
+	require.Zero(t, client.calls)
+}
+
 func TestMemoryHookConfigurationValid(t *testing.T) {
 	for key, value := range map[string]string{
 		"TRUVAG3_SHARED_MEMORY_ENRICHMENT_MAX_TOKENS":         "4000",

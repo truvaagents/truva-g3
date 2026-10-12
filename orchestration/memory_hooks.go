@@ -392,6 +392,13 @@ func NewMemoryEnrichmentHook(
 			return nil, fmt.Errorf("invalid enrichment hook option: %w", err)
 		}
 	}
+	// Only the built-in compactor multiplies this target by our generation headroom.
+	// Validate the final option combination without imposing that bound on custom implementations.
+	if _, builtIn := h.compactor.(*LLMActivityCompactor); builtIn {
+		if _, err := activityCompactionGenerationBudget(h.compactionMaxTokens); err != nil {
+			return nil, fmt.Errorf("invalid enrichment compaction budget: %w", err)
+		}
+	}
 	return h, nil
 }
 

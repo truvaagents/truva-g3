@@ -18,6 +18,16 @@ import (
 // Compile-time interface check.
 var _ core.ActivityCompactor = (*LLMActivityCompactor)(nil)
 
+// Generation headroom lets a concise digest finish without changing its prompt target.
+const activityCompactionGenerationMultiplier = 5
+
+func activityCompactionGenerationBudget(target int) (int, error) {
+	if target <= 0 || target > math.MaxInt/activityCompactionGenerationMultiplier {
+		return 0, fmt.Errorf("%w: activity compaction target must be in [1, %d]", core.ErrInvalidConfiguration, math.MaxInt/activityCompactionGenerationMultiplier)
+	}
+	return target * activityCompactionGenerationMultiplier, nil
+}
+
 // activityCompactorSystemPrompt follows docs/building/EFFECTIVE_PROMPTS_GUIDE.md:
 //   - §2.8 (converged ordering: identity → instructions → example)
 //   - §2.9 (system message for identity and rules)
@@ -209,6 +219,12 @@ func (c *LLMActivityCompactor) CompactEvents(ctx context.Context, events []core.
 		}
 	}
 
+	generationBudget, err := activityCompactionGenerationBudget(maxTokens)
+	if err != nil {
+		telemetry.RecordSpanError(ctx, err)
+		return "", err
+	}
+
 	// Format raw events for the prompt
 	rawText := formatEpisodicEvents(events, "Historical activity in this domain:")
 	prompt := fmt.Sprintf("<events>\n%s\n</events>\n\nProduce a summary of at most %d tokens. Return plain text only.", rawText, maxTokens)
@@ -225,7 +241,7 @@ func (c *LLMActivityCompactor) CompactEvents(ctx context.Context, events []core.
 	// gives the model generous room to produce clean output without mid-sentence truncation.
 	aiOpts := &core.AIOptions{
 		Temperature:  c.temperature,
-		MaxTokens:    maxTokens * 5,
+		MaxTokens:    generationBudget,
 		SystemPrompt: activityCompactorSystemPrompt,
 	}
 	if c.model != "" {
@@ -347,6 +363,11 @@ func (c *LLMActivityCompactor) UpdateDigest(ctx context.Context, previousDigest 
 		span.SetAttribute("new_event_count", len(newEvents))
 		span.SetAttribute("previous_digest_length", len(previousDigest))
 	}
+	generationBudget, err := activityCompactionGenerationBudget(maxTokens)
+	if err != nil {
+		telemetry.RecordSpanError(ctx, err)
+		return previousDigest, err
+	}
 
 	rawText := formatEpisodicEvents(newEvents, "Historical activity in this domain:")
 	encodedDigest, _ := json.Marshal(previousDigest)
@@ -361,7 +382,7 @@ func (c *LLMActivityCompactor) UpdateDigest(ctx context.Context, previousDigest 
 
 	aiOpts := &core.AIOptions{
 		Temperature:  c.temperature,
-		MaxTokens:    maxTokens * 5,
+		MaxTokens:    generationBudget,
 		SystemPrompt: activityCompactorSystemPrompt,
 	}
 	if c.model != "" {

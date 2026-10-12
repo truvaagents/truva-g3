@@ -18,6 +18,29 @@ type testDraft struct {
 	identity string
 }
 
+func TestPolicyErrorConfigurationIdentity(t *testing.T) {
+	for _, stage := range []string{"request-patch-validation", "mutation", "compatibility", "draft-validation", "output-capacity"} {
+		cause := errors.New("local policy rejection")
+		err := &PolicyError{Stage: stage, Err: cause}
+		if !core.IsConfigurationError(err) || !errors.Is(err, cause) {
+			t.Fatalf("configuration or cause identity lost for %s: %v", stage, err)
+		}
+	}
+	for _, stage := range []string{"middleware", "extension", ""} {
+		err := &PolicyError{Stage: stage, Err: core.ErrConnectionFailed}
+		if core.IsConfigurationError(err) || !errors.Is(err, core.ErrConnectionFailed) {
+			t.Fatalf("extension failure misclassified: %v", err)
+		}
+		if !core.IsConfigurationError(&PolicyError{Stage: stage, Err: core.ErrInvalidConfiguration}) {
+			t.Fatal("explicit cause configuration identity lost")
+		}
+	}
+	var nilPolicy *PolicyError
+	if nilPolicy.Is(core.ErrInvalidConfiguration) {
+		t.Fatal("nil policy classified as configuration")
+	}
+}
+
 func (d *testDraft) HasExplicitIntent(path string) bool {
 	_, ok := d.explicit[path]
 	return ok

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,58 @@ import (
 	"github.com/truvaagents/truva-g3/ai"
 	"github.com/truvaagents/truva-g3/core"
 )
+
+func TestFactoryReasoningMultiplierEnvironment(t *testing.T) {
+	const key = "TRUVAG3_AI_REASONING_TOKEN_MULTIPLIER"
+	for _, tc := range []struct {
+		name    string
+		raw     string
+		present bool
+		code    int
+		want    int
+	}{
+		{name: "default", want: 3},
+		{name: "environment", present: true, raw: "5", want: 5},
+		{name: "code-overrides-environment", present: true, raw: "5", code: 1, want: 1},
+		{name: "empty", present: true},
+		{name: "zero", present: true, raw: "0"},
+		{name: "negative", present: true, raw: "-1"},
+		{name: "malformed", present: true, raw: "private-multiplier-value"},
+		{name: "invalid-environment-with-code", present: true, raw: "private-multiplier-value", code: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(key, tc.raw)
+			if !tc.present {
+				if err := os.Unsetenv(key); err != nil {
+					t.Fatal(err)
+				}
+			}
+			created, err := (&Factory{}).CreateValidated(&ai.AIConfig{
+				ProviderAlias: "openai", APIKey: "test-key", Logger: &core.NoOpLogger{},
+				ReasoningTokenMultiplier: tc.code,
+			})
+			if tc.want == 0 {
+				if !errors.Is(err, core.ErrInvalidConfiguration) {
+					t.Fatalf("invalid multiplier accepted: %T %v", created, err)
+				}
+				if client, ok := created.(*Client); ok && client != nil {
+					t.Fatal("invalid multiplier returned an initialized client")
+				}
+				if strings.Contains(err.Error(), "private-multiplier-value") {
+					t.Fatal("configuration error leaked rejected value")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, ok := created.(*Client)
+			if !ok || client.ReasoningTokenMultiplier != tc.want {
+				t.Fatalf("wrong factory multiplier: %T, want %d", created, tc.want)
+			}
+		})
+	}
+}
 
 func TestFactory_Name(t *testing.T) {
 	factory := &Factory{}

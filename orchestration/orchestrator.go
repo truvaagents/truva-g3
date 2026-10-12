@@ -544,8 +544,8 @@ func getAllowedAgentKeys(allowedAgents map[string]bool) []string {
 // AIOrchestrator is an AI-powered orchestrator that uses LLM for intelligent routing
 type AIOrchestrator struct {
 	config *OrchestratorConfig
-	// constructionErr is populated only by the source-compatible simple
-	// constructor when its error-returning counterpart fails. Every public
+	// constructionErr is populated by source-compatible errorless
+	// constructors when configuration or dependency construction fails. Every public
 	// execution entry point checks it before doing work.
 	constructionErr error
 	discovery       core.Discovery
@@ -635,6 +635,22 @@ func NewAIOrchestrator(config *OrchestratorConfig, discovery core.Discovery, aiC
 
 	if config == nil {
 		config = DefaultConfig()
+	}
+	config = cloneOrchestratorConfig(config)
+	normalizeOrchestratorConfig(config)
+	if config.SynthesisStrategy == "" {
+		config.SynthesisStrategy = StrategyLLM
+	}
+	if err := validateOrchestratorConstructionConfig(config); err != nil {
+		// This legacy signature cannot return an error. Return an inert instance,
+		// guarded by Start and every execution entry point, without creating workers.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return &AIOrchestrator{
+			config: config, discovery: discovery, aiClient: aiClient,
+			ctx: ctx, cancel: cancel, telemetry: &core.NoOpTelemetry{},
+			constructionErr: fmt.Errorf("%w: %w", ErrOrchestratorConstruction, err),
+		}
 	}
 	applyLegacyAIOptionFields(config)
 

@@ -128,6 +128,8 @@ func TestOutputCapacityPolicyAndOverrides(t *testing.T) {
 			request.Generation.MaxTokens = core.SetAIParameter(128001)
 			_, err = client.prepareInvocation(t.Context(), request, stream)
 			require.ErrorContains(t, err, "explicit request intent")
+			require.True(t, core.IsConfigurationError(err))
+			require.False(t, ai.ShouldCountAICircuitBreakerFailure(err))
 			request.Patches = []core.AIProviderPatch{{Name: "app-budget", Version: "1", Selector: core.AIProviderSelector{ProviderAlias: provider}, Set: map[string]interface{}{"/max_completion_tokens": 64000}}}
 			prepared, err = client.prepareInvocation(t.Context(), request, stream)
 			require.NoError(t, err)
@@ -135,6 +137,8 @@ func TestOutputCapacityPolicyAndOverrides(t *testing.T) {
 			request.Patches[0].Set["/max_completion_tokens"] = 160000
 			_, err = client.prepareInvocation(t.Context(), request, stream)
 			require.ErrorContains(t, err, "output-capacity")
+			require.True(t, core.IsConfigurationError(err))
+			require.False(t, ai.ShouldCountAICircuitBreakerFailure(err))
 		}
 	}
 }

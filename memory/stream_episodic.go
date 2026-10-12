@@ -249,6 +249,7 @@ func (v *StreamEpisodicMemory) QueryEvents(ctx context.Context, callerDomain str
 				"request_id":    core.GetRequestID(ctx),
 				"operation":     "query_events",
 				"caller_domain": callerDomain,
+				"error":         "memory event read failed",
 				"error_type":    "episodic_read",
 			})
 		}
