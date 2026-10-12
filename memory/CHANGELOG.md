@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Restore the bounded `error` field on incomplete episodic-query WARN logs,
+  retaining contextual request correlation and `error_type=episodic_read`.
+  Raw backend errors and event payloads are not copied into the log.
+
+- Document the existing Redis 6.2+ requirement for exclusive stream-pagination
+  bounds. No new Redis command or backward-compatibility path is introduced.
+
 Changes since the framework's remote baseline `cb58a9745fe2`:
 
 Adoption: `NewSharedBackends` now reads and validates

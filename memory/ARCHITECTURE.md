@@ -1,6 +1,6 @@
 # TruvaG3 Memory Module Architecture
 
-**Version**: 1.9
+**Version**: 1.10
 **Module**: `github.com/truvaagents/truva-g3/memory`
 **Purpose**: Pluggable storage backend implementations for cross-agent shared memory
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
@@ -1003,6 +1003,11 @@ func NewVectorSharedKnowledge(opts ...Option) (*VectorSharedKnowledge, error) {
 
 ## Redis/Valkey DB-0 Backend Contract
 
+The stream-backed episodic reader requires Redis 6.2+ or equivalent exclusive
+`XREVRANGE` range support. The retained sorted-set command spellings do not imply
+pre-6.2 support for this reader. This release documents the dependency; it does
+not add version negotiation or a legacy pagination path.
+
 Redis-backed memory adapters accept an application-owned
 `redis.UniversalClient` or the narrower `redis.Cmdable` interface. The canonical
 `NewSharedBackends` bundle resolves and validates defaults, environment values,
@@ -1309,6 +1314,7 @@ Backend implementations must:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.10 | 2026-10-11 | Document the existing Redis 6.2+ exclusive stream-pagination requirement; no retrieval or server-negotiation change |
 | 1.9 | 2026-10-02 | Clarify producer occurrence time versus ingestion-based retention and opaque recording provenance; no provider algorithm change |
 | 1.8 | 2026-09-30 | Newest-first episodic retrieval across visible retained sources; exact event-time bounds, stable ties, post-filter limits, batching and explicit performance/completeness limitations |
 | 1.7 | 2026-09-29 | Token-safe optional investigation providers, same-key legacy contention, observed release/error outcomes and no provider-owned lifecycle |

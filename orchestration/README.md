@@ -1427,6 +1427,7 @@ retain their completed classification in Registry Viewer.
 | `TRUVAG3_EXECUTION_DEBUG_CONVERSATION_QUERY_LIMIT` | `1000` | Maximum records returned by `ListByConversationID` |
 | `TRUVAG3_EXECUTION_DEBUG_INDEX_SCAN_LIMIT` | `5000` | Maximum conversation-index members inspected by one lookup, including stale entries |
 | `TRUVAG3_EXECUTION_STORE_WRITE_TIMEOUT` | `5s` | Per-write timeout for ordered execution-debug persistence |
+| `TRUVAG3_EXECUTION_CLEANUP_TIMEOUT` | `5s` | Joined, cancellation-independent request-resource cleanup bound. Invalid explicit values fail resolution in both config modes; error-returning factories reject before bootstrap, while legacy errorless constructors reject `Start`/execution. `WithExecutionCleanupTimeout(d)` overrides valid environment values. |
 | `TRUVAG3_HITL_EXPIRY_CLAIM_LEASE` | `30s` | Lease for an atomic expired-checkpoint claim across replicas |
 | `TRUVAG3_ITERATIVE_PLANNING_ENABLED` | `true` | Enable multi-phase iterative planning. When enabled, the LLM planner can generate partial plans that execute in phases. Uses a tiered approach: Phase 1 discovers, Phase 2+ acts on results with context-aware tool re-selection. |
 | `TRUVAG3_ITERATIVE_MAX_PHASES` | `20` | Maximum planning phases per request. Most queries need at most 2. |
@@ -1440,7 +1441,7 @@ retain their completed classification in Registry Viewer.
 | `TRUVAG3_FAILURE_PATTERN_SIGNATURE_LEN` | `120` | Max chars of each step's error used to bucket failures into a shared signature. |
 | `TRUVAG3_FAILURE_PATTERN_DISPLAY_LEN` | `80` | Max chars of the shared error rendered into the remediation prompt (trailing `…` appended on truncation). |
 | `TRUVAG3_SHARED_MEMORY_SUMMARIZER_MODEL` | `""` | Model for event summarization and activity compaction LLM calls. Supports aliases (`fast`, `smart`). |
-| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | Requested digest length. Built-in full/incremental compaction supplies 5× this target as `AIOptions.MaxTokens` (2500 by default), before provider reasoning scaling; the final enrichment view has a separate byte budget. |
+| `TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS` | `500` | Requested digest length. Built-in full/incremental compaction supplies 5× this target as `AIOptions.MaxTokens` (2500 by default), before provider reasoning scaling. A selected built-in compactor rejects targets above `math.MaxInt / 5` at hook construction and before direct non-empty calls. Custom compactors keep their own generation rules; the final enrichment view has a separate byte budget. |
 | `TRUVAG3_SHARED_MEMORY_COMPACTION_RAW_LIMIT` | `200` | Max events fetched before compaction. |
 | `TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL` | `5m` | Cached digest expiry. Next request after TTL does full recompaction. |
 | `TRUVAG3_SHARED_MEMORY_DIGEST_INCREMENTAL_THRESHOLD` | `20` | New events above this trigger full recompaction instead of incremental update. |
@@ -1960,6 +1961,15 @@ These features are not yet implemented but could be added:
 - `ExecutionSummaryConversationID(summary)` - Read canonical conversation metadata from a summary
 - `NewOrchestrationBackends(options...)` - Compose provider-neutral backend capabilities directly
 - `RequirementsForFeatures(config, features...)` - Derive and validate feature capability requirements
+
+Prefer the error-returning constructors and check their errors before serving.
+`DefaultConfigWithDiagnostics()` preserves fatal resolution errors in `Err`,
+with `Config == nil`; check `Err` before using its fields. The legacy
+`DefaultConfig()` retains fatal errors on a non-executable config rather than
+replacing valid settings with defaults. `NewAIOrchestrator` cannot return an
+error through its signature, so invalid configuration produces an inert instance
+whose `Start` and execution methods reject it. See the
+[configuration contract](../docs/reference/API_REFERENCE.md#canonical-orchestrator-construction).
 
 ### Conversation-aware execution stores
 
@@ -2509,7 +2519,7 @@ may retain stronger failure detail only in their logs.
 
 **Key components:**
 
-- **`LLMActivityCompactor`** — Compresses 200 raw events into a ~500-token digest via LLM. Supports incremental updates via `UpdateDigest()` to avoid reprocessing unchanged events.
+- **`LLMActivityCompactor`** — Defaults to digesting up to 200 raw events with a 500-token prompt target and a 2500-token generation allowance. Supports incremental updates via `UpdateDigest()`. Checks positive, representable 5× budgets before AI invocation; invalid incremental calls preserve the previous digest alongside the error. Empty-event calls remain no-ops.
 - **`LLMEventSummarizer`** — Generates one-sentence factual summaries AND identifies domain entities for each execution step, extracting key identifiers (ticket IDs, pod names, etc.) from tool responses. Returns `core.StepSummary` with `Summary` (string) and `Entities` ([]EntityRef) fields.
 - **`DigestCache`** — Caches compacted digests in Redis to avoid redundant LLM calls. Cache hit → 0ms; incremental update → 0.3-1s; full compaction → 5-10s.
 - **`ActivityCoordinator`** — Transient Redis signals with TTL for real-time agent coordination (what agents are currently working on).

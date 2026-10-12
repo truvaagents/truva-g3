@@ -542,9 +542,17 @@ TRUVAG3_SHARED_MEMORY_DIGEST_CACHE_TTL=5m
 # New events above this threshold trigger full recompaction (default: 20)
 TRUVAG3_SHARED_MEMORY_DIGEST_INCREMENTAL_THRESHOLD=20
 
-# Max tokens for the digest (default: 500)
+# Requested digest length (default: 500); built-in generation allowance is 5x
 TRUVAG3_SHARED_MEMORY_ENRICHMENT_SUMMARY_MAX_TOKENS=500
 ```
+
+The digest length is a prompt target, not a tokenizer-enforced output cap.
+The built-in compactor requests five times that target as its generation
+allowance, before any provider reasoning scaling. Its target must be positive
+and fit `math.MaxInt / 5`; selecting it in a hook validates this at construction,
+and direct non-empty calls validate before invoking AI. This arithmetic check
+does not establish a provider's output capacity. Custom compactors retain their
+own generation rules; the final memory-enrichment view has a separate byte budget.
 
 ---
 

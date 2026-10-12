@@ -10,6 +10,11 @@ go get github.com/truvaagents/truva-g3/memory
 
 **Dependencies**: `core` + `telemetry` (follows [FRAMEWORK_DESIGN_PRINCIPLES.md](../FRAMEWORK_DESIGN_PRINCIPLES.md) valid dependency rule).
 
+The Redis-backed episodic reader requires **Redis 6.2+** (or a compatible server
+supporting exclusive `XREVRANGE` bounds) for stream pagination. See the
+[Redis command history](https://redis.io/docs/latest/commands/xrevrange/#history).
+In-memory backends do not require Redis.
+
 ## What This Module Provides
 
 Implementations of six `core` interfaces, each with Redis (shared) and/or in-memory (testing) backends:

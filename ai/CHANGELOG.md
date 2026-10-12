@@ -4,6 +4,17 @@
 
 ### Compatibility and adoption
 
+- Identify deterministic request-policy rejections (patch validation, mutation,
+  Strict compatibility, draft validation and output capacity) as
+  `core.ErrInvalidConfiguration` through `errors.Is`. They do not count against
+  AI provider-health circuit breakers. Preserve wrapped causes; middleware and
+  unknown extension stages retain their cause's classification.
+- Clarify existing decoded-retry adoption: native OpenAI and compatible aliases
+  skip same-provider retries on classified quota-exhausted HTTP 429 responses.
+  Ordinary transient rate limits retain bounded retries; quota exhaustion can
+  still fail over to the next chain entry. Request-level mocked chain tests cover
+  quota failover, transient recovery and transient exhaustion.
+
 - Align decoded-attempt success logging with transport-only retries: emit
   `ai_http_success` at Debug on first success and include `duration_ms` in
   `ai_request_recovery` at Info. Decoded duration includes response consumption
