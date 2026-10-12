@@ -1,2 +1,6 @@
 wrangler.jsonc
 .wrangler/
+.DS_Store
+**/.DS_Store
+AGENTS.md
+blogs/software-maintenance-evidence/
