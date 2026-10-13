@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.6.0
+
+Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)
+for coordinated module versions and adoption requirements.
 
 ### Compatibility and adoption
 

@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased — shared memory contracts and configuration
+## v0.6.0
+
+Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)
+for coordinated module versions and adoption requirements.
+
+### Shared memory contracts and configuration
 
 - Default HTTP write timeout is now 35 minutes; default AI configuration timeout
   is 5 minutes. The latter's env tag remains reserved/unloaded. Task workers retain
@@ -25,12 +30,12 @@ of 10. This is a stricter configuration contract, even when memory is disabled.
   and observed release outcomes. Preserve legacy coordinator interfaces and
   advisory ownership; introduce no domain-specific policy or background worker.
 
-## Unreleased — AI completion provenance (2026-10-04)
+### AI completion provenance
 
 - Add response finish/source/separate reasoning facts and a separate stream
   reasoning channel; keep legacy interfaces and canonical dispatcher behavior.
 
-## Unreleased — memory summary failure facts (2026-10-02)
+### Memory summary failure facts
 
 - Add omitted `Error` and raw `ToolError` fields to `StepSummaryInput`, preserving
   the `EventSummarizer` interface and module dependency boundary.

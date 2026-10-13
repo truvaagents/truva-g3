@@ -1,20 +1,25 @@
 # Changelog
 
-## Unreleased — three-day debug retention
+## v0.6.0
+
+Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)
+for coordinated module versions and adoption requirements.
+
+### Three-day debug retention
 
 - Align the standalone Redis LLM recorder with orchestration: successful and
   failed records both default to 72 hours (3 days), instead of 24 hours and
   7 days respectively. Preserve explicit overrides and existing longer or
   persistent lifetimes; no existing keys are retroactively rewritten.
 
-## Unreleased — singleton teardown
+### Singleton teardown
 
 - Use a typed atomic registry pointer and serialize public shutdown, including
   core unregistration. Successful shutdown exposes a real nil registry/provider
   and no-op emission; preserve initialization ownership and exporter-error
   behavior. This does not introduce reinitialization support.
 
-## Unreleased — AI completion records (2026-10-04)
+### AI completion records
 
 - Extend format-compatible LLM debug records with optional separate reasoning,
   exact finish reason and content provenance, without interpreting task outcomes.

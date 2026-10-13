@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## v0.6.0
 
-These unreleased changes describe affected framework contracts and adoption
-requirements. See the module changelogs for details.
+All seven Go modules are co-versioned and require Go 1.27.2 or newer.
+Update first-party module requirements together to v0.6.0. This pre-1.0
+release includes public API and configuration changes; review the adoption
+requirements below and the module changelogs before upgrading.
 
 - **AI:** GPT-6 family handling on native OpenAI and the shared OpenAI-wire helpers
   used by Azure; exact reviewed OpenRouter
