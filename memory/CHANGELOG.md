@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.6.0
+
+Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)
+for coordinated module versions and adoption requirements.
 
 - Restore the bounded `error` field on incomplete episodic-query WARN logs,
   retaining contextual request correlation and `error_type=episodic_read`.
@@ -8,8 +11,6 @@
 
 - Document the existing Redis 6.2+ requirement for exclusive stream-pagination
   bounds. No new Redis command or backward-compatibility path is introduced.
-
-Changes since the framework's remote baseline `cb58a9745fe2`:
 
 Adoption: `NewSharedBackends` now reads and validates
 `TRUVAG3_SHARED_MEMORY_STREAM_MAXLEN` and

@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased — construction failure safety
+## v0.6.0
+
+Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)
+for coordinated module versions and adoption requirements.
+
+### Construction failure safety
 
 - Reject integer overflow in built-in full and incremental activity-compaction
   budgets before AI invocation, and at enrichment-hook construction when that
@@ -22,7 +27,7 @@
   Unrelated legacy partial-config semantics and per-setting compatible fallbacks
   remain unchanged. Add regression coverage for required/enum dispatch rejection.
 
-## Unreleased — three-day debug retention
+### Three-day debug retention
 
 - Default successful and failed execution records and LLM debug records to
   72 hours (3 days). Success retention increases from 24 hours; error retention
@@ -36,7 +41,7 @@
   explicit provider options still override valid environment values. Pure
   constructors, debug enablement and retention-floor behavior are unchanged.
 
-## Unreleased — terminal attribution and summary deadlines
+### Terminal attribution and summary deadlines
 
 - Attribute returned and stored terminal execution results to the owning request
   segment with copy-on-write metadata, including early failure publishers.
@@ -45,7 +50,7 @@
 - These attribution and summary-deadline changes preserve plan validation,
   regeneration and executor behavior; other changes are listed separately below.
 
-## Unreleased — framework review corrections
+### Framework review corrections
 
 - Keep distinct validation errors in bounded recency order when a regeneration
   repeats an earlier failure, retaining feedback about intervening errors.
@@ -59,7 +64,7 @@
 - Deduplicate admitted memory detail by domain and event ID, matching storage
   identity; equal custom IDs in different domains no longer hide each other.
 
-## Unreleased — compatibility and adoption clarification
+### Compatibility and adoption clarification
 
 - Generous defaults: 20000 planning / 30000 synthesis output tokens; 6000
   synthesis skill-input tokens; 20 phases at 25m; 15m delegation execution
@@ -103,7 +108,7 @@
   announcement-hook constructor accepts zero as its default of 10. The separately
   documented zero-detail sentinel remains valid.
 
-## Unreleased — planning and payload integrity baseline
+### Planning and payload integrity baseline
 
 - Normalize numeric bracket references and derive prior-phase `implicit_deps`
   for fresh generated plans before existing validation. Keep same-phase
@@ -123,7 +128,7 @@
   ancestors; actual dispatched work, including polling, resets that guard.
   Dependency skips no longer create duplicate failed-step memory events.
 
-## Unreleased — generic retry/completion hardening (2026-10-04)
+### Generic retry/completion hardening
 
 - Classify transport and HTTP 408/429/5xx before every parameter-correction
   path; retry admitted inputs unchanged under existing budgets. Restrict 4xx
@@ -135,7 +140,7 @@
   records when generic recording is deferred. Preserve per-attempt attribution,
   existing success/failure semantics and unknown facts for legacy responses.
 
-## Unreleased — truthful memory recording (2026-10-02)
+### Truthful memory recording
 
 - Bound heuristic failure causes with a configurable 256-byte default and
   explicit shortening; preserve original execution errors and custom summaries.
@@ -151,7 +156,7 @@
 - Preserve raw execution payloads, public summarizer methods, query ordering,
   provider retention and executor behavior.
 
-## Unreleased — rejected-attempt diagnostic evidence (2026-10-02)
+### Rejected-attempt diagnostic evidence
 
 - Record each unavailable-agent rejection with the effective prompt, system
   prompt, raw response and catalog of that attempt. Later rejections previously
@@ -159,7 +164,7 @@
 - Preserve planner feedback, recovery budgets, execution validation and diagnostic
   record types. No additional provider call or duplicated token usage is recorded.
 
-## Unreleased — latest planning-retry failure (2026-10-02)
+### Latest planning-retry failure
 
 - Remove the redundant zero-work sentence from active iterative instructions;
   retain the concrete terminal example, initial/retry guidance and legacy text.
@@ -170,7 +175,7 @@
 - Emit correlated parsing/correction/exhaustion diagnostics without counting a
   parsing failure as another hallucination or inventing a model call.
 
-## Unreleased — no-work prompt consistency (2026-10-02)
+### No-work prompt consistency
 
 - Show explicit `{"terminal": true, "steps": []}` in the default initial builder,
   fallback/continuation planning rules and
@@ -178,7 +183,7 @@
   plans in both active and legacy iterative instructions. Preserve decoder,
   typed/direct-plan defaults, executor behavior and existing retry budgets.
 
-## Unreleased — model clarification intent (2026-10-02)
+### Model clarification intent
 
 - Reject missing or whitespace-only questions in fresh model clarification
   objects through existing bounded parse correction, including objects supplied
@@ -186,13 +191,13 @@
   direct, refinement and resumed-plan behavior. Emit the bounded reason
   `invalid_clarification_request` on existing parse-error events.
 
-## Unreleased — trace-event request correlation (2026-10-01)
+### Trace-event request correlation
 
 - Add the current request ID as the first attribute of template source inclusion
   and legacy investigation ownership events. Preserve their existing names,
   attributes, metric labels, binding behavior and claim ownership contracts.
 
-## Unreleased — explicit model plan intent (2026-10-01)
+### Explicit model plan intent
 
 - Reject unknown-only envelopes, null roots and ambiguous zero-work model plans
   before normalization. Recognize nonempty legacy plans, explicit terminal intent
@@ -201,7 +206,7 @@
   attempts. Reuse the phase catalog and correction budget; record generic reason
   codes on existing parse-error events without changing executor/retry policy.
 
-## Unreleased — typed bindings and failed-operation evidence (2026-09-30)
+### Typed bindings and failed-operation evidence
 
 - Preserve exact whole-value container bindings and JSON-looking string inputs;
   reject known container/scalar mismatches before dispatch without changing
@@ -212,7 +217,7 @@
   unchanged. Report effective encoded limits, omissions and successful-step
   retention tradeoffs in request-correlated span events.
 
-## Unreleased — bounded digest windows (2026-09-30)
+### Bounded digest windows
 
 - Reuse activity digests only for an observed, matching bounded event window
   and configuration/AI identity. Deduplicate exact content, admit late events,
@@ -220,7 +225,7 @@
   Keep legacy episodic APIs fail-open; unknown read health bypasses cache reuse.
   Add read-health and digest-window hook effects plus bounded trace diagnostics.
 
-## Unreleased — post-memory verification corrections (2026-09-29)
+### Post-memory verification corrections
 
 - Emit request lifecycle independently of step success, with monotonic record
   revisions and latest-snapshot merges for delayed hook effects. Preserve legacy
@@ -247,7 +252,7 @@
   Preserve exact decoded payloads and truncated-prefix fallback behavior;
   reject additional JSON values/envelopes or ambiguous multiple arrays.
 
-## Unreleased
+### Summary, memory-view and skill-selection improvements
 
 - Separate event-summary generation allowance from stored prose: configurable
   1024-byte per-summary default, rune-safe shortening marker and observable
