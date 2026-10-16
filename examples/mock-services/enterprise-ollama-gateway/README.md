@@ -18,7 +18,7 @@ usage-detail, and latency fields from the captured response.
 
 ## Run it
 
-Prerequisites: Go 1.27+, Ollama, and `curl`.
+Prerequisites: Go 1.27.2+, Ollama, and `curl`.
 
 ```bash
 cd examples/mock-services/enterprise-ollama-gateway

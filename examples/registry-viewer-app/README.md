@@ -18,7 +18,7 @@ container-build changes described below.
 ## Table of Contents
 
 - [Features](#features)
-- [Quick Start](#quick-start)
+- [Quick Start](#-quick-start)
 - [Setup Script Commands](#setup-script-commands)
 - [Configuration](#configuration)
 - [Live Data Verification](#live-data-verification)

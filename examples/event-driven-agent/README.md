@@ -231,7 +231,7 @@ These extend the agent's investigation toolkit but aren't required for the shipp
 
 | Service | Purpose | Documentation |
 |---------|---------|---------------|
-| **product-catalog-api** | Simulates a production microservice with `/api/v1/products` + `/api/v1/categories` endpoints. Includes `/admin/simulate/degrade` and `/admin/simulate/recover` for triggering the alert pipeline. Deployed automatically by `./setup.sh full-deploy` and driven by `./setup.sh mock-service ...` | [mock-services README](../mock-services/README.md) · [source](../mock-services/product-catalog-api/) |
+| **product-catalog-api** | Expected incident-simulation backend with `/api/v1/products`, `/api/v1/categories`, degrade and recover endpoints. The paired setup references `../mock-services/product-catalog-api/`, which is currently absent from the tracked checkout. Supply and verify it before the complete E2E demo; `full-deploy` cannot create missing source. | [Availability and prerequisites](../mock-services/README.md) |
 
 ### Related Agents
 
@@ -882,7 +882,13 @@ This section describes how to run a realistic end-to-end test that exercises the
 
 ### Overview
 
-A mock microservice ([product-catalog-api](../mock-services/product-catalog-api/)) runs in the cluster with Prometheus metrics, simulating a realistic production service. It serves business endpoints (`/api/v1/products`, `/api/v1/categories`) with ~100-200ms baseline latency (simulating DB queries). On command, it degrades: response times spike to 1.2-2.0s and memory leaks gradually (~2MB/sec up to 40MB). Prometheus detects the elevated P90 latency and fires the `TruvaG3HighLatency` alert, which AlertManager routes to the event-driven-agent for AI investigation.
+This scenario requires the `product-catalog-api` mock microservice and its
+Prometheus histograms. Its source is currently absent from the tracked checkout;
+see the [availability prerequisite](../mock-services/README.md). Once the expected
+mock is supplied and deployed, the scenario uses its business endpoints,
+degrade/recover controls, latency and memory behavior to trigger
+`TruvaG3HighLatency` and route the alert to this agent. These instructions do not
+establish that a fresh clone can run the scenario without that dependency.
 
 ### Test Scenario
 

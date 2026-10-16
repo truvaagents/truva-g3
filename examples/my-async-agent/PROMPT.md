@@ -87,7 +87,7 @@ flow, HITL boundary, and deployment topology.
 
 ## Step 2 — Capture findings in `plan.md`
 
-```
+````text
 Step 2 of 12: write everything from Step 1 to a new file `plan.md` in
 this folder.
 
@@ -146,7 +146,7 @@ Structure:
 - Required env vars
 
 Pause for my review before writing any Go code.
-```
+````
 
 **What to expect:** an event contract that drives the rest of the
 implementation. Code, tracing, logs, retries — all flow from this file.

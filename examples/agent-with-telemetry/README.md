@@ -448,11 +448,11 @@ go version
 **Manual installation (recommended for latest version):**
 ```bash
 # Download Go (replace version as needed)
-curl -LO https://go.dev/dl/go1.27.0.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
 
 # Remove any previous installation and extract
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.27.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
 
 # Add to PATH (add to ~/.bashrc or ~/.profile for persistence)
 export PATH=$PATH:/usr/local/go/bin
@@ -739,7 +739,7 @@ This example extends the basic [agent-example](../agent-example) with:
 
 - **Comprehensive Metrics**: 10+ metric types tracking research operations, tool calls, AI synthesis, and discovery
 - **Distributed Tracing**: End-to-end request tracing across the agent and tool ecosystem
-- **Multi-Environment Profiles**: Development (100% sampling), Staging (10%), Production (0.1%)
+- **Multi-Environment Profiles**: Development, staging and production select endpoint, cardinality and circuit-breaker defaults; all currently sample 100% of traces.
 - **Production-Ready Configuration**: Environment-based telemetry with graceful degradation
 
 > **Scope**: This example focuses on **telemetry and observability**. For intelligent error handling with AI-powered retry and parameter correction, see [agent-with-orchestration](../agent-with-orchestration/) which uses the orchestration module.
@@ -811,16 +811,21 @@ The telemetry module supports three built-in profiles:
 
 | Profile | Trace Sampling | Metric Interval | Use Case |
 |---------|----------------|-----------------|----------|
-| Development | 100% | 1s | Local development, debugging |
-| Staging | 10% | 5s | Pre-production testing |
-| Production | 0.1% | 15s | Production workloads |
+| Development | 100% | 30s | Local development, debugging |
+| Staging | 100% | 30s | Pre-production testing |
+| Production | 100% | 30s | Production workloads |
 
 Set via `APP_ENV` environment variable:
 ```bash
 APP_ENV=development  # 100% sampling
-APP_ENV=staging      # 10% sampling
-APP_ENV=production   # 0.1% sampling
+APP_ENV=staging      # 100% trace sampling
+APP_ENV=production   # 100% trace sampling
 ```
+
+The example's bootstrap reads `APP_ENV` and selects the profile. The stock
+provider explicitly uses `AlwaysSample` and a 30-second metric export interval;
+profile selection and `OTEL_TRACES_SAMPLER` do not reduce trace volume.
+Metric emission sampling with `WithSampleRate` is a separate control.
 
 ---
 
@@ -1201,9 +1206,9 @@ make clean           # Clean build artifacts
 
 ### Traces not appearing in Jaeger
 
-1. **Verify sampling rate**:
-   - Check `APP_ENV` is set to "development" for 100% sampling
-   - Production uses 0.1% sampling by design
+1. **Check the actual telemetry path**:
+   - All stock profiles sample 100% of traces; changing `APP_ENV` is not a sampling fix.
+   - Check initialization logs, the resolved endpoint, collector export errors and Jaeger's retention window.
 
 2. **Check OTEL Collector configuration**:
    - Ensure trace pipeline is configured in your cluster
@@ -1213,10 +1218,13 @@ make clean           # Clean build artifacts
 
 For production deployments:
 
-1. **Use Production profile**:
+1. **Use the Production profile for its cardinality and circuit-breaker defaults**:
    ```bash
-   export APP_ENV=production  # 0.1% sampling
+   export APP_ENV=production  # Still samples 100% of traces
    ```
+
+   Trace-volume reduction requires an explicitly configured provider or collector
+   policy; this example does not enable it automatically.
 
 2. **Monitor cardinality**:
    - Check telemetry health: `telemetry.GetHealth()`

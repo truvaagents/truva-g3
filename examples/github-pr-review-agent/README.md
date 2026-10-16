@@ -42,7 +42,9 @@ Local dev without Kubernetes:
 
 ## Prerequisites
 
-- **Go 1.27.0** (both workspace and standalone Docker builds use it).
+- **Go 1.27.2+** for the current framework workspace. `Dockerfile.workspace`
+  pins 1.27.2; the standalone release `Dockerfile` pins 1.27.0 and uses the
+  published module dependencies rather than the local workspace.
 - **Docker** for the local Redis container and for image builds.
 - **Kind** + **kubectl** for the Kubernetes path.
 - An **AI provider key** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,

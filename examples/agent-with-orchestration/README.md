@@ -449,11 +449,11 @@ go version
 **Manual installation (recommended for latest version):**
 ```bash
 # Download Go (replace version as needed)
-curl -LO https://go.dev/dl/go1.27.0.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
 
 # Remove any previous installation and extract
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.27.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
 
 # Add to PATH (add to ~/.bashrc or ~/.profile for persistence)
 export PATH=$PATH:/usr/local/go/bin
@@ -1142,6 +1142,15 @@ This example demonstrates full AI telemetry integration. When you view traces in
 - **`ai.http_attempt`** spans showing HTTP-level details and retry behavior
 
 ### Critical: Initialization Order
+
+Discovery can recover after startup when `TRUVAG3_DISCOVERY_RETRY=true` (enabled
+by this example's manifest). A registered initializer runnable waits for discovery
+using `TRUVAG3_DISCOVERY_RETRY_INTERVAL` (30s by default), then starts and safely
+publishes the orchestrator. Health checks remain available while it waits;
+orchestration execution endpoints return 503 until initialization succeeds. Shutdown cancels
+the wait and closes the orchestrator after HTTP draining. This requires the
+unreleased framework `GetDiscovery`/HTTP-lifecycle implementation during local
+development; update release pins before standalone publication.
 
 The telemetry module MUST be initialized BEFORE creating the AI client. This example follows the correct order in `main.go`:
 

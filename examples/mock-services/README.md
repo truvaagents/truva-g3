@@ -6,9 +6,16 @@ This directory contains mock backend services used by TruvaG3 examples for testi
 
 | Service | Port | Description |
 |---------|------|-------------|
-| [grocery-store-api](./grocery-store-api/) | 8081 | Mock grocery store with error injection for resilience testing |
-| [product-catalog-api](./product-catalog-api/) | 8081 | Product catalog microservice with Prometheus metrics for E2E incident response testing |
+| `grocery-store-api` | 8081 | Resilience backend expected by the paired setup; source is not tracked in this checkout |
+| `product-catalog-api` | 8081 | Incident-response backend expected by the paired setup; source is not tracked in this checkout |
 | [enterprise-ollama-gateway](./enterprise-ollama-gateway/) | 18080 | Enterprise OAuth + Azure-style chat API simulator backed by local Ollama |
+
+The first two source directories are unavailable in the tracked repository.
+`agent-with-resilience` and `event-driven-agent` setup scripts still reference
+them. Their complete mock-backed scenarios require those dependencies to be
+supplied and verified separately; a fresh clone alone is insufficient. The
+enterprise Ollama simulator is present. This is a checkout prerequisite, not an
+instruction to create or deploy a substitute backend automatically.
 
 ## Purpose
 

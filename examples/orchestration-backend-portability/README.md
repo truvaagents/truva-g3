@@ -53,7 +53,7 @@ You need the following command-line tools:
 
 | Tool | Why it is needed | Quick check |
 |---|---|---|
-| Go 1.27+ | Compiles the conformance tests | `go version` |
+| Go 1.27.2+ | Compiles the conformance tests | `go version` |
 | Docker or Podman | Runs the Kind nodes and builds images | `docker info` or `podman info` |
 | Kind | Creates the isolated Kubernetes cluster | `kind version` |
 | kubectl | Deploys and inspects resources | `kubectl version --client` |
