@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/redis/go-redis/v9 v9.23.0
-	github.com/truvaagents/truva-g3/core v0.6.0
+	github.com/truvaagents/truva-g3/core v0.6.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.47.0
