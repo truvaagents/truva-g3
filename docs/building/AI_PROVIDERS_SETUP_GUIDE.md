@@ -669,10 +669,10 @@ matching with type-safe classification via `errors.As()`.
 | Authorization (403) | `StatusCode() == 403` | Permission scopes differ per provider |
 | Server errors (5xx) | `StatusCode() >= 500` | Provider-specific outage |
 | Rate limits (429) | `StatusCode() == 429` | Limits are per-provider |
-| Network errors | Non-`ProviderError` (no HTTP status) | Might be routing/DNS issue |
+| Network errors | Non-`ProviderError` without cancellation/deadline identity | Might be routing/DNS issue |
 | Transient proxy errors | `IsTransient() == true` | Proxy/CDN issue (e.g., Cloudflare HTML 400), not a request problem |
 | Provider-specific terminal errors | `IsRetryable() == true` | Billing, hard quota, or account state may differ on another provider |
-| Provider HTTP timeout (for example 408/504) | Retryable provider status | A different provider may remain healthy |
+| Provider-classified HTTP timeout | `IsTransient()` or `IsRetryable()`, or an eligible 5xx status | A different provider may remain healthy; eligible OpenRouter HTTP/in-body 408 is classified as a retryable timeout |
 | Provider route unavailable | `AIRequestFailureReason() == ai.AIRequestFailureReasonRoute` | Another independently routed entry may remain viable |
 
 **Errors that STOP failover** (fails immediately):
@@ -682,7 +682,12 @@ matching with type-safe classification via `errors.As()`.
 | Bad request (400) | `StatusCode() == 400 && !IsTransient() && !IsRetryable()` | Same input fails everywhere |
 | Content policy | `StatusCode() == 400` with policy message | Same content fails everywhere |
 | Malformed input | `StatusCode() == 400` with parse error | Structural issue in your code |
-| Caller cancellation or context deadline | `errors.Is(err, context.Canceled)` or `context.DeadlineExceeded` | The caller's stop signal applies to the whole chain |
+| Returned cancellation or deadline identity | `errors.Is(err, context.Canceled)` or `context.DeadlineExceeded` | Stops the chain, including a provider-call deadline even while the outer caller remains active |
+
+A provider-returned timeout response with an active attempt context differs from
+an expired call context. The former can permit bounded recovery; returned context
+cancellation/deadline identity stops recovery. Buffered OpenAI-wire decoding
+preserves that identity through the error chain.
 
 > **Transient proxy errors**: When a request passes through a CDN or reverse proxy (e.g., Cloudflare) and the proxy itself returns an error (typically an HTML page with a 400 status), the framework marks this as `IsTransient() == true`. These are infrastructure issues, not request problems, so failover to the next provider is appropriate. The `core.ProviderError` interface distinguishes these from genuine API 400 errors.
 
@@ -2083,11 +2088,12 @@ Error classification uses the `core.ProviderError` interface for structured, typ
 | `StatusCode() >= 500` | Yes | Provider outage |
 | `StatusCode() == 429` | Yes | Per-provider rate limits |
 | `IsTransient() == true` (any status) | Yes | Proxy/CDN issue, not a request problem |
-| Non-`ProviderError` (network error) | Yes | Connection/DNS issue |
-| `errors.Is(err, context.Canceled)` | **No** | Caller canceled the whole operation |
-| `errors.Is(err, context.DeadlineExceeded)` | **No** | Caller deadline applies to the whole operation |
-| `StatusCode() == 400 && !IsTransient()` | **No** | Same input fails everywhere |
-| `StatusCode() >= 400 && < 500` (other 4xx, not 401/403/429) | **No** | Fix your request |
+| `IsRetryable() == true` (any status) | Yes | Provider-specific billing, quota or other classified condition may succeed elsewhere |
+| Non-`ProviderError` without context cancellation/deadline | Yes | Connection/DNS issue |
+| `errors.Is(err, context.Canceled)` | **No** | Returned cancellation identity takes precedence over provider flags |
+| `errors.Is(err, context.DeadlineExceeded)` | **No** | Returned deadline identity, including the provider-call timeout, stops the chain |
+| `StatusCode() == 400 && !IsTransient() && !IsRetryable()` | **No** | Same input fails everywhere |
+| Other 4xx, excluding 401/403/429, with both flags false | **No** | Fix your request |
 
 **Implementation** (`ai/chain_request.go` and `ai/chain_client.go`, simplified):
 ```go
@@ -2103,6 +2109,7 @@ func isClientError(err error) bool {
     var pe core.ProviderError
     if errors.As(err, &pe) {
         if pe.IsTransient() { return false }          // Proxy errors → failover
+        if pe.IsRetryable() { return false }          // Provider-specific conditions → failover
         status := pe.StatusCode()
         return status >= 400 && status < 500 &&
             status != 401 && status != 403 && status != 429  // Auth/rate-limit → failover

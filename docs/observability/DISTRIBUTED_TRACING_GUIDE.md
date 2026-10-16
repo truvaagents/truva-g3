@@ -925,6 +925,24 @@ research-agent: HTTP POST /api/capabilities/research_topic ───────
 
 ## 9. Infrastructure Setup (Kubernetes)
 
+### Preserve emitting-instance identity
+
+The telemetry provider emits `service.instance.id` on both trace and metric
+resources. Its default is a UUID generated once per SDK lifetime. A non-empty
+`telemetry.Config.ServiceInstanceID` / `WithServiceInstanceID` takes precedence
+over `TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID`, then the generated default. Explicit
+values must be unique across concurrent replicas; leave the setting absent for
+automatic identity. No Kubernetes API permission is needed.
+
+Preserve this resource attribute in backend series identity. The example
+collector enables resource-to-telemetry conversion, yielding the Prometheus
+label `service_instance_id`. Compute `rate` / `increase` per instance before
+aggregating by `service_name`. Sharing a cumulative series across replicas can
+look like repeated counter resets and inflate usage. This fix separates future
+exports; it cannot correct historical collisions. The startup log's
+`operation=telemetry_provider_initialize` includes `service_instance_id`; request
+and trace correlation remain separate and unchanged.
+
 For distributed tracing to work, you need a place to **collect** and **visualize** traces. Here's the recommended setup.
 
 ### Architecture Overview
@@ -1385,12 +1403,14 @@ update is invalid or over limit.
 makes failures visible in Jaeger. Optional correlation rejection is not a
 business-operation failure and follows the fail-open rule above.
 
-At an external-service or AI-provider boundary, record a sanitized derivative
-when the original error may contain response bodies, endpoints, credential
-diagnostics, or other sensitive material. Preserve the original error in the
-caller-visible error chain. The AI module uses
-`providers.RecordObservationError` for this purpose; it records the sanitized
-exception and bounded `ai.error_type` while still marking the span as failed.
+Preserve application-owned error content and its caller-visible error chain.
+An application that requires sanitization installs its own transforming
+logger, recorder or exporter explicitly; the framework does not infer which
+payloads are sensitive. The AI module's existing
+`providers.RecordObservationError` path records a derived exception and bounded
+`ai.error_type` while marking the span failed. That is a legacy transformation
+covered by the [Framework Design Principles' transitional exceptions](https://github.com/truvaagents/truva-g3/blob/main/FRAMEWORK_DESIGN_PRINCIPLES.md#payload-fidelity-and-application-data-ownership),
+not a sanitization guarantee or a pattern to copy into new framework paths.
 
 ```go
 agentInfo := e.findAgentByName(step.AgentName)
@@ -1734,8 +1754,9 @@ log.Printf("Processing request trace_id=%s span_id=%s", tc.TraceID, tc.SpanID)
 
 **Current behavior:** The built-in tracer provider uses
 `sdktrace.AlwaysSample()` for every telemetry profile. Selecting
-`ProfileProduction` changes endpoint, cardinality, circuit-breaker, and
-redaction defaults; it does not reduce trace sampling.
+`ProfileProduction` changes endpoint, cardinality and circuit-breaker defaults;
+it does not reduce trace sampling. Its legacy `PIIRedaction` flag is configuration
+data only; the metric/trace provider does not apply it as a sanitizer.
 
 If trace-volume reduction is required, treat it as an explicit deployment or
 framework design decision and validate that it preserves the investigation and
@@ -1825,9 +1846,13 @@ All profiles currently use 100% trace sampling through
 
 | Profile | Trace sampling | Other defaults |
 |---------|----------------|----------------|
-| `ProfileDevelopment` | 100% | Local endpoint, high cardinality limit, no circuit breaker, no PII redaction |
-| `ProfileStaging` | 100% | Staging endpoint, lower cardinality limit, circuit breaker and PII redaction |
-| `ProfileProduction` | 100% | Production endpoint, strictest cardinality limits, circuit breaker and PII redaction |
+| `ProfileDevelopment` | 100% | Local endpoint, high cardinality limit, no circuit breaker |
+| `ProfileStaging` | 100% | Staging endpoint, lower cardinality limit, circuit breaker |
+| `ProfileProduction` | 100% | Production endpoint, strictest cardinality limits, circuit breaker |
+
+Legacy `PIIRedaction`/`PIIPatterns` configuration fields are not consumed by the
+metric/trace emission path. Sanitization is application-owned; selecting a
+profile does not redact application payloads.
 
 ---
 
@@ -2641,6 +2666,21 @@ the `ai_http_success` Debug log or `ai_request_recovery` Info log; it does not
 include earlier attempts or backoff waits. Transport-only attempts measure
 through response headers. Failure/partial-stream attempts emit no success log.
 These logs do not add spans or logical request/token counters.
+
+Buffered OpenAI-wire decoding now retains the original reader/JSON cause behind
+its stable message. Existing AI observations can therefore report `cancelled` or
+`deadline` when those causes occur instead of losing them as generic decode
+failures. The decoder exposes an observed non-EOF body-read failure separately:
+it maps to existing `transport`; malformed/type-invalid/unfinished JSON at clean
+EOF maps to `decode`. Context and partial-stream classifications retain precedence,
+and response bytes and original causes stay intact. Compatible execution retains
+an expired attempt context only when the error does not already carry it, keeping
+the decoder's exact message in that case. Cancelled/expired attempts do not recover,
+including a provider-call deadline while the outer caller is still active. OpenRouter's
+eligible 408 errors preserve real/semantic status 408 and its bounded `timeout`
+type, with `ai.retryable` reflecting caller/output eligibility. Their existing
+chain flag produces `failover_reason=provider_retryable`; no new span, metric,
+label or retry budget is introduced. A zero budget still produces one attempt.
 
 Every operation span that returns an error is marked failed, including both an
 outer embedding span and its invocation child when the invocation fails. This

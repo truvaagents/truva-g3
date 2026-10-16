@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Label agent initialized/shutdown lifecycle counters with `module=core`.
+  This creates new labelled series after adoption; historical series are unchanged.
+
+- Added `BaseAgent.GetDiscovery()` for synchronized runtime reads during Redis
+  discovery recovery; base-agent discovery reads use the same lock as recovery.
+
+- Built-in agent/tool HTTP servers drain on context cancellation and join that
+  drain before returning. Explicit shutdown joins the same operation. Reuse the
+  10s HTTP shutdown setting, now loaded from its environment variable; invalid
+  present values fail loading. Zero typed timeout selects the default.
+- Give the shared HTTP drain its configured budget independently of the
+  initiating caller's cancellation/deadline; each caller's context limits only
+  its own wait. Start continues to join the drain before returning.
+- Reject a second concurrent `BaseTool.Start` call with `server already started`.
+- Cancel registered runnables when HTTP serving exits, including startup
+  failures. Preserve caller ownership of external clients and telemetry.
+
 ## v0.6.0
 
 Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)

@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.47
+**Version**: 1.48
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -3066,6 +3066,29 @@ migration:
 
 ## Foundation Lifecycle and Configuration Contracts
 
+### Read-only execution evidence
+
+`execution_evidence.go` owns opt-in inspection helpers over orchestration's
+recorded types. `LastSuccessfulStep` selects a successful non-skipped step by
+slice order and exact identity/parameter filters. `SuccessfulToolData` validates
+the selected `core.ToolResponse` envelope using the final successful dispatch's
+raw response. A failed final dispatch is rejected; it does not select an earlier
+successful dispatch. Results without dispatches use their recorded `Response`,
+which may already have been normalized by its producer. Returned data preserves
+the selected response's bytes; it cannot recover lost fidelity or duplicate keys
+from normalized legacy records. An invalid selected response remains an error;
+helpers do not fall back to older results. Applications own typed payload decoding,
+receipt validity, freshness, authority and final outcome decisions.
+
+`ExecutionRequestID` resolves response/execution identity and rejects conflicting
+or mistyped evidence. It neither substitutes an incoming parent ID nor changes
+context/baggage. These pure helpers perform no I/O, logging, model invocation,
+success-status override, retry, or planner/executor mutation. Skill decoders
+share only a private duplicate-key token walker, retaining their existing
+number handling and error contracts. No dependency edge or new backend is added.
+
+### Construction and request lifecycle
+
 Canonical construction resolves a complete `OrchestratorConfig` before request
 execution. `NewDefaultOrchestratorConfig` is deterministic and environment-free;
 `ResolveOrchestratorConfig` applies the explicitly selected environment mode and
@@ -3559,6 +3582,10 @@ modularity and flexibility.
 ---
 
 ## Version History
+
+Version 1.48 (2026-10-15): add read-only execution-result selection, strict
+ToolResponse data inspection and execution-owner identity resolution. Domain
+receipt validation stays application-owned; no planner/executor behavior change.
 
 Version 1.47 (2026-10-11): preserve fatal configuration errors through legacy
 helpers and constructors; enforce cleanup/projection invariants before component

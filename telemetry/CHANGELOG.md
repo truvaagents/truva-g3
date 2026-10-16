@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Include bounded `operation` fields in initialization and module-registration
+  logs, including initialization failures.
+
+- Give each OpenTelemetry provider a default UUID `service.instance.id`, shared
+  by traces and metrics, so concurrent replicas export independent counters.
+  Support `Config.ServiceInstanceID`, `WithServiceInstanceID` and
+  `TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID` overrides, validated at construction.
+  Collectors must preserve resource identity; historical collisions are not
+  repaired. Existing three-argument constructor calls remain supported.
+- Preserve the first `Initialize` error on subsequent calls instead of reporting
+  success after a failed initialization. Singleton reinitialization remains
+  unsupported.
+
 ## v0.6.0
 
 Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)

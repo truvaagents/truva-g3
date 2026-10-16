@@ -504,6 +504,13 @@ go func() {
 
 ### Component Lifecycle Management
 
+`func (b *BaseAgent) GetDiscovery() Discovery` returns a synchronized snapshot
+of the current discovery reference. It can be nil while startup recovery is
+pending. Use it for runtime reads when `TRUVAG3_DISCOVERY_RETRY` is enabled;
+direct `Discovery` assignment is supported before initialization. The returned
+implementation retains its own concurrency and lifecycle contract. Delayed
+application initialization belongs in a registered `core.Runnable`.
+
 Every component follows a three-phase lifecycle: Initialize → Start → Stop/Shutdown. Understanding this lifecycle is crucial for building robust services.
 
 ```go
@@ -520,6 +527,21 @@ func (t *BaseTool)  Shutdown(ctx context.Context) error
 ```
 
 **Lifecycle best practices:**
+
+Built-in `BaseAgent.Start` and `BaseTool.Start` handle cancellation of their
+context: they unregister and join HTTP draining before returning.
+`Framework.Run` also cancels/drains registered runnables when serving exits,
+including startup failure. Close application-owned clients and telemetry only
+after it returns; no shutdown-wait goroutine or arbitrary sleep is required.
+Explicit `Stop`/`Shutdown` remains available and joins the same operation.
+The HTTP drain uses `HTTP.ShutdownTimeout` (10s by default; zero typed value means
+unset). Caller cancellation and deadlines limit only that caller's wait; the
+shared drain retains its configured budget and initiating context values. `Start`
+still waits for that drain to finish. The environment
+variable `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT` requires a positive Go duration.
+A drain timeout returns an error, not a guarantee that active handlers or
+hijacked connections were terminated. Custom `HTTPComponent.Start` methods
+remain responsible for honoring cancellation.
 
 1. **Initialize Phase** - One-time setup
    - Connect to databases
@@ -2459,7 +2481,7 @@ and sanitized by the adapter (base observation allows at most 128 bytes).
 `core.ProviderError.IsRetryable`, which permits chain failover.
 
 For OpenRouter, recognized transient types can retry; unknown nonempty types
-are conservative, and untyped status-only retries allow 429/500/502/503/504,
+are conservative, and untyped status-only retries allow 408/429/500/502/503/504,
 not 501/505. Actual 401/402/403 stop same-provider recovery even if an error body
 claims otherwise. Native OpenAI and the other aliases served by
 `ai/providers/openai` also stop same-provider retries for classified quota/billing
@@ -2467,6 +2489,25 @@ exhaustion (including `insufficient_quota` reported as HTTP 429). Their ordinary
 transient 429/5xx status policy is otherwise unchanged. Quota exhaustion still
 permits chain failover when another entry is available; it does not imply an
 automatic wait for quota reset. Azure uses its separate adapter.
+
+OpenRouter's credible HTTP/in-body 408 normalizes to `timeout` with status 408,
+including a typed 408 timeout; it uses the existing bounded retry and
+`core.ProviderError.IsRetryable` chain signals. This is OpenRouter-local and does
+not expand the shared status allowlist or other aliases' 408 behavior. Zero local
+budget permits no same-provider retry, and failover needs another entry. Caller
+cancellation, caller/provider-call deadlines and delivered streaming output stop recovery.
+
+Buffered `openaiwire.Codec.Decode` failures preserve the reader/JSON cause through
+`errors.Is`/`errors.As` while keeping `decode OpenAI wire response` as the outward
+message. Its error exposes the optional fact method `ResponseBodyReadError() error`:
+a non-nil observed non-EOF reader failure maps to `transport`; nil maps to `decode`
+for JSON syntax/type errors, including incomplete JSON at clean EOF. Cancellation,
+deadline and partial-stream classifications retain precedence.
+Compatible execution adds expired attempt-context identity only when the returned
+error does not already match it. The chain stops on returned cancellation/deadline
+identity, including an expired provider-call deadline with an active outer caller.
+It does not select recovery based only on the outer context. Successful decoded
+responses retain their existing behavior; these observation changes add no retries.
 
 #### Model capability lookup and adaptation
 
@@ -4462,6 +4503,38 @@ if err != nil {
 
 HTTP instrumentation for automatic trace context propagation across service boundaries.
 
+#### Provider instance identity
+
+```go
+func NewOTelProvider(serviceName, serviceType, endpoint string, options ...OTelProviderOption) (*OTelProvider, error)
+func WithServiceInstanceID(id string) OTelProviderOption
+```
+
+`telemetry.Config.ServiceInstanceID string` provides the same override for
+`Initialize` / `InitializeForComponent`; `Config.WithOverrides` copies a non-empty
+value. Existing three-argument `NewOTelProvider` calls use the defaults (the
+constructor's function type is now variadic).
+
+Non-empty code configuration takes precedence over
+`TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID`, then a generated UUID v4. Empty code
+values mean unset. A selected empty environment value, invalid UTF-8,
+surrounding whitespace or control characters fails construction. Nil options
+are rejected. Identity is fixed for one provider lifetime and shared by trace
+and metric resources as `service.instance.id`. Explicit identities must be
+unique among concurrent emitters of the same service; collectors must retain
+them in metric-series identity. `Initialize` returns its first result on every
+call, including failure; it does not support reinitialization.
+
+`Initialize(Config)` uses the supplied endpoint, defaulting an empty value to
+`localhost:4318`. It does not automatically consume core's endpoint/name
+configuration; application bootstrap passes those resolved values. The separate
+`EnableTelemetry(agent, "")` helper reads `OTEL_EXPORTER_OTLP_ENDPOINT` before its
+localhost fallback. The built-in provider explicitly uses OTLP/HTTP,
+`AlwaysSample`, and a constructor-owned resource. Profiles and generic
+`OTEL_TRACES_SAMPLER` / `OTEL_RESOURCE_ATTRIBUTES` variables do not override those
+choices. `Config.Verbose` and `core.TelemetryConfig.SamplingRate` do not exist;
+legacy `PIIRedaction`/`PIIPatterns` fields do not enable payload filtering.
+
 #### TracingMiddleware
 
 Wrap HTTP handlers to automatically extract and propagate W3C TraceContext headers.
@@ -4626,6 +4699,43 @@ func main() {
 ## Orchestration Module
 
 Intelligently coordinate multiple agents and tools to accomplish complex tasks.
+
+### Read-only execution inspection
+
+```go
+type StepResultFilter struct {
+    AgentName  string
+    Capability string
+    Namespace  string
+    Parameters map[string]any
+}
+
+func LastSuccessfulStep([]StepResult, StepResultFilter) (index int, found bool)
+func SuccessfulToolData(StepResult) (json.RawMessage, error)
+func ExecutionRequestID(*OrchestratorResponse, *ExecutionResult) (string, error)
+```
+
+`LastSuccessfulStep` searches in reverse slice order, excluding failed/skipped
+steps. Empty identity filters are wildcards; parameter filters use exact,
+type-sensitive subset matching. Not found is `(-1, false)`. Do not mutate the
+execution concurrently with inspection.
+
+`SuccessfulToolData` is an opt-in decoder for `core.ToolResponse`, not a universal
+capability format. It rejects unknown envelope fields, duplicate JSON keys,
+multiple values, unsuccessful envelopes, non-null errors, and missing/null data.
+It uses the final dispatch's raw response when dispatches exist and rejects a
+failed final dispatch. For legacy/custom results without dispatches, it uses
+`StepResult.Response`; that representation may already have been normalized by
+its producer. The returned detached `data` value preserves the selected
+response's bytes. Original wire fidelity and duplicate-key detection cannot be
+recovered from a previously normalized legacy response. Typed decoding and
+domain receipt validation remain with the application. Report a selected
+result's decoding error rather than silently trying an older result or dispatch.
+
+`ExecutionRequestID` returns the response ID or recorded execution ID; missing
+identity is `("", nil)`, conflicting/mistyped identity is an error. It does not
+read parent context, create identity, or modify logging/tracing context. All
+three helpers are read-only and do not alter execution success or continuation.
 
 ### Canonical Orchestrator Construction
 
@@ -5772,7 +5882,7 @@ type OrchestratorConfig struct {
 }
 ```
 
-- **`ContinuationResultMaxTotalChars`** — a **soft target** (chars) for the whole completed-steps section; drives newest-first eviction (older steps evict with a "showing N of M" note, ~268 B/digest measured → ~122 steps fit 32 KB). **Not a hard cap:** failed steps are always kept, the newest successful step is always kept even if it alone exceeds the budget, and the N-of-M note plus any orchestrator child-summaries are appended after the budget decision — so the rendered section can modestly exceed it.
+- **`ContinuationResultMaxTotalChars`** — a **soft byte target**, despite the historical `Chars` name, for the whole completed-steps section; defaults to 196608 bytes (192 KiB) and drives newest-first eviction. Older successful steps evict with a "showing N of M" note; the number that fits depends on their actual rendered sizes. **Not a hard cap:** failed steps are always kept, the newest successful step is always kept even if it alone exceeds the budget, and the N-of-M note plus any orchestrator child-summaries are appended after the budget decision — so the rendered section can exceed it.
 - **`ContinuationMaxEscalations`** — max non-JSON steps escalated to the continuation distiller (a fast-model summary) per phase, **newest-first**. Sequential fast-model calls on the phase-gating path; `0` disables. Fires ~never on all-JSON workloads.
 - **`ContinuationDigestArraySample`** — per-array head-sample size (arrays render as the first N elements + a length sentinel).
 - **`ContinuationDigestScalarMax`** — max length of a string value kept inline before elision; raise it to surface longer salient values (status/error strings) at plan time.
@@ -5889,7 +5999,7 @@ type ResultTrimConfig struct {
 
     // MaxResultBytes is the maximum bytes per individual step result.
     // Results exceeding this are structurally trimmed.
-    // Note: Single-step requests use MaxTotalPromptBytes (32KB) instead,
+    // Note: Single-step requests use MaxTotalPromptBytes (default 192 KiB) instead,
     // since there is no multi-result allocation needed.
     // Default: 65536 (64 KiB, ~16K tokens) | Env: TRUVAG3_RESULT_TRIM_MAX_BYTES
     MaxResultBytes int `json:"max_result_bytes"`
@@ -5908,7 +6018,7 @@ type ResultTrimConfig struct {
     // MaxMicroResolutionBytes controls how much source data is included when
     // the LLM resolves missing parameters from prior step results (micro-resolution)
     // or retries failed steps (semantic retry).
-    // Default: 65536 (64 KB, ~26K tokens) | Env: TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES
+    // Default: 65536 (64 KiB) | Env: TRUVAG3_RESULT_TRIM_MAX_MICRO_BYTES
     MaxMicroResolutionBytes int `json:"max_micro_resolution_bytes"`
 
     // MaxAgentInputBytes is the maximum bytes per parameter value for

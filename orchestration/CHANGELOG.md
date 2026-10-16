@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add opt-in `LastSuccessfulStep`, `SuccessfulToolData` and `ExecutionRequestID`
+  inspection helpers. Inspect the final dispatch's raw response and reject
+  ambiguous response envelopes, failed final dispatches or conflicting identity.
+  Legacy/custom results without dispatches use their recorded Response with its
+  existing fidelity limits. Domain receipt/outcome validation remains
+  application-owned; planner, executor and retry behavior are unchanged.
+
 ## v0.6.0
 
 Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)

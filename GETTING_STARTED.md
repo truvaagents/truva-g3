@@ -50,15 +50,15 @@ before enabling skills in your own agent.
 
 ### Required Software
 
-> **Go version**: every framework module declares `go 1.27.0`, so building
-> from source needs Go 1.27+. With Go's toolchain auto-upgrade (default since
-> Go 1.21), an older Go install will fetch 1.27.0 on first build — but some
+> **Go version**: every framework module declares `go 1.27.2`, so building
+> from source needs Go 1.27.2+. With Go's toolchain auto-upgrade (default since
+> Go 1.21), an older Go install can fetch the required toolchain on first build — but some
 > controlled environments disable auto-upgrade, so installing a current Go
 > directly is the simplest path.
 
 **macOS:**
 ```bash
-# Go (latest stable; needs ≥1.27 to build the framework)
+# Go (needs ≥1.27.2 to build the framework)
 brew install go
 go version
 
@@ -71,8 +71,8 @@ brew install kind kubectl jq
 
 **Linux (Ubuntu/Debian):**
 ```bash
-# Go (substitute the latest 1.27+ release for $GO_VERSION)
-GO_VERSION=1.27.0
+# Go (use 1.27.2 or a reviewed newer release)
+GO_VERSION=1.27.2
 wget "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf "go${GO_VERSION}.linux-amd64.tar.gz"

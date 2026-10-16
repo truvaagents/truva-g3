@@ -241,7 +241,7 @@ Configure HTTP server timeouts and health check settings.
 | `TRUVAG3_HTTP_READ_HEADER_TIMEOUT` | `10s` | Struct Tag Only | Maximum duration for reading request headers | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_HTTP_IDLE_TIMEOUT` | `120s` | Struct Tag Only | Maximum duration to wait for the next request | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_HTTP_MAX_HEADER_BYTES` | `1048576` (1MB) | Struct Tag Only | Maximum size of request headers | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT` | `10s` | Struct Tag Only | Graceful shutdown timeout | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT` | `10s` | **Implemented** | Joined HTTP shutdown budget for built-in agents/tools. Present values must be positive Go durations; empty, malformed and non-positive values fail loading. Explicit code configuration overrides valid env values; zero typed value selects 10s. This does not forcibly terminate active handlers or hijacked connections. | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_HTTP_HEALTH_CHECK` | `true` | Struct Tag Only | Enable health check endpoint | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_HTTP_HEALTH_PATH` | `/health` | Struct Tag Only | Path for health check endpoint | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 
@@ -447,6 +447,16 @@ failover. Adapters opting into `ExecuteWithRetryDecoded` own the retry decision
 for actual HTTP 429/5xx as well. OpenRouter uses its conservative typed/status
 classifier; no new retry env setting enables rejected error types. Eligible
 decoded semantic 429/503 can use the existing Retry-After wait handling.
+
+The same configured budget covers eligible OpenRouter HTTP/in-body 408 timeouts.
+Known terminal and unknown nonempty types remain conservative, and other
+compatible aliases keep their existing 408 behavior. Zero chain retries still
+permit no same-provider retry; another entry is needed for failover. Caller
+cancellation, caller/provider-call deadlines and delivered stream output stop recovery.
+A provider's own `TRUVAG3_AI_TIMEOUT` expiration stops chain recovery even if the
+outer caller remains active: returned deadline identity is authoritative. A
+provider-returned 408 while the attempt context is active remains eligible. No new
+environment setting or timeout/default change accompanies this classification.
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
@@ -743,12 +753,26 @@ Configure OpenTelemetry-based observability (metrics and tracing).
 | `TRUVAG3_TELEMETRY_ENDPOINT` | (none) | **Implemented** | OTLP receiver endpoint (auto-enables telemetry) | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | (fallback) | **Implemented** | Standard OTEL endpoint variable (auto-enables telemetry) | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_TELEMETRY_SERVICE_NAME` | Agent name | **Implemented** | Service name for traces/metrics | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+| `TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID` | Generated UUID v4 | **Implemented** | Identity per emitting OpenTelemetry provider, shared by traces and metrics. Non-empty `telemetry.Config.ServiceInstanceID` / `WithServiceInstanceID` overrides it. Read once at construction; present-empty, invalid UTF-8, surrounding whitespace and control characters are rejected. Explicit IDs must differ across concurrent service replicas. | [telemetry/otel.go](https://github.com/truvaagents/truva-g3/blob/main/telemetry/otel.go) |
 | `OTEL_SERVICE_NAME` | (fallback) | **Implemented** | Standard OTEL service name | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_TELEMETRY_PROVIDER` | `otel` | Struct Tag Only | Telemetry provider | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_TELEMETRY_METRICS` | `true` | Struct Tag Only | Enable metrics collection | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_TELEMETRY_TRACING` | `true` | Struct Tag Only | Enable distributed tracing | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
-| `TRUVAG3_TELEMETRY_SAMPLING_RATE` | `1.0` | Struct Tag Only | Trace sampling rate (0.0-1.0) | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
 | `TRUVAG3_TELEMETRY_INSECURE` | `true` | Struct Tag Only | Use insecure connection (no TLS) | [core/config.go](https://github.com/truvaagents/truva-g3/blob/main/core/config.go) |
+
+The endpoint/name rows configure `core.Config.Telemetry`; applications still
+initialize the optional telemetry module and pass the resolved values. Direct
+`telemetry.Initialize(Config)` uses its supplied endpoint (empty defaults to
+`localhost:4318`) and does not read those endpoint/name variables automatically.
+`EnableTelemetry(agent, "")` reads the standard endpoint variable as its fallback.
+Instance identity is resolved directly by the telemetry constructor as described
+in its row.
+
+`TRUVAG3_TELEMETRY_SAMPLING_RATE` has no current config field or reader. The stock
+provider explicitly uses `AlwaysSample`, so `OTEL_TRACES_SAMPLER` and
+`OTEL_TRACES_SAMPLER_ARG` also do not change its trace sampler. Profile selection
+does not reduce trace sampling. Generic `OTEL_RESOURCE_ATTRIBUTES` does not merge
+into the constructor's explicit resource.
 
 ### Telemetry Logger Variables
 

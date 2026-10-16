@@ -421,6 +421,26 @@ untyped 501/505 are not retried. Previously the transport loop retried these
 by HTTP status alone. The outer chain failover policy is unchanged; see
 [Per-Provider Retry Budget](ARCHITECTURE.md#per-provider-retry-budget).
 
+OpenRouter's credible untyped HTTP or in-body 408 is classified as `timeout` and
+can use configured same-provider retries or the next chain entry. The normalized
+status remains 408, including typed timeout envelopes. Conflicting terminal or
+unknown nonempty types stay conservative; other compatible aliases keep their
+existing 408 policy. Caller cancellation, caller/provider-call deadlines and delivered stream output
+stop recovery. This does not add retries when the configured budget is zero.
+
+The shared buffered codec retains reader and JSON error causes through
+`errors.Is`/`errors.As` behind the stable `decode OpenAI wire response` message.
+The compatible execution boundary adds an expired attempt-context cause only
+when the error does not already match it; a decoder error already carrying that
+cause keeps its exact message. Chain recovery stops on cancellation/deadline
+identity from either the caller or the provider's own call timeout, even if the
+outer caller remains active. A provider-returned 408 with an active attempt
+context is a different case and can use configured recovery.
+Buffered decoding errors expose `ResponseBodyReadError() error`: observed
+non-EOF reader failures report `transport`; JSON syntax/type failures and incomplete
+JSON at clean EOF report `decode`. Context and partial-stream outcomes take
+precedence. These classifications do not change retry budgets or policy.
+
 When no explicit retry option is supplied, a positive
 `TRUVAG3_AI_RETRY_ATTEMPTS` value overrides the applicable default for both
 client types. Explicit `WithMaxRetries(n)` or `WithChainMaxRetries(n)` takes
@@ -852,13 +872,13 @@ export GROQ_BASE_URL=https://ai-gateway.company.internal/groq
 
 Chain Client is smart about which errors trigger failover:
 
-- **Allows failover**: Unstructured network errors, provider HTTP timeouts
-  such as 408/504, server errors (5xx), rate limits, and authentication or
+- **Allows failover**: Unstructured network errors, provider-classified HTTP
+  timeouts (including eligible OpenRouter 408), server errors (5xx), rate limits, and authentication or
   authorization errors (401/403), plus provider-specific terminal errors marked
   `IsRetryable` such as exhausted credit or a hard quota
 - **Stops failover**: Bad requests and other 4xx errors that are neither
-  transient nor provider-retryable, caller cancellation, and caller context
-  deadlines
+  transient nor provider-retryable, and errors matching cancellation or deadline
+  expiration—including a provider-call deadline while the outer caller remains active
 
 Billing/quota failures use the bounded
 `failover_reason=provider_retryable` operator signal on generate and stream

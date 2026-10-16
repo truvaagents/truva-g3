@@ -77,7 +77,7 @@ control plane isn't an option.
 
 ## What you need
 
-- **Go 1.27.0+** (every framework module declares 1.27.0)
+- **Go 1.27.2+** (every framework module declares 1.27.2)
 - **Docker** (or [Podman](https://podman.io/) as a drop-in)
 - **Kind + kubectl** — for the local Kubernetes cluster
 - **One AI provider API key** — OpenAI, Anthropic, OpenRouter, Gemini, Groq, and other compatible providers are supported

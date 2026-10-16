@@ -142,6 +142,7 @@ err := resilience.RetryWithCircuitBreaker(
 )
 // Note: This helper function internally checks circuit state and records
 // success/failure automatically. You don't need to call cb.Execute() yourself.
+```
 
 ## 3. How It Works
 

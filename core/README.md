@@ -349,6 +349,18 @@ func main() {
 }
 ```
 
+### Graceful HTTP Shutdown
+
+Built-in agent/tool servers drain on cancellation of the context passed to
+`Framework.Run`; the method joins HTTP shutdown and registered runnable draining.
+Use a signal-aware context (for example `signal.NotifyContext`)—a background
+context alone does not install a signal handler. Close application-owned clients
+and telemetry after `Run` returns. `HTTP.ShutdownTimeout` defaults to 10s and is
+loaded from `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT`; invalid present env values fail
+loading. Explicit `Stop`/`Shutdown` calls join the same server shutdown. A timeout
+returns an error and does not forcibly terminate active handlers or hijacked
+connections. Custom component implementations retain their lifecycle contract.
+
 ### Framework Options
 
 The Framework accepts configuration options that apply to your component:
@@ -1284,7 +1296,7 @@ http.ListenAndServe(":8080", handler)
 
 ### 📊 Logging Interface: Know What's Happening
 
-> **💡 Configuration Tip:** To configure logging levels and formats via environment variables, see [Logging Configuration in API Reference](../docs/reference/API_REFERENCE.md#logging-configuration).
+> **💡 Configuration Tip:** To configure logging levels and formats via environment variables, see [Logging in API Reference](../docs/reference/API_REFERENCE.md#logging).
 
 Every component gets a structured logger automatically. It's like having a flight recorder for your code!
 
@@ -1588,7 +1600,7 @@ type StreamingAIClient interface {
 | Long-running queries | ⚠️ User waits | ✅ Immediate feedback |
 | Token tracking | ✅ Simple | ✅ Final chunk includes usage |
 
-For complete streaming examples, see the [Chat Agent Guide](../docs/memory-and-chat/CHAT_AGENT_GUIDE.md) and the [ai/README.md](../ai/README.md#-streaming-support).
+For complete streaming examples, see the [Chat Agent Guide](../docs/memory-and-chat/CHAT_AGENT_GUIDE.md) and the [ai/README.md](../ai/README.md#15-streaming-support).
 
 ### 🔍 Telemetry Interface: Measure Everything
 

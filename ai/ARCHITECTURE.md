@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.24
+**Version**: 1.25
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -360,6 +360,25 @@ everything else becomes `unmapped`. Provider messages, flagged input, routing
 metadata, and other network-controlled strings never cross the codec boundary.
 Buffered choice-level errors return any partial content together with the
 bounded `openaiwire.EndpointError`.
+
+Buffered JSON-decoding failures retain their original reader/JSON cause through
+`Unwrap`, while the outward message remains `decode OpenAI wire response`.
+`errors.Is` can distinguish cancellation, deadline expiration and incomplete
+reads; `errors.As` can inspect JSON syntax/type failures. The decode error also
+exposes the narrow `ResponseBodyReadError() error` fact: a non-nil value is an
+observed non-EOF reader failure; nil means no such evidence. Clean EOF with
+unfinished JSON is a decoding failure, not proof of transport failure. A reader
+failure and a simultaneous JSON error both remain inspectable. The common AI
+observation helper maps this fact to existing `transport`/`decode` classifiers;
+cancellation, deadline and partial-stream classifications retain precedence.
+The codec adds no retry or telemetry policy. OpenAI-compatible execution joins an
+expired attempt context only when the returned error does not already match it,
+preserving the original decoder message when context identity is already present.
+Ordered chain recovery stops on an error matching `context.Canceled` or
+`context.DeadlineExceeded`, including the provider's own call deadline while the
+outer caller is still active. This matches the existing pre-header timeout rule;
+choosing recovery by outer-context state is a separate contract change. A successful decoded
+response is not discarded solely because cancellation races its completion.
 
 ---
 
@@ -997,7 +1016,8 @@ chain, err := ai.NewChainClient(
 | **Other provider-specific terminal errors (4xx, `IsRetryable`)** | Try next provider | Billing exhausted, account suspended, or similar — terminal on this provider but may succeed on a different one. For statuses other than 402, `BaseClient.HandleError` detects this from the narrow marker list (`credit balance`, `insufficient_quota`, `payment required`, and case/underscore variants); see [providers/base.go](providers/base.go) `billingExhaustedPhrases` for the authoritative list. |
 | **Server errors (5xx)** | Try next provider | Provider-specific issue |
 | **Rate limits (429)** | Try next provider | Provider at capacity |
-| **Network errors** | Try next provider | Transient connectivity |
+| **Network errors** | Try next provider | Transient connectivity, except errors matching cancellation/deadline below |
+| **Cancellation/deadline errors** | Stop the chain | Returned `context.Canceled` / `context.DeadlineExceeded` identity is authoritative, including an expired provider-call deadline while the outer context is active |
 
 The two override flags (`IsTransient` and `IsRetryable`) are independent — see
 godoc on `core.ProviderError` for the contract. Both bypass the fail-fast 4xx
@@ -1090,11 +1110,21 @@ Available usage and sanitized response IDs are attempt-span observations, not
 additional logical request/token metrics. Stream output or callback termination
 prevents replay. Existing `ProviderError` chain flags retain their meanings.
 Recognized transient error types may retry; a genuine status-only 429/500/502/503/504
-may retry. Terminal or unknown nonempty types, image-download failures, and a
+may retry. OpenRouter additionally classifies a credible untyped HTTP or in-body
+408 as `timeout`, preserving status 408 and enabling the existing bounded
+same-provider/chain recovery signals. Its typed timeout with status 408 also keeps
+408 rather than becoming 504. Terminal or unknown nonempty types, image-download failures, and a
 synthetic fallback 500 do not grant new retry permission. A semantic 429/503 can
 honor `Retry-After` without rewriting the actual HTTP status. Constructors retain
 their defaults; consequently standalone/default heterogeneous OpenAI-compatible
 entries now also cover eligible decoded failures without an option change.
+
+The 408 rule is OpenRouter-local: other compatible aliases retain their existing
+408 policy, and the shared status allowlist is unchanged. Caller cancellation,
+caller/provider-call deadlines and delivered stream output stop recovery. Zero local retry
+budget still means no same-provider retry; failover requires another chain entry.
+Timeouts use the existing `IsRetryable` chain flag, so their bounded chain reason
+is `provider_retryable`, while raw/semantic HTTP status still distinguishes 408.
 
 Both base retry paths log first-attempt success as `ai_http_success` at Debug
 and recovered success as `ai_request_recovery` at Info. Both include
@@ -2110,6 +2140,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.25 | 2026-10-14 | Preserve buffered decoder and observed reader cause identity; distinguish clean-EOF JSON decoding from actual read failures; classify credible OpenRouter 408 for bounded recovery while retaining status; deduplicate expired attempt-context causes and document terminal provider-call deadlines and stream no-replay |
 | 1.24 | 2026-10-11 | Classify deterministic local policy failures as caller configuration for breaker health, preserving middleware causes; clarify quota HTTP 429 same-provider stop versus chain failover |
 | 1.23 | 2026-10-09 | Close decoded-success log parity gap with successful-attempt duration; preserve retry, payload and metric ownership; refresh provider factory/constructor examples against the request-aware implementation |
 | 1.22 | 2026-10-08 | Bound derived reasoning headroom before Strict intent checks; retain over-cap base rejection and final capacity validation; add capacity-only native GPT-5.6 Sol and routed GPT-5.6 Luna rows; report/fingerprint the bounded-headroom contract |
