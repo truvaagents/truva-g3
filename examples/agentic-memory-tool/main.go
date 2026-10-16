@@ -16,13 +16,19 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Service failed: %v", err)
+	}
+}
+
+func run() error {
 	// 1. Validate configuration first
 	if err := validateConfig(); err != nil {
-		log.Fatalf("Configuration error: %v", err)
+		return fmt.Errorf("Configuration error: %w", err)
 	}
 	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
 	if err != nil {
-		log.Fatalf("Redis configuration error: %v", err)
+		return fmt.Errorf("Redis configuration error: %w", err)
 	}
 
 	// 2. Create tool FIRST so component type is set for telemetry
@@ -71,7 +77,7 @@ func main() {
 		})),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
+		return fmt.Errorf("Failed to create framework: %w", err)
 	}
 
 	// 6. Display startup information
@@ -83,45 +89,13 @@ func main() {
 	})
 
 	// 7. Graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		tool.Logger.Info("Shutting down gracefully", map[string]interface{}{
-			"service": "agentic-memory-tool",
-		})
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-
-		cancel()
-
-		select {
-		case <-shutdownCtx.Done():
-			tool.Logger.Error("Shutdown timeout exceeded", map[string]interface{}{
-				"timeout_seconds": 30,
-			})
-			os.Exit(1)
-		case <-time.After(1 * time.Second):
-		}
-
-		tool.Logger.Info("Shutdown completed", map[string]interface{}{
-			"service": "agentic-memory-tool",
-		})
-		os.Exit(0)
-	}()
-
-	// 8. Run the framework (blocking)
 	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		tool.Logger.Error("Framework error", map[string]interface{}{
-			"error": err.Error(),
-		})
-		os.Exit(1)
+		return fmt.Errorf("run framework: %w", err)
 	}
+	return nil
 }
 
 // validateConfig validates all required configuration at startup.

@@ -16,8 +16,14 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Service failed: %v", err)
+	}
+}
+
+func run() error {
 	if err := validateConfig(); err != nil {
-		log.Fatalf("Configuration error: %v", err)
+		return fmt.Errorf("Configuration error: %w", err)
 	}
 
 	tool := NewDemographicsTool()
@@ -55,7 +61,7 @@ func main() {
 		)),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
+		return fmt.Errorf("Failed to create framework: %w", err)
 	}
 
 	tool.Logger.Info("Demographics tool starting", map[string]interface{}{
@@ -64,28 +70,13 @@ func main() {
 		"has_api_key": tool.apiKey != "",
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		tool.Logger.Info("Shutting down", map[string]interface{}{
-			"operation": "shutdown",
-		})
-		cancel()
-		time.Sleep(time.Second)
-		os.Exit(0)
-	}()
-
 	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		tool.Logger.Error("Framework error", map[string]interface{}{
-			"operation": "startup",
-			"error":     err.Error(),
-		})
+		return fmt.Errorf("run framework: %w", err)
 	}
+	return nil
 }
 
 func validateConfig() error {

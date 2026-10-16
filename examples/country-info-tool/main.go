@@ -16,8 +16,14 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Service failed: %v", err)
+	}
+}
+
+func run() error {
 	if err := validateConfig(); err != nil {
-		log.Fatalf("Configuration error: %v", err)
+		return fmt.Errorf("Configuration error: %w", err)
 	}
 
 	// Create country tool FIRST so component type is set for telemetry
@@ -59,29 +65,20 @@ func main() {
 		)),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
+		return fmt.Errorf("Failed to create framework: %w", err)
 	}
 
 	log.Println("Country Info Tool Service Starting...")
 	log.Printf("Server Port: %d\n", port)
 	log.Println("Data: embedded mledoze/countries dataset (ODbL); population/timezones via apicountries.com (no API key)")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		cancel()
-		time.Sleep(time.Second)
-		os.Exit(0)
-	}()
-
 	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		log.Fatalf("Framework error: %v", err)
+		return fmt.Errorf("run framework: %w", err)
 	}
+	return nil
 }
 
 func validateConfig() error {

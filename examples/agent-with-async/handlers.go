@@ -143,7 +143,7 @@ func (a *AsyncTravelAgent) HandleQuery(
 
 	// Create a per-request orchestrator with the callback configured
 	deps := orchestration.OrchestratorDependencies{
-		Discovery: a.Discovery,
+		Discovery: a.GetDiscovery(),
 		AIClient:  a.AI,
 		Logger:    a.Logger,
 	}

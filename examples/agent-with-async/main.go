@@ -425,7 +425,7 @@ func runEmbeddedMode(redisConnection core.RedisConnectionConfig, redisClient red
 		startTime := time.Now()
 		lastWarning := time.Time{}
 
-		for agent.BaseAgent.Discovery == nil {
+		for agent.GetDiscovery() == nil {
 			time.Sleep(100 * time.Millisecond)
 
 			elapsed := time.Since(startTime)
@@ -445,7 +445,7 @@ func runEmbeddedMode(redisConnection core.RedisConnectionConfig, redisClient red
 		}
 
 		// Discovery is available, initialize orchestrator
-		if err := agent.InitializeOrchestrator(agent.BaseAgent.Discovery); err != nil {
+		if err := agent.InitializeOrchestrator(agent.GetDiscovery()); err != nil {
 			agent.Logger.Warn("Failed to initialize orchestrator", map[string]interface{}{
 				"error": err.Error(),
 			})

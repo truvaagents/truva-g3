@@ -16,9 +16,15 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Service failed: %v", err)
+	}
+}
+
+func run() error {
 	// Validate configuration first
 	if err := validateConfig(); err != nil {
-		log.Fatalf("Configuration error: %v", err)
+		return fmt.Errorf("Configuration error: %w", err)
 	}
 
 	// Create geocoding tool FIRST so component type is set for telemetry
@@ -68,7 +74,7 @@ func main() {
 		)),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
+		return fmt.Errorf("Failed to create framework: %w", err)
 	}
 
 	// Display startup information
@@ -79,37 +85,13 @@ func main() {
 	log.Println()
 
 	// Set up graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		log.Println("\nShutting down gracefully...")
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-
-		cancel()
-
-		select {
-		case <-shutdownCtx.Done():
-			log.Println("Shutdown timeout exceeded")
-			os.Exit(1)
-		case <-time.After(1 * time.Second):
-			// Give framework time to clean up
-		}
-
-		log.Println("Shutdown completed")
-		os.Exit(0)
-	}()
-
-	// Run the framework (blocking)
 	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		log.Fatalf("Framework error: %v", err)
+		return fmt.Errorf("run framework: %w", err)
 	}
+	return nil
 }
 
 // validateConfig validates all required configuration at startup
