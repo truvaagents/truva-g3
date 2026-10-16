@@ -2,10 +2,14 @@ package telemetry
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/truvaagents/truva-g3/core"
 	"go.opentelemetry.io/otel"
@@ -41,6 +45,43 @@ type OTelProvider struct {
 	mu             sync.RWMutex             // Protects shutdown flag
 }
 
+// OTelProviderOption configures an OpenTelemetry provider before initialization.
+type OTelProviderOption func(*otelProviderOptions)
+
+type otelProviderOptions struct {
+	serviceInstanceID string
+}
+
+// WithServiceInstanceID overrides the emitting-instance identity. Empty uses
+// the environment/default resolution. The caller must supply a distinct value
+// for each concurrently emitting instance of the same service.
+func WithServiceInstanceID(id string) OTelProviderOption {
+	return func(options *otelProviderOptions) { options.serviceInstanceID = id }
+}
+
+func resolveServiceInstanceID(explicit string, lookup func(string) (string, bool)) (string, error) {
+	id := explicit
+	if id == "" {
+		var present bool
+		id, present = lookup("TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID")
+		if !present {
+			// A UUID per provider lifetime separates concurrent replicas and new
+			// processes without relying on pod names, hostnames or Kubernetes APIs.
+			var value [16]byte
+			if _, err := rand.Read(value[:]); err != nil {
+				return "", fmt.Errorf("generate telemetry service instance ID: %w", err)
+			}
+			value[6] = (value[6] & 0x0f) | 0x40 // UUID version 4
+			value[8] = (value[8] & 0x3f) | 0x80 // RFC variant
+			return fmt.Sprintf("%x-%x-%x-%x-%x", value[:4], value[4:6], value[6:8], value[8:10], value[10:]), nil
+		}
+	}
+	if id == "" || !utf8.ValidString(id) || strings.TrimSpace(id) != id || strings.ContainsFunc(id, unicode.IsControl) {
+		return "", fmt.Errorf("telemetry service instance ID must be non-empty UTF-8 without surrounding whitespace or control characters")
+	}
+	return id, nil
+}
+
 // NewOTelProvider creates a new OpenTelemetry provider using HTTP exporters.
 // This sets up the complete telemetry pipeline:
 //  1. Creates HTTP exporters for traces and metrics
@@ -50,7 +91,10 @@ type OTelProvider struct {
 // The endpoint should be an OTLP/HTTP endpoint (typically port 4318).
 // For backward compatibility, gRPC ports (4317) are automatically converted.
 // The serviceType parameter should be "tool" or "agent" to enable dashboard segregation.
-func NewOTelProvider(serviceName, serviceType, endpoint string) (*OTelProvider, error) {
+// Each provider receives one immutable service.instance.id shared by traces and
+// metrics. Explicit options override TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID;
+// otherwise a new UUID is generated. Existing three-argument calls use defaults.
+func NewOTelProvider(serviceName, serviceType, endpoint string, options ...OTelProviderOption) (*OTelProvider, error) {
 	logger := GetLogger()
 	startTime := time.Now()
 
@@ -61,6 +105,17 @@ func NewOTelProvider(serviceName, serviceType, endpoint string) (*OTelProvider, 
 			"impact": "Telemetry will not be properly attributed",
 		})
 		return nil, fmt.Errorf("service name cannot be empty")
+	}
+	var settings otelProviderOptions
+	for _, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("telemetry provider option must not be nil")
+		}
+		option(&settings)
+	}
+	instanceID, err := resolveServiceInstanceID(settings.serviceInstanceID, os.LookupEnv)
+	if err != nil {
+		return nil, err
 	}
 
 	// Default serviceType to empty if not provided (backward compatibility)
@@ -104,6 +159,7 @@ func NewOTelProvider(serviceName, serviceType, endpoint string) (*OTelProvider, 
 	attrs := []attribute.KeyValue{
 		semconv.ServiceNameKey.String(serviceName),
 		semconv.ServiceVersionKey.String("1.0.0"),
+		semconv.ServiceInstanceIDKey.String(instanceID),
 	}
 	// Add service.type if provided (enables tool vs agent segregation in dashboards)
 	if serviceType != "" {
@@ -234,9 +290,11 @@ func NewOTelProvider(serviceName, serviceType, endpoint string) (*OTelProvider, 
 	}
 
 	logger.Info("OpenTelemetry provider created successfully", map[string]interface{}{
-		"service_name":      serviceName,
-		"endpoint":          endpoint,
-		"initialization_ms": time.Since(startTime).Milliseconds(),
+		"operation":           "telemetry_provider_initialize",
+		"service_name":        serviceName,
+		"service_instance_id": instanceID,
+		"endpoint":            endpoint,
+		"initialization_ms":   time.Since(startTime).Milliseconds(),
 		"components": map[string]string{
 			"trace_exporter":  "OTLP/HTTP",
 			"metric_exporter": "OTLP/HTTP",

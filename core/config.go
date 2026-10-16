@@ -413,7 +413,7 @@ func DefaultConfig() *Config {
 			WriteTimeout:      35 * time.Minute,
 			IdleTimeout:       120 * time.Second,
 			MaxHeaderBytes:    1 << 20, // 1MB
-			ShutdownTimeout:   10 * time.Second,
+			ShutdownTimeout:   defaultHTTPShutdownTimeout,
 			EnableHealthCheck: true,
 			HealthCheckPath:   "/health",
 			EnableOpenAPI:     false, // Opt-in — see HTTPConfig.EnableOpenAPI godoc
@@ -664,6 +664,13 @@ func (c *Config) loadFromEnv(deferRedisErrors bool) error {
 	}
 
 	// HTTP settings
+	if v, present := os.LookupEnv("TRUVAG3_HTTP_SHUTDOWN_TIMEOUT"); present {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("TRUVAG3_HTTP_SHUTDOWN_TIMEOUT must be a positive Go duration: %w", ErrInvalidConfiguration)
+		}
+		c.HTTP.ShutdownTimeout = d
+	}
 	if v := os.Getenv("TRUVAG3_HTTP_READ_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.HTTP.ReadTimeout = d
@@ -1174,6 +1181,9 @@ func (c *Config) LoadFromFile(path string) error {
 //   - Telemetry endpoint is required when telemetry is enabled
 //   - Redis URL is required when Redis discovery is enabled (unless using mock)
 func (c *Config) Validate() error {
+	if _, err := httpShutdownTimeout(c.HTTP.ShutdownTimeout); err != nil {
+		return err
+	}
 	if c.Port < 1 || c.Port > 65535 {
 		// Preserve exact message for test compatibility
 		return &FrameworkError{

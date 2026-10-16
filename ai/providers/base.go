@@ -197,10 +197,16 @@ func SanitizedObservationError(err error, fallback string) (string, error) {
 		errorType = "partial_stream"
 	default:
 		var transportErr *transportRequestError
+		var decodedErr interface{ ResponseBodyReadError() error }
 		var providerErr core.ProviderError
 		switch {
 		case errors.As(err, &transportErr):
 			errorType = "transport"
+		case errors.As(err, &decodedErr):
+			errorType = "decode"
+			if decodedErr.ResponseBodyReadError() != nil {
+				errorType = "transport"
+			}
 		case errors.As(err, &providerErr):
 			switch {
 			case providerErr.IsTransient():

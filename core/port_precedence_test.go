@@ -81,11 +81,11 @@ func TestPortParameterPrecedence(t *testing.T) {
 
 		// Start agent with explicit port parameter (should override config)
 		serverReady := make(chan bool, 1)
-		var startErr error
+		serverDone := make(chan error, 1)
 
 		go func() {
 			serverReady <- true
-			startErr = agent.Start(ctx, testPort) // Parameter should override config
+			serverDone <- agent.Start(ctx, testPort) // Parameter should override config
 		}()
 
 		// Wait for server to be ready
@@ -99,12 +99,14 @@ func TestPortParameterPrecedence(t *testing.T) {
 		// Cleanup - cancel context to stop the agent
 		cancel()
 
-		// Give agent time to shutdown gracefully
-		time.Sleep(100 * time.Millisecond)
-
-		// Verify start error is context cancellation (expected)
-		if startErr != nil && startErr.Error() != "context canceled" && startErr != http.ErrServerClosed {
-			t.Errorf("Agent.Start() unexpected error = %v", startErr)
+		// Join the server; a sleep does not synchronize its result.
+		select {
+		case startErr := <-serverDone:
+			if startErr != nil {
+				t.Errorf("Agent.Start() unexpected error = %v", startErr)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Agent.Start() did not drain after cancellation")
 		}
 	})
 }
@@ -171,11 +173,11 @@ func TestPortConfigFallback(t *testing.T) {
 
 		// Start agent with negative port (should use config)
 		serverReady := make(chan bool, 1)
-		var startErr error
+		serverDone := make(chan error, 1)
 
 		go func() {
 			serverReady <- true
-			startErr = agent.Start(ctx, -1) // Should fall back to config
+			serverDone <- agent.Start(ctx, -1) // Should fall back to config
 		}()
 
 		// Wait for server to be ready
@@ -188,12 +190,13 @@ func TestPortConfigFallback(t *testing.T) {
 		// Cleanup - cancel context to stop the agent
 		cancel()
 
-		// Give agent time to shutdown gracefully
-		time.Sleep(100 * time.Millisecond)
-
-		// Verify start error is context cancellation (expected)
-		if startErr != nil && startErr.Error() != "context canceled" && startErr != http.ErrServerClosed {
-			t.Errorf("Agent.Start() unexpected error = %v", startErr)
+		select {
+		case startErr := <-serverDone:
+			if startErr != nil {
+				t.Errorf("Agent.Start() unexpected error = %v", startErr)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Agent.Start() did not drain after cancellation")
 		}
 	})
 }

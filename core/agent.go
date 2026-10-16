@@ -102,7 +102,7 @@ type BaseAgent struct {
 	Type         ComponentType
 	Capabilities []Capability
 	Logger       Logger
-	Discovery    Discovery // Agents get full discovery powers
+	Discovery    Discovery // Configure before Initialize; use GetDiscovery for runtime reads.
 	Memory       Memory
 
 	// Optional fields (set by modules)
@@ -116,8 +116,9 @@ type BaseAgent struct {
 	Config *Config
 
 	// HTTP server
-	server *http.Server
-	mux    *http.ServeMux
+	server    *http.Server
+	lifecycle *httpLifecycle
+	mux       *http.ServeMux
 
 	// Handler registration tracking
 	registeredPatterns map[string]bool // Track registered patterns to prevent duplicates
@@ -182,7 +183,7 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 	// Initialize components based on config
 	if b.Config != nil {
 		// Initialize discovery if configured
-		if b.Config.Discovery.Enabled && b.Discovery == nil {
+		if b.Config.Discovery.Enabled && b.GetDiscovery() == nil {
 			b.Logger.Info("Initializing service discovery", map[string]interface{}{
 				"operation":             "redis_discovery_initialize",
 				"provider":              b.Config.Discovery.Provider,
@@ -192,7 +193,9 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 
 			if b.Config.Development.MockDiscovery {
 				// Use mock discovery for development
+				b.mu.Lock()
 				b.Discovery = NewMockDiscovery()
+				b.mu.Unlock()
 				b.Logger.Info("Using mock discovery for development", map[string]interface{}{
 					"provider": "mock",
 					"reason":   "development_mode",
@@ -283,7 +286,7 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 
 	}
 
-	if b.Discovery != nil {
+	if discovery := b.GetDiscovery(); discovery != nil {
 		address, port := ResolveServiceAddress(b.Config, b.Logger)
 
 		b.Logger.Info("Attempting service registration", map[string]interface{}{
@@ -312,7 +315,7 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 			Metadata:     BuildServiceMetadata(b.Config),
 		}
 
-		if err := b.Discovery.Register(ctx, registration); err != nil {
+		if err := discovery.Register(ctx, registration); err != nil {
 			b.Logger.Error("Failed to register with discovery", map[string]interface{}{
 				"error":      err,
 				"error_type": fmt.Sprintf("%T", err),
@@ -322,7 +325,7 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 			// Continue anyway - graceful degradation
 		} else {
 			// Start heartbeat to keep registration alive (Redis-specific)
-			if redisDiscovery, ok := b.Discovery.(*RedisDiscovery); ok {
+			if redisDiscovery, ok := discovery.(*RedisDiscovery); ok {
 				redisDiscovery.StartHeartbeat(ctx, b.ID, b.Config.Discovery.HeartbeatInterval)
 				b.Logger.Info("Started heartbeat for agent registration", map[string]interface{}{
 					"agent_id":             b.ID,
@@ -344,9 +347,10 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 	if registry := GetGlobalMetricsRegistry(); registry != nil {
 		duration := float64(time.Since(initStart).Milliseconds())
 		registry.Counter("agent.lifecycle",
+			"module", "core",
 			"agent_name", b.Name,
 			"event", "initialized",
-			"discovery_enabled", fmt.Sprintf("%t", b.Discovery != nil),
+			"discovery_enabled", fmt.Sprintf("%t", b.GetDiscovery() != nil),
 		)
 		registry.Histogram("agent.initialization.duration_ms", duration,
 			"agent_name", b.Name,
@@ -359,7 +363,7 @@ func (b *BaseAgent) Initialize(ctx context.Context) error {
 	b.Logger.Info("Agent initialization completed", map[string]interface{}{
 		"id":                 b.ID,
 		"name":               b.Name,
-		"discovery_enabled":  b.Discovery != nil,
+		"discovery_enabled":  b.GetDiscovery() != nil,
 		"capabilities_count": len(b.Capabilities),
 	})
 
@@ -403,12 +407,23 @@ func (b *BaseAgent) GetType() ComponentType {
 	return b.Type
 }
 
+// GetDiscovery returns the current discovery reference, synchronized with
+// background discovery recovery. It may be nil until recovery succeeds.
+// A returned implementation owns its own concurrency and connection lifecycle.
+// Direct assignments to Discovery are supported only before initialization.
+func (b *BaseAgent) GetDiscovery() Discovery {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.Discovery
+}
+
 // Discover allows agents to discover both tools and other agents
 func (b *BaseAgent) Discover(ctx context.Context, filter DiscoveryFilter) ([]*ServiceInfo, error) {
-	if b.Discovery == nil {
+	discovery := b.GetDiscovery()
+	if discovery == nil {
 		return nil, fmt.Errorf("discovery not configured for agent %s", b.Name)
 	}
-	return b.Discovery.Discover(ctx, filter)
+	return discovery.Discover(ctx, filter)
 }
 
 // HandleFunc registers a custom HTTP handler for the given pattern.
@@ -689,12 +704,20 @@ func (b *BaseAgent) fieldHintToJSONSchema(field FieldHint) map[string]interface{
 
 // Start starts the HTTP server for the agent
 func (b *BaseAgent) Start(ctx context.Context, port int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	b.mu.Lock()
 
 	// Check if already started
 	if b.serverStarted {
 		b.mu.Unlock()
 		return fmt.Errorf("server already started")
+	}
+	shutdownTimeout, err := httpShutdownTimeout(b.Config.HTTP.ShutdownTimeout)
+	if err != nil {
+		b.mu.Unlock()
+		return err
 	}
 
 	// Apply configuration precedence: explicit parameter > config > default
@@ -845,6 +868,12 @@ func (b *BaseAgent) Start(ctx context.Context, port int) error {
 		IdleTimeout:       b.Config.HTTP.IdleTimeout,
 		MaxHeaderBytes:    b.Config.HTTP.MaxHeaderBytes,
 	}
+	server := b.server
+	lifecycle := &httpLifecycle{server: server, timeout: shutdownTimeout}
+	lifecycle.shutdown = func(shutdownCtx context.Context) error {
+		return b.shutdownServer(shutdownCtx, server)
+	}
+	b.lifecycle = lifecycle
 
 	if b.Discovery != nil {
 		address, registrationPort := ResolveServiceAddress(b.Config, b.Logger)
@@ -859,47 +888,56 @@ func (b *BaseAgent) Start(ctx context.Context, port int) error {
 	// Mark server as started (before actually starting to prevent race conditions)
 	b.serverStarted = true
 	b.mu.Unlock() // Unlock before blocking ListenAndServe call
+	defer func() {
+		b.mu.Lock()
+		b.serverStarted = false
+		b.mu.Unlock()
+	}()
 
 	b.Logger.Info("Starting HTTP server", map[string]interface{}{
 		"address":           addr,
 		"cors":              b.Config.HTTP.CORS.Enabled,
 		"capabilities":      len(b.Capabilities),
-		"discovery_enabled": b.Discovery != nil,
+		"discovery_enabled": b.GetDiscovery() != nil,
 	})
 
-	if err := b.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		b.Logger.Error("HTTP server failed to start", map[string]interface{}{
-			"error":      err.Error(),
-			"error_type": fmt.Sprintf("%T", err),
-			"address":    addr,
-			"port":       port,
-		})
+	if err := lifecycle.serve(ctx); err != nil {
+		if b.Logger != nil {
+			b.Logger.ErrorWithContext(ctx, "HTTP server lifecycle failed", map[string]interface{}{
+				"operation":  "http_server_lifecycle",
+				"error":      err.Error(),
+				"error_type": fmt.Sprintf("%T", err),
+				"address":    addr,
+				"port":       port,
+			})
+		}
 		return err
 	}
 
 	return nil
 }
 
-// Stop stops the HTTP server
+// Stop drains the current HTTP server. Start also drains it on context
+// cancellation; concurrent Stop calls join the same bounded shutdown.
+// ctx limits this caller's wait, not the shared drain's configured budget.
 func (b *BaseAgent) Stop(ctx context.Context) error {
+	b.mu.RLock()
+	lifecycle := b.lifecycle
+	b.mu.RUnlock()
+	if lifecycle == nil {
+		return nil
+	}
+	return lifecycle.stop(ctx)
+}
+
+func (b *BaseAgent) shutdownServer(shutdownCtx context.Context, server *http.Server) error {
 	shutdownStart := time.Now()
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.server != nil {
-		// Use configured shutdown timeout or context deadline
-		shutdownCtx := ctx
-		if b.Config != nil && b.Config.HTTP.ShutdownTimeout > 0 {
-			var cancel context.CancelFunc
-			shutdownCtx, cancel = context.WithTimeout(ctx, b.Config.HTTP.ShutdownTimeout)
-			defer cancel()
-		}
-
-		// Unregister from discovery if available
-		if b.Discovery != nil && b.Config.Discovery.Enabled {
-			if err := b.Discovery.Unregister(shutdownCtx, b.ID); err != nil {
-				b.Logger.Error("Failed to unregister from discovery", map[string]interface{}{
+	// Unregister from discovery if available
+	if discovery := b.GetDiscovery(); discovery != nil && b.Config.Discovery.Enabled {
+		if err := discovery.Unregister(shutdownCtx, b.ID); err != nil {
+			if b.Logger != nil {
+				b.Logger.ErrorWithContext(shutdownCtx, "Failed to unregister from discovery", map[string]interface{}{
 					"error":      err,                    // Preserve full error object
 					"error_type": fmt.Sprintf("%T", err), // Log error type for debugging
 					"agent_id":   b.ID,
@@ -907,43 +945,31 @@ func (b *BaseAgent) Stop(ctx context.Context) error {
 				})
 			}
 		}
-
-		// Reset server state
-		b.serverStarted = false
-
-		// Perform actual shutdown
-		err := b.server.Shutdown(shutdownCtx)
-
-		// Emit framework metrics after shutdown completes (captures actual duration)
-		if registry := GetGlobalMetricsRegistry(); registry != nil {
-			duration := float64(time.Since(shutdownStart).Milliseconds())
-			status := "success"
-			if err != nil {
-				status = "error"
-			}
-			registry.Counter("agent.lifecycle",
-				"agent_name", b.Name,
-				"event", "shutdown",
-				"status", status,
-			)
-			registry.Histogram("agent.shutdown.duration_ms", duration,
-				"agent_name", b.Name,
-				"status", status,
-			)
-		}
-
-		return err
 	}
 
-	// Emit shutdown metric even if server was nil
+	// Perform actual shutdown
+	err := server.Shutdown(shutdownCtx)
+
+	// Emit framework metrics after shutdown completes (captures actual duration)
 	if registry := GetGlobalMetricsRegistry(); registry != nil {
+		duration := float64(time.Since(shutdownStart).Milliseconds())
+		status := "success"
+		if err != nil {
+			status = "error"
+		}
 		registry.Counter("agent.lifecycle",
+			"module", "core",
 			"agent_name", b.Name,
 			"event", "shutdown",
+			"status", status,
+		)
+		registry.Histogram("agent.shutdown.duration_ms", duration,
+			"agent_name", b.Name,
+			"status", status,
 		)
 	}
 
-	return nil
+	return err
 }
 
 // RecoveryMiddleware creates a middleware that recovers from panics in HTTP
@@ -1279,6 +1305,8 @@ const defaultRunnableDrainTimeout = 10 * time.Second
 // Runnables run in parallel goroutines and shut down gracefully when ctx is cancelled.
 // Run blocks until both the HTTP server and all runnables have exited (or drain timeout).
 func (f *Framework) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	// Initialize component
 	if err := f.component.Initialize(ctx); err != nil {
 		return fmt.Errorf("failed to initialize component: %w", err)
@@ -1336,6 +1364,9 @@ func (f *Framework) Run(ctx context.Context) error {
 
 	// Start HTTP server (blocks until ctx cancelled)
 	err := f.component.Start(ctx, f.config.Port)
+	// Startup failures and explicit server stops must stop runnables too,
+	// without cancelling the application's parent context.
+	cancel()
 
 	// Lifecycle log: HTTP server stopped, draining runnables
 	if logger != nil && len(f.runnables) > 0 {

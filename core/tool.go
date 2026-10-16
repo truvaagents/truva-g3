@@ -47,9 +47,11 @@ type BaseTool struct {
 	Config *Config // Configuration for K8s support and more
 
 	// HTTP server
-	server   *http.Server
-	serverMu sync.RWMutex
-	mux      *http.ServeMux
+	server        *http.Server
+	serverMu      sync.RWMutex
+	lifecycle     *httpLifecycle
+	serverStarted bool
+	mux           *http.ServeMux
 
 	// Handler registration tracking (same as BaseAgent for consistency)
 	registeredPatterns map[string]bool // Track registered patterns to prevent duplicates
@@ -563,6 +565,21 @@ func (t *BaseTool) setupStandardEndpoints() {
 
 // Start starts the HTTP server for the tool
 func (t *BaseTool) Start(ctx context.Context, port int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	t.serverMu.Lock()
+	if t.serverStarted {
+		t.serverMu.Unlock()
+		return fmt.Errorf("server already started")
+	}
+	t.serverStarted = true
+	t.serverMu.Unlock()
+	defer func() {
+		t.serverMu.Lock()
+		t.serverStarted = false
+		t.serverMu.Unlock()
+	}()
 	// Apply configuration precedence: explicit parameter > config > default
 	// Only use Config.Port if no explicit port provided (port < 0)
 	if port < 0 && t.Config != nil && t.Config.Port >= 0 {
@@ -584,6 +601,10 @@ func (t *BaseTool) Start(ctx context.Context, port int) error {
 	// Use default timeouts if config is not provided
 	if t.Config == nil {
 		t.Config = DefaultConfig()
+	}
+	shutdownTimeout, err := httpShutdownTimeout(t.Config.HTTP.ShutdownTimeout)
+	if err != nil {
+		return err
 	}
 
 	// Setup standard endpoints (/api/capabilities, /health)
@@ -648,7 +669,14 @@ func (t *BaseTool) Start(ctx context.Context, port int) error {
 		IdleTimeout:       t.Config.HTTP.IdleTimeout,
 		MaxHeaderBytes:    t.Config.HTTP.MaxHeaderBytes,
 	}
-	t.setServer(server)
+	lifecycle := &httpLifecycle{server: server, timeout: shutdownTimeout}
+	lifecycle.shutdown = func(shutdownCtx context.Context) error {
+		return t.shutdownServer(shutdownCtx, server)
+	}
+	t.serverMu.Lock()
+	t.server = server
+	t.lifecycle = lifecycle
+	t.serverMu.Unlock()
 	defer t.clearServer(server)
 
 	if t.Registry != nil {
@@ -685,52 +713,63 @@ func (t *BaseTool) Start(ctx context.Context, port int) error {
 		"registry_enabled": t.Registry != nil,
 	})
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		t.Logger.Error("HTTP server failed to start", map[string]interface{}{
-			"error":      err.Error(),
-			"error_type": fmt.Sprintf("%T", err),
-			"address":    addr,
-			"port":       port,
-		})
+	if err := lifecycle.serve(ctx); err != nil {
+		if t.Logger != nil {
+			t.Logger.ErrorWithContext(ctx, "HTTP server lifecycle failed", map[string]interface{}{
+				"operation":  "http_server_lifecycle",
+				"error":      err.Error(),
+				"error_type": fmt.Sprintf("%T", err),
+				"address":    addr,
+				"port":       port,
+			})
+		}
 		return err
 	}
 
 	return nil
 }
 
-// Shutdown gracefully shuts down the tool
+// Shutdown drains the current HTTP server. Start also drains it on context
+// cancellation; concurrent Shutdown calls join the same bounded shutdown.
+// For a running server, ctx limits this caller's wait, not the shared drain.
 func (t *BaseTool) Shutdown(ctx context.Context) error {
-	t.Logger.Info("Shutting down tool", map[string]interface{}{
-		"name": t.Name,
-	})
+	t.serverMu.RLock()
+	lifecycle := t.lifecycle
+	t.serverMu.RUnlock()
+	if lifecycle != nil {
+		return lifecycle.stop(ctx)
+	}
+	// Preserve unregister support for initialized tools not yet serving HTTP.
+	return t.shutdownServer(ctx, nil)
+}
+
+func (t *BaseTool) shutdownServer(ctx context.Context, server *http.Server) error {
+	if t.Logger != nil {
+		t.Logger.InfoWithContext(ctx, "Shutting down tool", map[string]interface{}{
+			"operation": "http_server_shutdown",
+			"name":      t.Name,
+		})
+	}
 
 	// Unregister from registry
 	if t.Registry != nil {
 		if err := t.Registry.Unregister(ctx, t.ID); err != nil {
-			t.Logger.Error("Failed to unregister", map[string]interface{}{
-				"error": err.Error(),
-			})
+			if t.Logger != nil {
+				t.Logger.ErrorWithContext(ctx, "Failed to unregister", map[string]interface{}{
+					"operation":  "unregister",
+					"error":      err,
+					"error_type": fmt.Sprintf("%T", err),
+				})
+			}
 		}
 	}
 
 	// Shutdown HTTP server
-	if server := t.getServer(); server != nil {
+	if server != nil {
 		return server.Shutdown(ctx)
 	}
 
 	return nil
-}
-
-func (t *BaseTool) setServer(server *http.Server) {
-	t.serverMu.Lock()
-	defer t.serverMu.Unlock()
-	t.server = server
-}
-
-func (t *BaseTool) getServer() *http.Server {
-	t.serverMu.RLock()
-	defer t.serverMu.RUnlock()
-	return t.server
 }
 
 func (t *BaseTool) clearServer(server *http.Server) {

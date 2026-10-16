@@ -588,13 +588,43 @@ func (c *codec) Encode(draft *Draft) ([]byte, error) {
 	return encoded, nil
 }
 
+// Keep the diagnostic stable while exposing reader and JSON causes to callers.
+type responseDecodeError struct {
+	cause     error
+	readError error
+}
+
+func (*responseDecodeError) Error() string   { return "decode OpenAI wire response" }
+func (e *responseDecodeError) Unwrap() error { return e.cause }
+
+// ResponseBodyReadError exposes an observed non-EOF reader failure. Nil means
+// the decoder failed without such evidence, including incomplete JSON at clean EOF.
+func (e *responseDecodeError) ResponseBodyReadError() error { return e.readError }
+
+type responseDecodeReader struct {
+	reader    io.Reader
+	readError error
+}
+
+func (r *responseDecodeReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if r.readError == nil && err != nil && err != io.EOF {
+		r.readError = err
+	}
+	return n, err
+}
+
 func (c *codec) Decode(response io.Reader) (*core.AIResult, error) {
 	if response == nil {
 		return nil, errors.New("OpenAI wire response reader is nil")
 	}
 	var decoded responseEnvelope
-	if err := json.NewDecoder(response).Decode(&decoded); err != nil {
-		return nil, errors.New("decode OpenAI wire response")
+	reader := &responseDecodeReader{reader: response}
+	if err := json.NewDecoder(reader).Decode(&decoded); err != nil {
+		if reader.readError != nil && !errors.Is(err, reader.readError) {
+			err = errors.Join(err, reader.readError)
+		}
+		return nil, &responseDecodeError{cause: err, readError: reader.readError}
 	}
 	if decoded.Error != nil {
 		return nil, endpointError(decoded.Error)
