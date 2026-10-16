@@ -159,56 +159,7 @@ func DecodeSkillPackageInputJSON(data []byte) (SkillPackageInput, error) {
 
 func rejectDuplicateSkillJSONFields(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	var visit func() error
-	visit = func() error {
-		token, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		delimiter, ok := token.(json.Delim)
-		if !ok {
-			return nil
-		}
-		switch delimiter {
-		case '{':
-			seen := make(map[string]struct{})
-			for decoder.More() {
-				keyToken, err := decoder.Token()
-				if err != nil {
-					return err
-				}
-				key, ok := keyToken.(string)
-				if !ok {
-					return errors.New("object field is not a string")
-				}
-				if _, found := seen[key]; found {
-					return errors.New("duplicate object field")
-				}
-				seen[key] = struct{}{}
-				if err := visit(); err != nil {
-					return err
-				}
-			}
-			closing, err := decoder.Token()
-			if err != nil || closing != json.Delim('}') {
-				return errors.New("unterminated object")
-			}
-		case '[':
-			for decoder.More() {
-				if err := visit(); err != nil {
-					return err
-				}
-			}
-			closing, err := decoder.Token()
-			if err != nil || closing != json.Delim(']') {
-				return errors.New("unterminated array")
-			}
-		default:
-			return errors.New("unexpected JSON delimiter")
-		}
-		return nil
-	}
-	if err := visit(); err != nil {
+	if err := visitUniqueJSONValue(decoder); err != nil {
 		return err
 	}
 	return ensureSkillJSONEOF(decoder)

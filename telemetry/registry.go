@@ -19,6 +19,9 @@ var (
 	// initOnce ensures Initialize() can only succeed once.
 	// Multiple calls to Initialize() will return the same result.
 	initOnce sync.Once
+	// Keep the first initialization result, including a configuration failure.
+	// Later callers must not observe success when no registry was installed.
+	initErr error
 
 	// shutdownMu serializes teardown (including core unregistration), not
 	// emission. Concurrent callers observe the completed teardown before return.
@@ -105,16 +108,17 @@ func DeclareMetrics(module string, config ModuleConfig) {
 //  5. Stores the registry globally for use by Emit functions
 //
 // Returns an error if initialization fails (e.g., can't create exporter).
+// Subsequent calls return that same error; reinitialization is not supported.
 // Even if initialization fails, the Emit functions will still work
 // (they'll just discard metrics), so the application won't crash.
 func Initialize(config Config) error {
-	var initErr error
 	initOnce.Do(func() {
 		// Create logger immediately for initialization visibility
 		logger := NewTelemetryLogger(config.ServiceName)
 
 		// Log initialization start
 		logger.Info("Telemetry initialization starting", map[string]interface{}{
+			"operation":         "telemetry_initialize",
 			"service_name":      config.ServiceName,
 			"endpoint":          config.Endpoint,
 			"cardinality_limit": config.CardinalityLimit,
@@ -126,10 +130,11 @@ func Initialize(config Config) error {
 		if err != nil {
 			initErr = err
 			logger.Error("Telemetry initialization failed", map[string]interface{}{
-				"error":    err.Error(),
-				"endpoint": config.Endpoint,
-				"action":   "Check OTEL collector is running at endpoint",
-				"impact":   "No metrics will be sent",
+				"operation": "telemetry_initialize",
+				"error":     err.Error(),
+				"endpoint":  config.Endpoint,
+				"action":    "Check telemetry configuration and collector endpoint",
+				"impact":    "No metrics will be sent",
 			})
 			return
 		}
@@ -146,6 +151,7 @@ func Initialize(config Config) error {
 			registry.registerModule(module, moduleConfig)
 			declaredCount++
 			logger.Debug("Registered module metrics", map[string]interface{}{
+				"operation":    "telemetry_register_module",
 				"module":       module,
 				"metric_count": len(moduleConfig.Metrics),
 			})
@@ -164,6 +170,7 @@ func Initialize(config Config) error {
 
 		// Log successful initialization
 		logger.Info("Telemetry system initialized successfully", map[string]interface{}{
+			"operation":            "telemetry_initialize",
 			"declared_modules":     declaredCount,
 			"circuit_enabled":      registry.circuit != nil,
 			"limiter_enabled":      registry.limiter != nil,
@@ -215,7 +222,8 @@ func newRegistry(config Config) (*Registry, error) {
 	}
 
 	// Create OpenTelemetry provider
-	provider, err := NewOTelProvider(config.ServiceName, config.ServiceType, config.Endpoint)
+	provider, err := NewOTelProvider(config.ServiceName, config.ServiceType, config.Endpoint,
+		WithServiceInstanceID(config.ServiceInstanceID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OTel provider: %w", err)
 	}

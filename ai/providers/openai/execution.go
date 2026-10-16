@@ -50,6 +50,11 @@ func (c *Client) executePreparedResponse(ctx context.Context, span core.Span, pr
 		if result != nil && result.Response != nil {
 			result.Response.Provider = c.getProviderName()
 		}
+		// Preserve an expired caller/provider context if the response error does
+		// not already carry it. The existing chain treats either deadline as terminal.
+		if contextErr := attemptCtx.Err(); decodeErr != nil && contextErr != nil && !errors.Is(decodeErr, contextErr) {
+			decodeErr = errors.Join(contextErr, decodeErr)
+		}
 		semanticStatus := 0
 		var providerErr core.ProviderError
 		if errors.As(decodeErr, &providerErr) {

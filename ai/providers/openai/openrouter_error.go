@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -91,6 +92,11 @@ func normalizeOpenRouterError(
 	if wireErr != nil && strings.TrimSpace(wireErr.Type) != "" {
 		policyType = wireErr.Type
 	}
+	// OpenRouter documents status-only 408 as a provider timeout. Preserve
+	// conflicting or unknown typed policy rather than guessing recovery intent.
+	if status == http.StatusRequestTimeout && (policyType == "" || policyType == "unmapped") {
+		errorType, policyType = "timeout", "timeout"
+	}
 	switch errorType {
 	case "invalid_request", "invalid_prompt", "context_length_exceeded", "max_tokens_exceeded", "string_too_long":
 		status = openRouterFailFastStatus(status)
@@ -118,7 +124,9 @@ func normalizeOpenRouterError(
 	case "provider_overloaded":
 		status = 503
 	case "timeout":
-		status = 504
+		if status != http.StatusRequestTimeout {
+			status = http.StatusGatewayTimeout
+		}
 		retryable = true
 	case "server":
 		status = 500

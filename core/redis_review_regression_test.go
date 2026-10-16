@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,63 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAgentDiscoveryAccessorObservesLateRecovery(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	require.NoError(t, listener.Close())
+	config := DefaultConfig()
+	config.Discovery.Enabled = true
+	config.Discovery.Provider = "redis"
+	config.Discovery.RedisURL = "redis://" + address
+	config.Discovery.RedisConnection = &RedisConnectionConfig{Mode: RedisModeStandalone, Addrs: []string{address}, DialTimeout: 50 * time.Millisecond, MaxRetries: -1}
+	config.Discovery.RetryOnFailure = true
+	config.Discovery.RetryInterval = 20 * time.Millisecond
+	config.Development.MockDiscovery = false
+	agent := NewBaseAgentWithConfig(config)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	require.NoError(t, agent.Initialize(ctx))
+	require.Nil(t, agent.GetDiscovery())
+	_, err = agent.Discover(ctx, DiscoveryFilter{})
+	require.Error(t, err)
+
+	server := miniredis.NewMiniRedis()
+	require.NoError(t, server.StartAddr(address))
+	t.Cleanup(server.Close)
+	require.Eventually(t, func() bool { return agent.GetDiscovery() != nil }, 5*time.Second, time.Millisecond)
+	discovery, ok := agent.GetDiscovery().(*RedisDiscovery)
+	require.True(t, ok)
+	t.Cleanup(func() { cancel(); _ = discovery.Close() })
+	services, err := agent.Discover(ctx, DiscoveryFilter{})
+	require.NoError(t, err)
+	require.NotEmpty(t, services)
+}
+
+func TestAgentDiscoveryAccessorConcurrentReplacement(t *testing.T) {
+	agent := NewBaseAgent("discovery-accessor")
+	first, second := NewMockDiscovery(), NewMockDiscovery()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 1000 {
+			agent.mu.Lock()
+			agent.Discovery = first
+			agent.mu.Unlock()
+			agent.mu.Lock()
+			agent.Discovery = second
+			agent.mu.Unlock()
+		}
+	}()
+	for range 1000 {
+		discovery := agent.GetDiscovery()
+		require.True(t, discovery == nil || discovery == first || discovery == second)
+		_, _ = agent.Discover(t.Context(), DiscoveryFilter{})
+	}
+	<-done
+	require.Same(t, second, agent.GetDiscovery())
+}
 
 type registryRevivalHook struct {
 	key    string

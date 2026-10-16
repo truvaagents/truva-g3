@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/truvaagents/truva-g3/ai"
+	"github.com/truvaagents/truva-g3/ai/providers"
 	"github.com/truvaagents/truva-g3/ai/providers/anthropic"
 	"github.com/truvaagents/truva-g3/ai/providers/azureopenai"
 	"github.com/truvaagents/truva-g3/ai/providers/gemini"
@@ -149,6 +150,64 @@ func observationResponse(request *http.Request, body string) *http.Response {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    request,
+	}
+}
+
+type observationFailureReader struct{ cause error }
+
+func (r observationFailureReader) Read([]byte) (int, error) { return 0, r.cause }
+
+func TestBufferedDecodeFailureObservationsDistinguishReaderAndJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reader func() io.Reader
+		want   string
+	}{
+		{"syntax", func() io.Reader { return strings.NewReader(`{"choices":!}`) }, "decode"},
+		{"type", func() io.Reader { return strings.NewReader(`{"choices":"private response material"}`) }, "decode"},
+		{"incomplete_json_clean_eof", func() io.Reader { return strings.NewReader(`{"choices":[`) }, "decode"},
+		{"empty_response_clean_eof", func() io.Reader { return strings.NewReader("") }, "decode"},
+		{"read_unexpected_eof", func() io.Reader { return observationFailureReader{io.ErrUnexpectedEOF} }, "transport"},
+		{"read_failure", func() io.Reader { return observationFailureReader{errors.New("private reader error")} }, "transport"},
+		{"cancelled", func() io.Reader { return observationFailureReader{context.Canceled} }, "cancelled"},
+		{"deadline", func() io.Reader { return observationFailureReader{context.DeadlineExceeded} }, "deadline"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger := newObservationLogger()
+			tracing := &observationTelemetry{}
+			calls := 0
+			client := openai.NewClient("synthetic", "https://endpoint.invalid", "openai.openrouter", logger)
+			client.SetTelemetry(tracing)
+			client.MaxRetries, client.RetryDelay = 2, 0
+			client.HTTPClient = &http.Client{Transport: observationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(tc.reader()), Request: request}, nil
+			})}
+			result, err := client.Generate(t.Context(), core.NewAIRequestFromLegacy("synthetic", "", &core.AIOptions{Model: "gpt-4.1"}))
+			if err == nil || result == nil || result.RequestReport == nil || calls != 1 || len(tracing.spans) != 2 {
+				t.Fatalf("calls=%d result=%#v error=%v spans=%d", calls, result, err, len(tracing.spans))
+			}
+			for _, span := range tracing.spans {
+				if span.attributes["ai.error_type"] != tc.want || len(span.errors) != 1 || span.ended != 1 || span.errors[0].Error() != "AI provider request failed: "+tc.want {
+					t.Fatalf("span=%s attributes=%#v errors=%v", span.name, span.attributes, span.errors)
+				}
+			}
+			foundErrorLog := false
+			for _, entry := range logger.store.entries {
+				if entry.fields["operation"] == "ai_request" && entry.fields["error_type"] != nil {
+					foundErrorLog = true
+					if entry.fields["error_type"] != tc.want || entry.fields["error"] != "AI provider request failed: "+tc.want {
+						t.Fatalf("incorrect error observation: %#v", entry.fields)
+					}
+				}
+			}
+			if !foundErrorLog {
+				t.Fatal("provider failure emitted no bounded error log")
+			}
+			if got, _ := providers.SanitizedObservationError(errors.Join(core.ErrStreamPartiallyCompleted, err), "unknown"); tc.want != "cancelled" && tc.want != "deadline" && got != "partial_stream" {
+				t.Fatalf("partial-stream observation lost precedence: %s", got)
+			}
+		})
 	}
 }
 

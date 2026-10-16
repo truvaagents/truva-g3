@@ -61,6 +61,37 @@ func TestNormalizeOpenRouterErrorTaxonomy(t *testing.T) {
 	}
 }
 
+func TestOpenRouterTimeoutClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		httpStatus  int
+		wire        *openaiwire.EndpointError
+		wantStatus  int
+		wantType    string
+		wantRecover bool
+	}{
+		{"http_status_only", 408, nil, 408, "timeout", true},
+		{"http_envelope", 408, &openaiwire.EndpointError{Code: 408}, 408, "timeout", true},
+		{"in_body", 0, &openaiwire.EndpointError{Code: 408, Type: "unmapped"}, 408, "timeout", true},
+		{"typed_408", 408, &openaiwire.EndpointError{Code: 408, Type: "timeout"}, 408, "timeout", true},
+		{"typed_without_status", 0, &openaiwire.EndpointError{Type: "timeout"}, 504, "timeout", true},
+		{"permission_denied", 408, &openaiwire.EndpointError{Code: 408, Type: "permission_denied"}, 400, "permission_denied", false},
+		{"invalid_request", 408, &openaiwire.EndpointError{Code: 408, Type: "invalid_request"}, 408, "invalid_request", false},
+		{"unknown_type", 408, &openaiwire.EndpointError{Code: 408, Type: "future_provider_error"}, 408, "unmapped", false},
+		{"synthetic_status", 0, &openaiwire.EndpointError{Type: "unmapped"}, 500, "unmapped", false},
+		{"ordinary_client", 400, nil, 400, "unmapped", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := normalizeOpenRouterError(tc.httpStatus, tc.wire, "model")
+			var normalized *openRouterProviderError
+			if !errors.As(err, &normalized) || normalized.StatusCode() != tc.wantStatus || normalized.errorType != tc.wantType ||
+				normalized.IsRetryable() != tc.wantRecover || normalized.retrySameProvider != tc.wantRecover || normalized.IsTransient() {
+				t.Fatalf("normalized timeout contract: %#v (%v)", normalized, err)
+			}
+		})
+	}
+}
+
 func TestOpenRouterBufferedInBandErrorPreservesPartialResult(t *testing.T) {
 	const canary = "private prompt fragment"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

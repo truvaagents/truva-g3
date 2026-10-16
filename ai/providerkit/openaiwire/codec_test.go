@@ -2,6 +2,7 @@ package openaiwire_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -906,6 +907,75 @@ func TestCodecDecodeRejectsInvalidInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestCodecDecodePreservesReaderErrorIdentity(t *testing.T) {
+	codec := mustCodec(t)
+	privateCause := errors.New("reader failed with private response material")
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, io.ErrUnexpectedEOF, privateCause} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			result, err := codec.Decode(decodeErrorReader{cause: cause})
+			if result != nil || !errors.Is(err, cause) {
+				t.Fatalf("result=%#v error=%v; reader cause was lost", result, err)
+			}
+			if err.Error() != "decode OpenAI wire response" {
+				t.Fatalf("decoder exposed reader text: %q", err.Error())
+			}
+			var readFailure interface{ ResponseBodyReadError() error }
+			if !errors.As(err, &readFailure) || !errors.Is(readFailure.ResponseBodyReadError(), cause) {
+				t.Fatalf("decoder lost observed reader failure: %v", err)
+			}
+		})
+	}
+}
+
+func TestCodecDecodePreservesJSONErrorIdentity(t *testing.T) {
+	codec := mustCodec(t)
+	t.Run("syntax", func(t *testing.T) {
+		_, err := codec.Decode(strings.NewReader(`{"choices":!}`))
+		var syntaxErr *json.SyntaxError
+		if !errors.As(err, &syntaxErr) || syntaxErr.Offset == 0 || err.Error() != "decode OpenAI wire response" {
+			t.Fatalf("syntax error identity/message changed: %v", err)
+		}
+	})
+	t.Run("type", func(t *testing.T) {
+		_, err := codec.Decode(strings.NewReader(`{"choices":"private response material"}`))
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) || typeErr.Field != "choices" || err.Error() != "decode OpenAI wire response" {
+			t.Fatalf("type error identity/message changed: %v", err)
+		}
+	})
+}
+
+func TestCodecDecodeCleanEOFIsNotAReadFailure(t *testing.T) {
+	for _, body := range []string{"", `{"choices":[`, `{"choices":!}`} {
+		_, err := mustCodec(t).Decode(strings.NewReader(body))
+		var readFailure interface{ ResponseBodyReadError() error }
+		if !errors.As(err, &readFailure) || readFailure.ResponseBodyReadError() != nil {
+			t.Fatalf("clean EOF/parser failure misreported as reader failure: body=%q error=%v", body, err)
+		}
+	}
+}
+
+func TestCodecDecodePreservesSyntaxAndSimultaneousReaderFailure(t *testing.T) {
+	readErr := errors.New("private body-read failure")
+	_, err := mustCodec(t).Decode(decodeDataErrorReader{cause: readErr})
+	var syntaxErr *json.SyntaxError
+	var readFailure interface{ ResponseBodyReadError() error }
+	if !errors.As(err, &syntaxErr) || !errors.Is(err, readErr) || !errors.As(err, &readFailure) ||
+		!errors.Is(readFailure.ResponseBodyReadError(), readErr) || err.Error() != "decode OpenAI wire response" {
+		t.Fatalf("simultaneous reader/parser facts lost: %v", err)
+	}
+}
+
+type decodeDataErrorReader struct{ cause error }
+
+func (r decodeDataErrorReader) Read(p []byte) (int, error) {
+	return copy(p, `{"choices":!}`), r.cause
+}
+
+type decodeErrorReader struct{ cause error }
+
+func (r decodeErrorReader) Read([]byte) (int, error) { return 0, r.cause }
 
 func TestCodecDecodeStreamInputStopAndPartialReadContracts(t *testing.T) {
 	codec := mustCodec(t)

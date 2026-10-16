@@ -8,8 +8,12 @@ type Config struct {
 	Enabled     bool
 	ServiceName string
 	ServiceType string // "tool" or "agent" - automatically inferred from component type
-	Endpoint    string
-	Provider    string // "otel", "prometheus", "statsd"
+	// ServiceInstanceID identifies one emitting SDK instance. Empty selects
+	// TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID, then a generated UUID. An explicit
+	// value must be unique among concurrent instances of the same service.
+	ServiceInstanceID string
+	Endpoint          string
+	Provider          string // "otel", "prometheus", "statsd"
 
 	// Cardinality control
 	CardinalityLimit  int
@@ -94,6 +98,9 @@ func (c Config) WithOverrides(overrides Config) Config {
 	}
 	if overrides.ServiceType != "" {
 		c.ServiceType = overrides.ServiceType
+	}
+	if overrides.ServiceInstanceID != "" {
+		c.ServiceInstanceID = overrides.ServiceInstanceID
 	}
 	if overrides.Endpoint != "" {
 		c.Endpoint = overrides.Endpoint
