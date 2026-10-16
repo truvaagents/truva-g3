@@ -11,6 +11,10 @@ COPY examples/orchestration-backend-portability/ ./examples/orchestration-backen
 
 WORKDIR /app/examples/orchestration-backend-portability
 ENV GOWORK=off CGO_ENABLED=0 GOOS=linux
+# Workspace mode explicitly selects the copied framework sources.
+RUN go mod edit -replace=github.com/truvaagents/truva-g3/core=/app/core \
+    -replace=github.com/truvaagents/truva-g3/orchestration=/app/orchestration \
+    -replace=github.com/truvaagents/truva-g3/telemetry=/app/telemetry
 RUN go mod tidy && go mod download && \
     go build -trimpath -ldflags="-s -w" -o /out/orchestration-backend-portability .
 

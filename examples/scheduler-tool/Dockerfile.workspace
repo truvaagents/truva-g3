@@ -1,7 +1,7 @@
 # Workspace Dockerfile for scheduler-tool
 # This Dockerfile builds with LOCAL modules (uses local core, telemetry,
-# memory, orchestration, scheduler) referenced via replace directives in
-# go.mod. Used by setup.sh during local development.
+# memory and orchestration) selected by the workspace build below.
+# Used by setup.sh during local development.
 #
 # Usage (from truvag3 root):
 #   docker build -f examples/scheduler-tool/Dockerfile.workspace -t scheduler-tool:latest .
@@ -13,7 +13,7 @@ RUN apk add --no-cache git make gcc musl-dev ca-certificates
 
 WORKDIR /app
 
-# Copy local modules that are referenced by replace directives in go.mod.
+# Copy local modules that are selected by the workspace build below.
 # scheduler-tool depends on four framework modules — all of them must be
 # present so go build can resolve the replace directives.
 COPY core/ ./core/
@@ -33,6 +33,11 @@ ENV GOOS=linux
 ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
 
 # Download remaining dependencies and build
+# Workspace mode explicitly selects the copied framework sources.
+RUN go mod edit -replace=github.com/truvaagents/truva-g3/core=/app/core \
+    -replace=github.com/truvaagents/truva-g3/telemetry=/app/telemetry \
+    -replace=github.com/truvaagents/truva-g3/memory=/app/memory \
+    -replace=github.com/truvaagents/truva-g3/orchestration=/app/orchestration
 RUN go mod tidy && go mod download
 
 # Build the binary with optimizations

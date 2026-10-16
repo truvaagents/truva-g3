@@ -8,6 +8,9 @@ COPY telemetry/ ./telemetry/
 COPY examples/hotel-tool/ ./examples/hotel-tool/
 WORKDIR /app/examples/hotel-tool
 ENV GOWORK=off CGO_ENABLED=0 GOOS=linux GONOSUMDB=github.com/truvaagents/truva-g3/*
+# Workspace mode explicitly selects the copied framework sources.
+RUN go mod edit -replace=github.com/truvaagents/truva-g3/core=/app/core \
+    -replace=github.com/truvaagents/truva-g3/telemetry=/app/telemetry
 RUN go mod tidy && go mod download
 ARG TARGETARCH=arm64
 RUN go build -a -installsuffix cgo -ldflags '-w -s -extldflags "-static"' -o hotel-tool .

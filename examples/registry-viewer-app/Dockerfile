@@ -4,7 +4,7 @@
 # framework modules before it can be built outside the workspace.
 # Usage after that preparation: docker build -t registry-viewer:latest .
 
-FROM golang:1.27.0-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates

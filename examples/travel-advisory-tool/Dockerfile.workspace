@@ -7,6 +7,9 @@ COPY telemetry/ ./telemetry/
 COPY examples/travel-advisory-tool/ ./examples/travel-advisory-tool/
 WORKDIR /app/examples/travel-advisory-tool
 ENV GOWORK=off CGO_ENABLED=0 GOOS=linux GONOSUMDB=github.com/truvaagents/truva-g3/*
+# Workspace mode explicitly selects the copied framework sources.
+RUN go mod edit -replace=github.com/truvaagents/truva-g3/core=/app/core \
+    -replace=github.com/truvaagents/truva-g3/telemetry=/app/telemetry
 RUN go mod tidy && go mod download
 ARG TARGETARCH=arm64
 RUN go build -a -installsuffix cgo -ldflags '-w -s -extldflags "-static"' -o travel-advisory-tool .
