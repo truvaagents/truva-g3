@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.6.1
 
 - Include bounded `operation` fields in initialization and module-registration
   logs, including initialization failures.

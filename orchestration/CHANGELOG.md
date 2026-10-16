@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.6.1
 
 - Add opt-in `LastSuccessfulStep`, `SuccessfulToolData` and `ExecutionRequestID`
   inspection helpers. Inspect the final dispatch's raw response and reject

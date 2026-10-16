@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.1
+
+Co-versioned dependency update to core and telemetry v0.6.1. No memory-specific
+behavior change. See the [root changelog](../CHANGELOG.md) for release adoption.
+
 ## v0.6.0
 
 Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)

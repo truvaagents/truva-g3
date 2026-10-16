@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.6.1
+
+All seven Go modules are co-versioned and require Go 1.27.2 or newer. Update
+first-party module requirements together to v0.6.1. Memory and resilience are
+co-versioned for their core/telemetry dependencies, without module-specific
+behavior changes.
+
+- **Core:** join HTTP draining before returning from serving; keep its configured
+  timeout independent of a shutdown caller's cancelled context. Add synchronized
+  `BaseAgent.GetDiscovery()` access and preserve discovery retry recovery. Reject
+  concurrent tool starts and cancel runnables when serving exits.
+- **Orchestration:** add `LastSuccessfulStep`, `SuccessfulToolData` and
+  `ExecutionRequestID` for generic execution inspection. Use final-dispatch raw
+  tool data where available; domain receipt and outcome validation stays in the
+  application. Legacy results without dispatches retain their fidelity limits.
+- **Telemetry:** assign a default `service.instance.id` per OpenTelemetry provider
+  so replica counters remain distinct; add validated explicit overrides. Preserve
+  initialization failure and contextual lifecycle diagnostics.
+- **AI:** preserve buffered OpenAI-wire decode/read/context causes; distinguish
+  decode failures from interrupted reads in existing observations. Classify
+  credible OpenRouter 408 responses for bounded recovery. Caller or provider-call
+  deadlines still stop recovery; this release does not change that chain policy.
+
+Adoption: use `signal.NotifyContext` and await `Framework.Run` before closing
+application-owned dependencies. The default HTTP drain is 10 seconds, configured
+by `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT`; invalid present values fail loading. Allow
+process termination time for draining plus application and telemetry cleanup.
+Use `GetDiscovery()` for runtime reads while discovery retry is enabled.
+Collectors must preserve instance identity; this update does not repair historic
+metric collisions. Reference-example source migrations need v0.6.1 pins for
+standalone builds; workspace validation alone does not establish release adoption.
+
 ## v0.6.0
 
 All seven Go modules are co-versioned and require Go 1.27.2 or newer.
