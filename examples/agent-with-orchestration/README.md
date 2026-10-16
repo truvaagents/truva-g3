@@ -1149,8 +1149,8 @@ using `TRUVAG3_DISCOVERY_RETRY_INTERVAL` (30s by default), then starts and safel
 publishes the orchestrator. Health checks remain available while it waits;
 orchestration execution endpoints return 503 until initialization succeeds. Shutdown cancels
 the wait and closes the orchestrator after HTTP draining. This requires the
-unreleased framework `GetDiscovery`/HTTP-lifecycle implementation during local
-development; update release pins before standalone publication.
+framework `GetDiscovery`/HTTP-lifecycle implementation available in v0.6.1 and
+newer. Standalone builds use published modules; workspace builds use local sources.
 
 The telemetry module MUST be initialized BEFORE creating the AI client. This example follows the correct order in `main.go`:
 
