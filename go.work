@@ -9,7 +9,3 @@ use (
 	./resilience
 	./telemetry
 )
-
-// Temporary release bootstrap; remove each replacement after its v0.6.1 tag
-// is published and the dependent module checksums have been updated.
-replace github.com/truvaagents/truva-g3/telemetry v0.6.1 => ./telemetry
