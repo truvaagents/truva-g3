@@ -43,19 +43,25 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Service failed: %v", err)
+	}
+}
+
+func run() error {
 	// Validate configuration first
 	if err := validateConfig(); err != nil {
-		log.Fatalf("Configuration error: %v", err)
+		return fmt.Errorf("Configuration error: %w", err)
 	}
 	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
 	if err != nil {
-		log.Fatalf("Redis configuration error: %v", err)
+		return fmt.Errorf("Redis configuration error: %w", err)
 	}
 
 	// Create research agent
 	agent, err := NewResearchAgent()
 	if err != nil {
-		log.Fatalf("Failed to create research agent: %v", err)
+		return fmt.Errorf("Failed to create research agent: %w", err)
 	}
 
 	// Initialize the optional schema cache from the same topology as discovery.
@@ -76,6 +82,22 @@ func main() {
 		}
 	}
 
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		// Close recorders after HTTP draining completes or reaches its deadline.
+		if agent.instrumentedClient != nil {
+			if err := agent.instrumentedClient.Shutdown(shutdownCtx); err != nil {
+				log.Printf("Warning: LLM debug shutdown: %v", err)
+			}
+		}
+		if agent.debugRecorder != nil {
+			if err := agent.debugRecorder.Close(); err != nil {
+				log.Printf("Warning: LLM debug recorder close: %v", err)
+			}
+		}
+	}()
+
 	// Create framework with configuration
 	framework, err := core.NewFramework(agent,
 		core.WithName("research-assistant"),
@@ -87,7 +109,7 @@ func main() {
 		core.WithDevelopmentMode(os.Getenv("DEV_MODE") == "true"),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
+		return fmt.Errorf("Failed to create framework: %w", err)
 	}
 	framework.AutoRegisterMemorySweeper() // periodic eviction for the default *MemoryStore
 
@@ -99,51 +121,13 @@ func main() {
 	log.Println()
 
 	// Set up graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		log.Println("\n⚠️  Shutting down gracefully...")
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-
-		// Drain in-flight LLM debug recordings before stopping.
-		// Must happen before cancel() so Redis connections are still alive.
-		if agent.instrumentedClient != nil {
-			if err := agent.instrumentedClient.Shutdown(shutdownCtx); err != nil {
-				log.Printf("Warning: LLM debug shutdown: %v", err)
-			}
-		}
-		// Close the debug recorder's Redis connection after recordings are drained.
-		if agent.debugRecorder != nil {
-			if err := agent.debugRecorder.Close(); err != nil {
-				log.Printf("Warning: LLM debug recorder close: %v", err)
-			}
-		}
-
-		cancel()
-
-		select {
-		case <-shutdownCtx.Done():
-			log.Println("❌ Shutdown timeout exceeded")
-			os.Exit(1)
-		case <-time.After(1 * time.Second):
-			// Give framework time to clean up
-		}
-
-		log.Println("✅ Shutdown completed")
-		os.Exit(0)
-	}()
-
-	// Run the framework (blocking)
 	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		log.Fatalf("Framework error: %v", err)
+		return fmt.Errorf("run framework: %w", err)
 	}
+	return nil
 }
 
 // validateConfig validates all required configuration at startup

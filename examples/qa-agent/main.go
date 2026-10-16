@@ -126,7 +126,7 @@ func main() {
 		startTime := time.Now()
 		lastWarning := time.Time{}
 
-		for agent.BaseAgent.Discovery == nil {
+		for agent.GetDiscovery() == nil {
 			time.Sleep(100 * time.Millisecond)
 
 			elapsed := time.Since(startTime)
@@ -146,7 +146,7 @@ func main() {
 
 		// Initialize with memory hooks validated before this goroutine started.
 		if err := agent.InitializeOrchestrator(
-			agent.Discovery, memHooks, activityCoord, skillRegistry,
+			agent.GetDiscovery(), memHooks, activityCoord, skillRegistry,
 		); err != nil {
 			agent.Logger.Warn("Failed to initialize orchestrator", map[string]interface{}{
 				"error": err.Error(),

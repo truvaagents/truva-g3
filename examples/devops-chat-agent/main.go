@@ -185,7 +185,7 @@ func main() {
 		startTime := time.Now()
 		lastWarning := time.Time{}
 
-		for agent.Discovery == nil {
+		for agent.GetDiscovery() == nil {
 			time.Sleep(100 * time.Millisecond)
 
 			elapsed := time.Since(startTime)
@@ -206,7 +206,7 @@ func main() {
 
 		// Discovery is available; initialize with the validated memory hooks.
 		if err := agent.InitializeOrchestrator(
-			agent.Discovery, hitl, hitlConfig, memoryHooks, activityCoord, skillRegistry,
+			agent.GetDiscovery(), hitl, hitlConfig, memoryHooks, activityCoord, skillRegistry,
 		); err != nil {
 			agent.Logger.Warn("Failed to initialize orchestrator", map[string]interface{}{
 				"error": err.Error(),

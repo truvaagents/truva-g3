@@ -135,14 +135,12 @@ func NewAsyncTravelAgent(redisClient redis.UniversalClient) (*AsyncTravelAgent, 
 }
 
 // InitializeOrchestrator sets up the AI orchestrator with tool discovery.
-// Must be called after framework creation (to access Discovery).
+// Call after BaseAgent discovery is available. BaseAgent owns that reference;
+// per-request orchestrators read it through GetDiscovery().
 func (a *AsyncTravelAgent) InitializeOrchestrator(discovery core.Discovery) error {
 	if a.AI == nil {
 		return nil // Orchestrator requires AI, will use fallback behavior
 	}
-
-	// Store discovery for per-request orchestrator creation in handlers
-	a.Discovery = discovery
 
 	config := orchestration.DefaultConfig()
 	config.RoutingMode = orchestration.ModeAutonomous

@@ -183,11 +183,12 @@ func (t *TravelResearchAgent) calculateConfidence(result *orchestration.Executio
 
 // discoverTools discovers available tools and emits discovery metrics
 func (t *TravelResearchAgent) discoverTools(ctx context.Context) ([]*core.ServiceInfo, error) {
-	if t.Discovery == nil {
+	discovery := t.GetDiscovery()
+	if discovery == nil {
 		return nil, fmt.Errorf("discovery service not available")
 	}
 
-	tools, err := t.Discovery.Discover(ctx, core.DiscoveryFilter{
+	tools, err := discovery.Discover(ctx, core.DiscoveryFilter{
 		Type: core.ComponentTypeTool,
 	})
 	if err != nil {

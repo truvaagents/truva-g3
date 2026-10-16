@@ -54,7 +54,8 @@ func (t *TravelResearchAgent) handleNaturalOrchestration(w http.ResponseWriter, 
 	}
 
 	// Ensure orchestrator is initialized
-	if t.orchestrator == nil {
+	orchestrator := t.currentOrchestrator()
+	if orchestrator == nil {
 		initErr := fmt.Errorf("orchestrator not initialized")
 		telemetry.RecordSpanError(ctx, initErr)
 		telemetry.Counter("orchestration.natural_requests", "status", "error")
@@ -70,7 +71,7 @@ func (t *TravelResearchAgent) handleNaturalOrchestration(w http.ResponseWriter, 
 	)
 
 	// Process through AI orchestrator
-	result, err := t.orchestrator.ProcessRequest(ctx, req.Request, req.Metadata)
+	result, err := orchestrator.ProcessRequest(ctx, req.Request, req.Metadata)
 	if err != nil {
 		t.Logger.ErrorWithContext(ctx, "Orchestration failed", map[string]interface{}{
 			"error":    err.Error(),
@@ -228,7 +229,8 @@ func (t *TravelResearchAgent) handleWorkflowExecution(w http.ResponseWriter, r *
 	requestID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().UnixNano()%1000000000)
 
 	// Execute through orchestrator
-	if t.orchestrator == nil {
+	orchestrator := t.currentOrchestrator()
+	if orchestrator == nil {
 		initErr := fmt.Errorf("orchestrator not initialized")
 		telemetry.RecordSpanError(ctx, initErr)
 		writeError(w, http.StatusServiceUnavailable, "Orchestrator not initialized", nil)
@@ -243,7 +245,7 @@ func (t *TravelResearchAgent) handleWorkflowExecution(w http.ResponseWriter, r *
 	if t.AI != nil && req.AISynthesis {
 		// ExecutePlanWithSynthesis handles synthesis and stores execution for DAG visualization
 		originalRequest := fmt.Sprintf("Execute workflow: %s", workflowName)
-		orchResponse, err := t.orchestrator.ExecutePlanWithSynthesis(ctx, plan, originalRequest)
+		orchResponse, err := orchestrator.ExecutePlanWithSynthesis(ctx, plan, originalRequest)
 		if err != nil {
 			t.Logger.ErrorWithContext(ctx, "Workflow execution with synthesis failed", map[string]interface{}{
 				"workflow": workflowName,
@@ -288,7 +290,7 @@ func (t *TravelResearchAgent) handleWorkflowExecution(w http.ResponseWriter, r *
 		}
 	} else {
 		// Use ExecutePlan for non-AI synthesis path (raw results only)
-		result, err := t.orchestrator.ExecutePlan(ctx, plan)
+		result, err := orchestrator.ExecutePlan(ctx, plan)
 		if err != nil {
 			t.Logger.ErrorWithContext(ctx, "Workflow execution failed", map[string]interface{}{
 				"workflow": workflowName,
@@ -435,14 +437,15 @@ func (t *TravelResearchAgent) handleCustomWorkflow(w http.ResponseWriter, r *htt
 	}
 
 	// Execute the plan
-	if t.orchestrator == nil {
+	orchestrator := t.currentOrchestrator()
+	if orchestrator == nil {
 		initErr := fmt.Errorf("orchestrator not initialized")
 		telemetry.RecordSpanError(ctx, initErr)
 		writeError(w, http.StatusServiceUnavailable, "Orchestrator not initialized", nil)
 		return
 	}
 
-	result, err := t.orchestrator.ExecutePlan(ctx, plan)
+	result, err := orchestrator.ExecutePlan(ctx, plan)
 	if err != nil {
 		t.Logger.ErrorWithContext(ctx, "Custom workflow execution failed", map[string]interface{}{
 			"error": err.Error(),
@@ -515,7 +518,8 @@ func (t *TravelResearchAgent) handleGetHistory(w http.ResponseWriter, r *http.Re
 		"path": r.URL.Path,
 	})
 
-	if t.orchestrator == nil {
+	orchestrator := t.currentOrchestrator()
+	if orchestrator == nil {
 		response := map[string]interface{}{
 			"history": []interface{}{},
 			"count":   0,
@@ -525,7 +529,7 @@ func (t *TravelResearchAgent) handleGetHistory(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	history := t.orchestrator.GetExecutionHistory()
+	history := orchestrator.GetExecutionHistory()
 	response := map[string]interface{}{
 		"history": history,
 		"count":   len(history),
@@ -547,8 +551,8 @@ func (t *TravelResearchAgent) handleHealth(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Check Redis/Discovery connection (like agent-with-telemetry)
-	if t.Discovery != nil {
-		_, err := t.Discovery.Discover(ctx, core.DiscoveryFilter{})
+	if discovery := t.GetDiscovery(); discovery != nil {
+		_, err := discovery.Discover(ctx, core.DiscoveryFilter{})
 		if err != nil {
 			health["status"] = "degraded"
 			health["redis"] = "unavailable"
@@ -562,8 +566,8 @@ func (t *TravelResearchAgent) handleHealth(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Check orchestrator status
-	if t.orchestrator != nil {
-		metrics := t.orchestrator.GetMetrics()
+	if orchestrator := t.currentOrchestrator(); orchestrator != nil {
+		metrics := orchestrator.GetMetrics()
 		health["orchestrator"] = map[string]interface{}{
 			"status":              "active",
 			"total_requests":      metrics.TotalRequests,
@@ -615,14 +619,15 @@ func (t *TravelResearchAgent) handleDiscoverTools(w http.ResponseWriter, r *http
 		"path": r.URL.Path,
 	})
 
-	if t.Discovery == nil {
+	discovery := t.GetDiscovery()
+	if discovery == nil {
 		discoveryErr := fmt.Errorf("service discovery not configured")
 		telemetry.RecordSpanError(ctx, discoveryErr)
 		writeError(w, http.StatusServiceUnavailable, "Service discovery not configured", nil)
 		return
 	}
 
-	allComponents, err := t.Discovery.Discover(ctx, core.DiscoveryFilter{})
+	allComponents, err := discovery.Discover(ctx, core.DiscoveryFilter{})
 	if err != nil {
 		t.Logger.ErrorWithContext(ctx, "Discovery failed", map[string]interface{}{
 			"error": err.Error(),

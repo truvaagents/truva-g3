@@ -163,8 +163,8 @@ func (q *QAAgent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check Redis/Discovery connection
-	if q.Discovery != nil {
-		_, err := q.Discovery.Discover(ctx, core.DiscoveryFilter{})
+	if discovery := q.GetDiscovery(); discovery != nil {
+		_, err := discovery.Discover(ctx, core.DiscoveryFilter{})
 		if err != nil {
 			health["status"] = "degraded"
 			health["redis"] = "unavailable"
@@ -208,12 +208,13 @@ func (q *QAAgent) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (q *QAAgent) handleDiscover(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	if q.Discovery == nil {
+	discovery := q.GetDiscovery()
+	if discovery == nil {
 		writeError(w, http.StatusServiceUnavailable, "Service discovery not configured", nil)
 		return
 	}
 
-	allComponents, err := q.Discovery.Discover(ctx, core.DiscoveryFilter{})
+	allComponents, err := discovery.Discover(ctx, core.DiscoveryFilter{})
 	if err != nil {
 		q.Logger.ErrorWithContext(ctx, "Discovery failed", map[string]interface{}{
 			"error": err.Error(),

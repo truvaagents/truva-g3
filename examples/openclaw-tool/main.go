@@ -16,10 +16,16 @@ import (
 )
 
 func main() {
-	// Pre-logger fatal: validateConfig runs before the tool/Logger exists, so use stdlib log
+	if err := run(); err != nil {
+		log.Fatalf("Service failed: %v", err)
+	}
+}
+
+func run() error {
+	// Validate before constructing the tool and its logger
 	// (LOGGING_IMPLEMENTATION_GUIDE §5 — no request/logger context yet).
 	if err := validateConfig(); err != nil {
-		log.Fatalf("Configuration error: %v", err)
+		return fmt.Errorf("Configuration error: %w", err)
 	}
 
 	// Create the tool FIRST so component type is set for telemetry auto-inference.
@@ -58,7 +64,7 @@ func main() {
 	)
 	if err != nil {
 		// Framework construction failed → its Logger may be unwired; stay on stdlib log.
-		log.Fatalf("Failed to create framework: %v", err)
+		return fmt.Errorf("Failed to create framework: %w", err)
 	}
 
 	// Startup logging via the tool's structured Logger (LOGGING_IMPLEMENTATION_GUIDE §5/§7):
@@ -72,24 +78,13 @@ func main() {
 		"capabilities": len(tool.Capabilities),
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		tool.Logger.Info("shutting down", nil)
-		cancel()
-		time.Sleep(time.Second)
-		os.Exit(0)
-	}()
-
 	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		tool.Logger.Error("framework error", map[string]interface{}{"error": err.Error()})
-		os.Exit(1)
+		return fmt.Errorf("run framework: %w", err)
 	}
+	return nil
 }
 
 func validateConfig() error {

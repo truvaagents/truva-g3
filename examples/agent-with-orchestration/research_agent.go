@@ -29,10 +29,12 @@ import (
 //  2. Dynamic Mode: AI generates execution plans from natural language requests
 type TravelResearchAgent struct {
 	*core.BaseAgent
-	orchestrator  *orchestration.AIOrchestrator
-	workflows     map[string]*TravelWorkflow // Predefined travel workflows
-	workflowMutex sync.RWMutex
-	httpClient    *http.Client
+	orchestrator        *orchestration.AIOrchestrator
+	orchestratorMutex   sync.RWMutex
+	orchestratorStopped bool
+	workflows           map[string]*TravelWorkflow // Predefined travel workflows
+	workflowMutex       sync.RWMutex
+	httpClient          *http.Client
 }
 
 // TravelWorkflow represents a predefined workflow for travel research
@@ -212,6 +214,51 @@ func NewTravelResearchAgent() (*TravelResearchAgent, error) {
 	return travelAgent, nil
 }
 
+// orchestratorInitializer waits for discovery recovery without blocking HTTP
+// health checks. Framework.Run owns its cancellation and joins its exit.
+type orchestratorInitializer struct{ agent *TravelResearchAgent }
+
+func (r *orchestratorInitializer) Start(ctx context.Context) error {
+	interval := r.agent.Config.Discovery.RetryInterval
+	if interval <= 0 {
+		interval = core.DefaultConfig().Discovery.RetryInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if discovery := r.agent.GetDiscovery(); discovery != nil {
+			return r.agent.InitializeOrchestrator(ctx, discovery)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (t *TravelResearchAgent) currentOrchestrator() *orchestration.AIOrchestrator {
+	t.orchestratorMutex.RLock()
+	defer t.orchestratorMutex.RUnlock()
+	return t.orchestrator
+}
+
+// stopOrchestrator runs after HTTP draining. The stopped flag also prevents a
+// late initializer from publishing after the framework's runnable drain expires.
+func (t *TravelResearchAgent) stopOrchestrator() {
+	t.orchestratorMutex.Lock()
+	t.orchestratorStopped = true
+	orchestrator := t.orchestrator
+	t.orchestrator = nil
+	t.orchestratorMutex.Unlock()
+	if orchestrator != nil {
+		orchestrator.Stop()
+	}
+}
+
 // InitializeOrchestrator sets up the AI orchestrator after discovery is available
 // This must be called after the framework is created and discovery is initialized
 //
@@ -221,7 +268,7 @@ func NewTravelResearchAgent() (*TravelResearchAgent, error) {
 //   - Adds custom instructions for travel research context
 //
 // See: docs/orchestration/LLM_PLANNING_PROMPT_GUIDE.md for full documentation
-func (t *TravelResearchAgent) InitializeOrchestrator(discovery core.Discovery) error {
+func (t *TravelResearchAgent) InitializeOrchestrator(ctx context.Context, discovery core.Discovery) error {
 	if discovery == nil {
 		return fmt.Errorf("discovery service is required for orchestration")
 	}
@@ -294,10 +341,10 @@ Provide practical, actionable recommendations and prioritize traveler needs.`,
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)
 	}
-	t.orchestrator = orchestrator
 
 	// Log PromptBuilder configuration for debugging
-	t.Logger.Debug("PromptBuilder configured", map[string]interface{}{
+	t.Logger.DebugWithContext(ctx, "PromptBuilder configured", map[string]interface{}{
+		"operation":               "orchestrator_initialize",
 		"domain":                  config.PromptConfig.Domain,
 		"has_system_instructions": config.PromptConfig.SystemInstructions != "",
 		"additional_type_rules":   len(config.PromptConfig.AdditionalTypeRules),
@@ -305,12 +352,21 @@ Provide practical, actionable recommendations and prioritize traveler needs.`,
 	})
 
 	// Start the orchestrator
-	ctx := context.Background()
-	if err := t.orchestrator.Start(ctx); err != nil {
+	if err := orchestrator.Start(ctx); err != nil {
+		orchestrator.Stop()
 		return fmt.Errorf("failed to start orchestrator: %w", err)
 	}
+	t.orchestratorMutex.Lock()
+	if t.orchestratorStopped || ctx.Err() != nil || t.orchestrator != nil {
+		t.orchestratorMutex.Unlock()
+		orchestrator.Stop()
+		return ctx.Err()
+	}
+	t.orchestrator = orchestrator
+	t.orchestratorMutex.Unlock()
 
-	t.Logger.Info("Orchestrator initialized successfully", map[string]interface{}{
+	t.Logger.InfoWithContext(ctx, "Orchestrator initialized successfully", map[string]interface{}{
+		"operation":          "orchestrator_initialize",
 		"routing_mode":       config.RoutingMode,
 		"synthesis_strategy": config.SynthesisStrategy,
 		"prompt_domain":      config.PromptConfig.Domain,

@@ -51,16 +51,22 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Service failed: %v", err)
+	}
+}
+
+func run() error {
 	// Track startup time for metrics
 	startupStart := time.Now()
 
 	// 1. Validate configuration first (fail fast)
 	if err := validateConfig(); err != nil {
-		log.Fatalf("❌ Configuration error: %v", err)
+		return fmt.Errorf("❌ Configuration error: %w", err)
 	}
 	redisResolution, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
 	if err != nil {
-		log.Fatalf("❌ Redis configuration error: %v", err)
+		return fmt.Errorf("❌ Redis configuration error: %w", err)
 	}
 
 	// 2. Set component type FIRST for telemetry auto-inference
@@ -83,7 +89,7 @@ func main() {
 	// The AI client will now receive the telemetry provider for distributed tracing
 	agent, err := NewTravelResearchAgent()
 	if err != nil {
-		log.Fatalf("Failed to create travel research agent: %v", err)
+		return fmt.Errorf("Failed to create travel research agent: %w", err)
 	}
 
 	// Initialize the optional schema cache from the same topology as discovery.
@@ -104,6 +110,8 @@ func main() {
 		}
 	}
 
+	defer agent.stopOrchestrator()
+
 	// 5. Create framework with configuration
 	framework, err := core.NewFramework(agent,
 		core.WithName("travel-research-orchestration"),
@@ -121,49 +129,12 @@ func main() {
 		})),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create framework: %v", err)
+		return fmt.Errorf("Failed to create framework: %w", err)
 	}
 
-	// 6. Initialize orchestrator in background (Discovery is set during framework.Run())
-	// This goroutine waits for Discovery to become available and then initializes the orchestrator.
-	// This is cleaner than lazy initialization in handlers because:
-	// - Initialization logic is centralized in main.go
-	// - Orchestrator is ready as soon as possible after framework starts
-	// - No mixing of init logic with health check logic
-	go func() {
-		// Wait for Discovery, logging warnings if it takes too long
-		startTime := time.Now()
-		lastWarning := time.Time{}
-
-		for agent.BaseAgent.Discovery == nil {
-			time.Sleep(100 * time.Millisecond)
-
-			elapsed := time.Since(startTime)
-			// Log warning after 30s, then every 60s thereafter
-			if elapsed > 30*time.Second && time.Since(lastWarning) > 60*time.Second {
-				if lastWarning.IsZero() {
-					agent.Logger.Warn("Discovery not available after 30s", map[string]interface{}{
-						"hint": "check Redis connectivity (REDIS_URL)",
-					})
-				} else {
-					agent.Logger.Warn("Still waiting for Discovery", map[string]interface{}{
-						"elapsed": elapsed.Round(time.Second).String(),
-					})
-				}
-				lastWarning = time.Now()
-			}
-		}
-
-		// Discovery is available, initialize orchestrator
-		if err := agent.InitializeOrchestrator(agent.BaseAgent.Discovery); err != nil {
-			agent.Logger.Warn("Failed to initialize orchestrator", map[string]interface{}{
-				"error":  err.Error(),
-				"impact": "Orchestration endpoints will be unavailable",
-			})
-		} else {
-			agent.Logger.Info("Orchestrator initialized successfully", nil)
-		}
-	}()
+	// Discovery may recover after Initialize returns. The managed initializer
+	// waits for it while HTTP health checks remain available.
+	framework.RegisterRunnable(&orchestratorInitializer{agent: agent})
 
 	// 7. Emit startup metrics
 	startupDuration := time.Since(startupStart)
@@ -185,8 +156,8 @@ func main() {
 	// 7b. Perform initial service discovery to populate metrics
 	initCtx, initCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer initCancel()
-	if agent.BaseAgent.Discovery != nil {
-		tools, err := agent.BaseAgent.Discovery.Discover(initCtx, core.DiscoveryFilter{
+	if discovery := agent.GetDiscovery(); discovery != nil {
+		tools, err := discovery.Discover(initCtx, core.DiscoveryFilter{
 			Type: core.ComponentTypeTool,
 		})
 		if err != nil {
@@ -216,43 +187,13 @@ func main() {
 	})
 
 	// 9. Set up graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		agent.Logger.Info("Shutting down gracefully", nil)
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-
-		// Stop orchestrator background processes
-		if agent.orchestrator != nil {
-			agent.orchestrator.Stop()
-			agent.Logger.Debug("Orchestrator stopped", nil)
-		}
-
-		cancel()
-
-		select {
-		case <-shutdownCtx.Done():
-			agent.Logger.Error("Shutdown timeout exceeded", nil)
-			os.Exit(1)
-		case <-time.After(1 * time.Second):
-			// Give framework time to clean up
-		}
-
-		agent.Logger.Info("Shutdown completed", nil)
-		os.Exit(0)
-	}()
-
-	// 10. Run the framework (blocking)
 	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		log.Fatalf("Framework error: %v", err)
+		return fmt.Errorf("run framework: %w", err)
 	}
+	return nil
 }
 
 // validateConfig validates all required configuration at startup

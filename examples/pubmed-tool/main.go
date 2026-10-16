@@ -16,8 +16,14 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Service failed: %v", err)
+	}
+}
+
+func run() error {
 	if err := validateConfig(); err != nil {
-		log.Fatalf("Configuration error: %v", err)
+		return fmt.Errorf("Configuration error: %w", err)
 	}
 
 	// Create tool FIRST so component type is set for telemetry
@@ -57,7 +63,7 @@ func main() {
 			"operation": "startup",
 			"error":     err.Error(),
 		})
-		os.Exit(1)
+		return fmt.Errorf("create framework: %w", err)
 	}
 
 	tool.Logger.Info("PubMed Tool Service Starting", map[string]interface{}{
@@ -67,48 +73,13 @@ func main() {
 		"telemetry": "enabled",
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		tool.Logger.Info("Shutting down gracefully", map[string]interface{}{
-			"operation": "shutdown",
-			"service":   "pubmed-tool",
-		})
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-
-		cancel()
-
-		select {
-		case <-shutdownCtx.Done():
-			tool.Logger.Error("Shutdown timeout exceeded", map[string]interface{}{
-				"operation":       "shutdown",
-				"timeout_seconds": 30,
-			})
-			os.Exit(1)
-		case <-time.After(1 * time.Second):
-		}
-
-		tool.Logger.Info("Shutdown completed", map[string]interface{}{
-			"operation": "shutdown",
-			"service":   "pubmed-tool",
-		})
-		os.Exit(0)
-	}()
-
 	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		tool.Logger.Error("Framework error", map[string]interface{}{
-			"operation": "startup",
-			"error":     err.Error(),
-		})
-		os.Exit(1)
+		return fmt.Errorf("run framework: %w", err)
 	}
+	return nil
 }
 
 func validateConfig() error {

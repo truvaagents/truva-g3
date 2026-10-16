@@ -124,8 +124,8 @@ func (t *HITLChatAgent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check Redis/Discovery connection
-	if t.Discovery != nil {
-		_, err := t.Discovery.Discover(ctx, core.DiscoveryFilter{})
+	if discovery := t.GetDiscovery(); discovery != nil {
+		_, err := discovery.Discover(ctx, core.DiscoveryFilter{})
 		if err != nil {
 			health["status"] = "degraded"
 			health["redis"] = "unavailable"
@@ -194,12 +194,13 @@ func (t *HITLChatAgent) handleDiscover(w http.ResponseWriter, r *http.Request) {
 		"path": r.URL.Path,
 	})
 
-	if t.Discovery == nil {
+	discovery := t.GetDiscovery()
+	if discovery == nil {
 		writeError(w, http.StatusServiceUnavailable, "Service discovery not configured", nil)
 		return
 	}
 
-	allComponents, err := t.Discovery.Discover(ctx, core.DiscoveryFilter{})
+	allComponents, err := discovery.Discover(ctx, core.DiscoveryFilter{})
 	if err != nil {
 		t.Logger.ErrorWithContext(ctx, "Discovery failed", map[string]interface{}{
 			"error": err.Error(),
