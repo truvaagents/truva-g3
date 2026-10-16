@@ -223,7 +223,8 @@ package main
 import (
     "context"
     "errors"
-    "log"  // ONLY for fatal startup errors before framework is ready
+    "fmt"
+    "log"  // main reports failure after run's deferred cleanup
     "os"
     "os/signal"
     "strconv"
@@ -235,10 +236,15 @@ import (
 )
 
 func main() {
+    if err := run(); err != nil {
+        log.Fatalf("Agent failed: %v", err)
+    }
+}
+
+func run() error {
     // 1. Validate configuration first (fail fast)
-    // Use standard log here because framework isn't created yet
     if err := validateConfig(); err != nil {
-        log.Fatalf("Configuration error: %v", err)
+        return fmt.Errorf("configuration: %w", err)
     }
 
     // 2. Initialize telemetry BEFORE creating agent
@@ -255,7 +261,7 @@ func main() {
     // 3. Create agent
     agent, err := NewResearchAgent()
     if err != nil {
-        log.Fatalf("Failed to create agent: %v", err)
+        return fmt.Errorf("create agent: %w", err)
     }
 
     // 4. Get port configuration
@@ -278,7 +284,7 @@ func main() {
         core.WithMiddleware(telemetry.TracingMiddleware("my-research-agent")),
     )
     if err != nil {
-        log.Fatalf("Failed to create framework: %v", err)
+        return fmt.Errorf("create framework: %w", err)
     }
 
     // 6. Log startup information using the agent's Logger
@@ -291,27 +297,16 @@ func main() {
     })
 
     // 7. Set up graceful shutdown
-    ctx, cancel := context.WithCancel(context.Background())
+    ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
     defer cancel()
-
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-    go func() {
-        <-sigChan
-        agent.Logger.Info("Shutting down gracefully", nil)
-        cancel()
-    }()
 
     // 8. Run the framework
     if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-        agent.Logger.Error("Framework error", map[string]interface{}{
-            "error": err.Error(),
-        })
-        os.Exit(1)
+        return fmt.Errorf("run framework: %w", err)
     }
 
     agent.Logger.Info("Shutdown completed", nil)
+    return nil
 }
 ```
 
@@ -489,6 +484,7 @@ package main
 import (
     "context"
     "errors"
+    "fmt"
     "log"
     "os"
     "os/signal"
@@ -501,15 +497,23 @@ import (
 )
 
 func main() {
+    if err := run(); err != nil {
+        log.Fatalf("Tool failed: %v", err)
+    }
+}
+
+func run() error {
     if err := validateConfig(); err != nil {
-        log.Fatalf("Configuration error: %v", err)
+        return fmt.Errorf("configuration: %w", err)
     }
 
     initTelemetry("weather-tool")
     defer func() {
         ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
         defer cancel()
-        telemetry.Shutdown(ctx)
+        if err := telemetry.Shutdown(ctx); err != nil {
+            log.Printf("Warning: Telemetry shutdown error: %v", err)
+        }
     }()
 
     tool := NewWeatherTool()
@@ -531,7 +535,7 @@ func main() {
         core.WithMiddleware(telemetry.TracingMiddleware("weather-tool")),
     )
     if err != nil {
-        log.Fatalf("Failed to create framework: %v", err)
+        return fmt.Errorf("create framework: %w", err)
     }
 
     // Use tool's Logger after framework is created
@@ -540,23 +544,13 @@ func main() {
         "capabilities": len(tool.Capabilities),
     })
 
-    ctx, cancel := context.WithCancel(context.Background())
+    ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
     defer cancel()
 
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-    go func() {
-        <-sigChan
-        tool.Logger.Info("Shutting down", nil)
-        cancel()
-    }()
-
     if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-        tool.Logger.Error("Framework error", map[string]interface{}{
-            "error": err.Error(),
-        })
+        return fmt.Errorf("run framework: %w", err)
     }
+    return nil
 }
 ```
 
@@ -1209,19 +1203,15 @@ will return different sets of records for the same pod.
 
 The convention: **pod `app:` label == `core.WithName(...)` (log body `service` field)
 == `OTEL_SERVICE_NAME` (SDK traces/metrics `service.name`)**, all set to the tool/agent
-name. `cfg.Telemetry.ServiceName` defaults to `cfg.Name` when unset, so if you don't
-set `OTEL_SERVICE_NAME` at all, traces/metrics automatically pick up the framework's
-name.
+name. Core resolves `cfg.Telemetry.ServiceName` to `cfg.Name` when unset;
+application bootstrap must pass that resolved name into telemetry initialization.
+Direct `telemetry.Initialize(Config)` / `NewOTelProvider` construction does not
+read `OTEL_SERVICE_NAME` automatically.
 
-**State of the examples in this repository** (audited post-fix): 9 examples set
-`OTEL_SERVICE_NAME` explicitly and aligned to pod `app:`, 23 leave it unset (correctly
-fall back to `cfg.Name`), and **12 still drift** — `.env.example` files set
-`OTEL_SERVICE_NAME` to a different string (e.g., `stock-market-tool/.env.example` has
-`OTEL_SERVICE_NAME=stock-service` while pod `app: stock-tool`). Drift causes split-brain:
-logs land under the pod-label identity (thanks to the k8sattributes pipeline), but
-traces and metrics land under the `OTEL_SERVICE_NAME` value. Cleanup is tracked
-separately from the logs-pipeline fix — new examples you create should follow the
-aligned convention from the start. See
+Check the current manifest, environment template and initialization code together.
+If bootstrap passes an environment name that differs from the pod label, logs
+land under the pod-label identity while traces and metrics land under the supplied
+SDK identity. New examples should follow the aligned convention from the start. See
 [TOOL_DEVELOPMENT_GUIDE.md §8 — Observability Identity](../building/TOOL_DEVELOPMENT_GUIDE.md#8-step-6-add-deployment-files)
 for the deployment-side rule.
 
@@ -1605,6 +1595,14 @@ that fidelity trade-off; they are not automatically installed at every logging,
 trace, or persistence boundary. When chosen, `RedactSensitiveError` preserves
 `errors.Is` and `errors.As` through `Unwrap`.
 
+Buffered OpenAI-wire failures carry an optional `ResponseBodyReadError() error`
+fact. The shared AI observation helper records `transport` for an observed
+non-EOF reader failure and `decode` for JSON syntax/type failure or incomplete JSON
+at clean EOF. Cancellation, deadline and partial-stream classifications retain
+precedence. These are existing bounded `error_type` values; raw body/read-error
+text is not added to logs, and retry decisions are unchanged. An expired provider
+call timeout is terminal to the chain even when the outer caller is still active.
+
 The AI module currently uses `providers.SanitizedObservationError` on selected
 provider observation paths, and a few orchestration, skills, and backend paths
 also transform errors. These are legacy exceptions pending the framework-wide
@@ -1711,7 +1709,12 @@ This creates inconsistent output:
 
 ### The Solution
 
-Use `log.Fatalf` only for unrecoverable startup errors. Once the framework is created, use the component's Logger exclusively:
+Use the component's Logger for application operations after framework creation.
+Return lifecycle errors from `run() error` so its deferred cleanup can finish;
+the outer `main` may then use `log.Fatalf` to report a nonzero exit. Do not call
+it from a shutdown goroutine or from a function whose defers still own resources.
+Before resources exist, standard logging remains acceptable for fatal startup
+errors:
 
 ```go
 func main() {

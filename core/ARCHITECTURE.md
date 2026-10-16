@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.21
+**Version**: 1.22
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -429,6 +429,14 @@ tool.Registry = registry // Should be automatic
 ```
 
 ### Discovery Abstraction Pattern
+
+`BaseAgent.GetDiscovery()` takes a synchronized snapshot of discovery, including
+references installed by background Redis recovery. It may return nil while
+recovery is pending. Runtime readers use this accessor; direct field injection
+is supported before initialization. This does not add methods to the `Discovery`
+interface or transfer client lifecycle ownership. Applications that initialize
+discovery-dependent components asynchronously register a `core.Runnable` and
+synchronize publication of their own component instances.
 
 ```go
 // Abstract interfaces (defined in core)
@@ -1015,6 +1023,35 @@ func (r *RedisRegistry) Register(ctx context.Context, info *ServiceInfo) error {
 
 ### Resource Management
 
+#### HTTP server lifecycle ownership
+
+`BaseAgent.Start` and `BaseTool.Start` own their server generation's cancellation
+and bounded drain through the private `httpLifecycle` helper. They return only
+after `http.Server.Shutdown` finishes or its configured timeout expires. Explicit
+`Stop`/`Shutdown` and context cancellation join one shutdown operation; no base
+component mutex is held while handlers drain. Unregistration precedes the drain.
+The cancellation waiter is joined lifecycle coordination, not an independently
+scheduled background job. Application-owned clients, orchestrators and telemetry
+remain application-owned and should be closed after `Framework.Run` returns.
+
+`HTTP.ShutdownTimeout` uses the existing 10s default and
+`TRUVAG3_HTTP_SHUTDOWN_TIMEOUT` environment setting. An omitted/zero typed value
+selects the default; negative typed values and present non-positive/malformed
+environment values fail validation. The shared drain uses its configured budget
+independently of caller cancellation or deadlines, preserving the initiating
+context's values. Each caller, including the initiator, may end its own wait
+through context cancellation without cancelling that shared drain.
+`Start` still joins the actual drain. A drain timeout returns an error; it does
+not claim active handlers or hijacked connections have been forcibly terminated.
+Such connections remain the application's responsibility. Custom `HTTPComponent` implementations
+continue to own their `Start(ctx, port)` cancellation contract.
+
+`Framework.Run` gives initialization, HTTP serving and registered runnables a
+shared child context. If serving exits early, it cancels that child before the
+existing runnable drain. It does not cancel the caller's context or close
+injected dependencies. Existing shutdown metrics remain at the base component;
+lifecycle errors retain their Go identity and correlated structured logs.
+
 #### 1. **Memory Management**
 ```go
 // ✅ Good: Prevent memory leaks in capability management
@@ -1228,6 +1265,7 @@ for composition, panic behavior, and the approved-checkpoint resume boundary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.22 | 2026-10-15 | Built-in HTTP cancellation/drain ownership, shared explicit shutdown, validated existing shutdown env setting, and runnable cancellation on server exit; injected dependencies remain application-owned |
 | 1.21 | 2026-10-08 | Generous HTTP write default 35m and AI config timeout 5m; retain explicit overrides and existing 30m worker-task bound |
 | 1.20 | 2026-10-04 | Optional AI response finish/source/reasoning facts and separate stream reasoning channel; legacy dispatchers preserve supplied facts |
 | 1.19 | 2026-10-02 | Additive optional error facts on StepSummaryInput; unchanged summarizer interface and opaque event provenance |

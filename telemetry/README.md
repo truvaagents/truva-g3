@@ -300,6 +300,24 @@ telemetry.EmitWithOptions(ctx, "payment.amount", 99.99,
 
 The telemetry module automatically labels metrics with a `service_type` attribute that distinguishes between "tool" and "agent" services. This enables Grafana dashboard segregation and filtering by component type.
 
+### Replica identity
+
+Every OpenTelemetry provider also gets a `service.instance.id`: a random UUID
+generated once for that provider's lifetime. No deployment configuration is
+needed to distinguish replicas. Traces and metrics share the same identity.
+
+To supply an identity, set `Config.ServiceInstanceID`, or use
+`WithServiceInstanceID(id)` with `NewOTelProvider`. A non-empty code value wins
+over `TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID`; otherwise the environment wins over
+the generated default. Empty code values mean unset. A present-empty environment
+value, invalid UTF-8, surrounding whitespace or control characters is an error.
+Explicit IDs must be unique among concurrent emitters of the same service.
+
+Keep the resource identity in the collector/backend's metric-series labels
+(`service_instance_id` with the example Prometheus exporter). Apply `rate` or
+`increase` before summing across instances. Redeploy emitters to adopt the fix;
+it does not repair previously collided counter history.
+
 ### Automatic Service Type Inference
 
 When you create a component using `core.NewTool()` or `core.NewBaseAgent()`, the framework automatically tracks the component type. If you initialize telemetry **after** creating the component, the service type is auto-inferred:
@@ -463,7 +481,7 @@ The module comes with three pre-configured profiles that represent common deploy
 // ProfileDevelopment - Capture everything for debugging
 // - 100% sampling (see every request)
 // - No circuit breaker (don't hide problems)
-// - High cardinality limits (track everything)
+// - Configured per-label cardinality limits (see below)
 // - Local endpoint (localhost:4318)
 config := telemetry.UseProfile(telemetry.ProfileDevelopment)
 ```
@@ -471,65 +489,72 @@ config := telemetry.UseProfile(telemetry.ProfileDevelopment)
 #### Staging Profile (Balanced Approach)
 ```go
 // ProfileStaging - Good visibility with reasonable overhead
-// - 10% sampling (see enough to understand patterns)
+// - 100% trace sampling (the built-in provider uses AlwaysSample)
 // - Circuit breaker enabled (protect the telemetry backend)
-// - Moderate cardinality limits
+// - Configured per-label cardinality limits
 // - Staging collector endpoint
 config := telemetry.UseProfile(telemetry.ProfileStaging)
 ```
 
 #### Production Profile (Optimized for Scale)
 ```go
-// ProfileProduction - Minimal overhead, maximum reliability
-// - 0.1% sampling (tiny overhead for high-volume services)
+// ProfileProduction - Production endpoint and circuit-breaker defaults
+// - 100% trace sampling (the built-in provider uses AlwaysSample)
 // - Aggressive circuit breaker (fail fast if backend is down)
-// - Strict cardinality limits (prevent memory explosion)
+// - Configured per-label cardinality limits, not a global series cap
 // - Production collector endpoint
 config := telemetry.UseProfile(telemetry.ProfileProduction)
 ```
 
-### The Three-Tier Configuration System
+Profiles select endpoint, cardinality and circuit-breaker defaults. They do not
+select a trace sampling ratio: the built-in `NewOTelProvider` explicitly uses
+`AlwaysSample` in every profile, so `OTEL_TRACES_SAMPLER` and
+`OTEL_TRACES_SAMPLER_ARG` do not change its sampler. Metric emission sampling
+through `WithSampleRate` is a separate control.
 
-Configuration follows a clear priority order (like CSS cascading):
+Registry emission uses `Config.CardinalityLimits`, a per-label map. Without an
+explicit map, the limits per metric are `agent_id: 100`, `capability: 50`,
+`error_type: 50` and `user_id: 100`; labels absent from that map pass through.
+The scalar `CardinalityLimit` is retained in configuration but does not enforce
+a total-series ceiling. Direct provider emission does not pass through the
+registry limiter. Keep application metric names and labels bounded as well.
 
-```go
-// Priority 1: Explicit configuration (highest priority)
-config := telemetry.Config{
-    ServiceName: "my-service",
-    Endpoint:    "my-collector:4318",  // This wins
-}
+### Configuration ownership
 
-// Priority 2: Environment variables (medium priority)
-// export OTEL_EXPORTER_OTLP_ENDPOINT=env-collector:4318
-// If no explicit endpoint, this is used
+`Initialize(config)` uses the supplied configuration; an empty endpoint becomes
+`localhost:4318`. It does not resolve endpoint environment variables. Applications
+can start with `UseProfile`, apply environment values, then apply explicit code
+overrides. `EnableTelemetry(agent, "")` is a separate helper that reads
+`OTEL_EXPORTER_OTLP_ENDPOINT` before falling back to `localhost:4318`.
+The service-instance identity has its own constructor-owned precedence described
+under [Replica identity](#replica-identity).
 
-// Priority 3: Profile defaults (lowest priority)
-// If nothing else is set, profile defaults are used
-```
-
-Here's a complete example:
+For example, this application resolves an endpoint environment override before
+passing its configuration to `Initialize`:
 
 ```go
 func configureTelemetry() telemetry.Config {
     // Start with a profile
     config := telemetry.UseProfile(telemetry.ProfileProduction)
 
-    // Override with explicit values
+    // Explicit application identity
     config.ServiceName = "payment-service"
 
-    // Environment variables can override
-    if endpoint := os.Getenv("TELEMETRY_ENDPOINT"); endpoint != "" {
+    // Application-owned environment resolution overrides the profile endpoint.
+    if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
         config.Endpoint = endpoint
-    }
-
-    // Feature flags can control behavior
-    if os.Getenv("TELEMETRY_DEBUG") == "true" {
-        config.Verbose = true  // Enable verbose logging for debugging
     }
 
     return config
 }
 ```
+
+Logging uses the logger configuration, such as `TRUVAG3_LOG_LEVEL=debug`;
+`telemetry.Config` has no `Verbose` field. Check the error from `Initialize` and
+choose explicitly whether unavailable telemetry prevents application startup.
+The legacy `PIIRedaction` and `PIIPatterns` fields are not consumed by the
+metric/trace emission path. Applications own any sanitization they require;
+profile selection does not install a payload filter.
 
 ## 8. Deploying with Docker
 
@@ -537,7 +562,7 @@ Here's how to configure telemetry for containerized applications:
 
 ```dockerfile
 # Dockerfile
-FROM golang:1.27.0-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 WORKDIR /app
 COPY . .
 RUN go build -o myapp .
@@ -1142,12 +1167,12 @@ func TestTelemetryProfiles(t *testing.T) {
             // Verify profile-specific settings
             switch profile {
             case telemetry.ProfileDevelopment:
-                if !config.Verbose {
-                    t.Error("Development should have verbose logging enabled")
+                if config.CardinalityLimit != 50000 || config.CircuitBreaker.Enabled {
+                    t.Error("Unexpected development cardinality or circuit settings")
                 }
             case telemetry.ProfileProduction:
-                if config.Verbose {
-                    t.Error("Production should not have verbose logging")
+                if config.CardinalityLimit != 10000 || !config.CircuitBreaker.Enabled {
+                    t.Error("Unexpected production cardinality or circuit settings")
                 }
             }
         })
@@ -1754,7 +1779,7 @@ func handleWeather(w http.ResponseWriter, r *http.Request) {
 
 ### Environment Configuration
 
-Configure tracing via environment variables:
+Applications can read these environment variables when constructing telemetry:
 
 ```bash
 # Required for trace collection
@@ -1763,9 +1788,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 # Service identification in traces
 OTEL_SERVICE_NAME=weather-service
 
-# Sampling (production should use lower rates)
-OTEL_TRACES_SAMPLER=traceidratio
-OTEL_TRACES_SAMPLER_ARG=0.1  # Sample 10% of traces
+# The built-in provider samples all traces in every profile.
+# OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG do not override its sampler.
 ```
 
 ### Kubernetes Deployment

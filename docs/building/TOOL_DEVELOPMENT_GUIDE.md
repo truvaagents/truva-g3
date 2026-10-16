@@ -918,9 +918,16 @@ import (
 )
 
 func main() {
+    if err := run(); err != nil {
+        // run has already executed its deferred cleanup.
+        log.Fatalf("Tool failed: %v", err)
+    }
+}
+
+func run() error {
     // 1. Validate configuration first
     if err := validateConfig(); err != nil {
-        log.Fatalf("Configuration error: %v", err)
+        return fmt.Errorf("configuration: %w", err)
     }
 
     // 2. Create the tool FIRST so component type is set for telemetry
@@ -967,7 +974,7 @@ func main() {
         core.WithMiddleware(telemetry.TracingMiddleware("your-service")),
     )
     if err != nil {
-        log.Fatalf("Failed to create framework: %v", err)
+        return fmt.Errorf("create framework: %w", err)
     }
 
     // 6. Display startup information
@@ -976,37 +983,16 @@ func main() {
     log.Printf("Server Port: %d\n", port)
 
     // 7. Set up graceful shutdown
-    ctx, cancel := context.WithCancel(context.Background())
+    ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
     defer cancel()
-
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-    go func() {
-        <-sigChan
-        log.Println("Shutting down gracefully...")
-
-        shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer shutdownCancel()
-
-        cancel()
-
-        select {
-        case <-shutdownCtx.Done():
-            log.Println("Shutdown timeout exceeded")
-            os.Exit(1)
-        case <-time.After(1 * time.Second):
-            // Give framework time to clean up
-        }
-
-        log.Println("Shutdown completed")
-        os.Exit(0)
-    }()
 
     // 8. Run the framework (blocking call)
     if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-        log.Fatalf("Framework error: %v", err)
+        return fmt.Errorf("run framework: %w", err)
     }
+    // Built-in HTTP draining is joined here. Deferred dependency/telemetry
+    // cleanup now runs; do not os.Exit from a separate shutdown goroutine.
+    return nil
 }
 
 // validateConfig validates all required configuration at startup
@@ -1103,12 +1089,12 @@ TruvaG3 uses a multi-module workspace. Each tool depends on `core` and `telemetr
 ```go
 module github.com/truvaagents/truva-g3/examples/your-tool
 
-go 1.27.0
+go 1.27.2
 
 require (
-    github.com/truvaagents/truva-g3/core v0.5.0
-    github.com/truvaagents/truva-g3/telemetry v0.5.0
-    go.opentelemetry.io/otel v1.45.0
+    github.com/truvaagents/truva-g3/core v0.6.0
+    github.com/truvaagents/truva-g3/telemetry v0.6.0
+    go.opentelemetry.io/otel v1.47.0
 )
 
 // Use local workspace modules for development
@@ -1127,7 +1113,7 @@ replace (
 For publishing to a container registry. Copies the tool directory only — no local module references.
 
 ```dockerfile
-FROM golang:1.27.0-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 
@@ -1177,7 +1163,7 @@ docker build -f examples/your-tool/Dockerfile.workspace -t your-tool:latest .
 # Workspace Dockerfile for your-tool
 # Usage (from truvag3 root): docker build -f examples/your-tool/Dockerfile.workspace -t your-tool:latest .
 
-FROM golang:1.27.0-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 

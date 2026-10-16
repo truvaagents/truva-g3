@@ -172,7 +172,7 @@ examples/your-chat-agent/
 
 | File | Non-Streaming | Streaming |
 |------|--------------|-----------|
-| `main.go` | Config validation, telemetry init, framework setup, background orchestrator init, graceful shutdown | Same |
+| `main.go` | Config validation, telemetry init, framework setup, managed deferred initialization, graceful shutdown | Same |
 | `*_agent.go` | Agent struct, AI chain client, orchestrator config with PromptConfig, capability registration | Same + `ProcessWithStreaming()` method, conversation context formatting |
 | `handlers.go` | `handleNaturalOrchestration()`, `handleHealth()`, `handleDiscover()`, helper functions | Session CRUD handlers, health, discover, helper functions |
 | `sse_handler.go` | N/A | `StreamCallback` interface, `SSECallback` impl, `SSEHandler.ServeHTTP()` |
@@ -1215,8 +1215,8 @@ func (a *YourAgent) handleHealth(w http.ResponseWriter, r *http.Request) {
     }
 
     // Check Redis/Discovery
-    if a.Discovery != nil {
-        if _, err := a.Discovery.Discover(ctx, core.DiscoveryFilter{}); err != nil {
+    if discovery := a.GetDiscovery(); discovery != nil {
+        if _, err := discovery.Discover(ctx, core.DiscoveryFilter{}); err != nil {
             health["status"] = "degraded"
             health["redis"] = "unavailable"
             a.Logger.WarnWithContext(ctx, "Health check: Redis unavailable", map[string]interface{}{
@@ -1631,9 +1631,16 @@ import (
 )
 
 func main() {
+    if err := run(); err != nil {
+        // run has already executed its deferred cleanup.
+        log.Fatalf("Agent failed: %v", err)
+    }
+}
+
+func run() error {
     // 1. Validate configuration (fail fast)
     if err := validateConfig(); err != nil {
-        log.Fatalf("Configuration error: %v", err)
+        return fmt.Errorf("configuration: %w", err)
     }
 
     // 2. Set component type for telemetry service_type labels
@@ -1650,7 +1657,7 @@ func main() {
     // 4. Create agent AFTER telemetry
     agent, err := NewYourAgent()
     if err != nil {
-        log.Fatalf("Failed to create agent: %v", err)
+        return fmt.Errorf("create agent: %w", err)
     }
 
     // 5. Create framework
@@ -1668,59 +1675,50 @@ func main() {
         core.WithMiddleware(telemetry.TracingMiddlewareWithConfig("your-agent", middlewareConfig)),
     )
     if err != nil {
-        log.Fatalf("Failed to create framework: %v", err)
+        return fmt.Errorf("create framework: %w", err)
     }
 
-    // 6. Initialize orchestrator in background
-    go func() {
-        startTime := time.Now()
-        lastWarning := time.Time{}
-
-        for agent.BaseAgent.Discovery == nil {
-            time.Sleep(100 * time.Millisecond)
-
-            elapsed := time.Since(startTime)
-            if elapsed > 30*time.Second && time.Since(lastWarning) > 60*time.Second {
-                if lastWarning.IsZero() {
-                    agent.Logger.Warn("Discovery not available after 30s", map[string]interface{}{
-                        "hint": "check Redis connectivity (REDIS_URL)",
-                    })
-                }
-                lastWarning = time.Now()
-            }
-        }
-
-        if err := agent.InitializeOrchestrator(agent.BaseAgent.Discovery); err != nil {
-            agent.Logger.Warn("Failed to initialize orchestrator", map[string]interface{}{
-                "error": err.Error(),
-            })
-        } else {
-            agent.Logger.Info("Orchestrator initialized successfully", nil)
-        }
-    }()
+    // 6. Register the application's discovery-dependent initializer.
+    // See agent-with-orchestration for the runnable and synchronized accessors.
+    framework.RegisterRunnable(&orchestratorInitializer{agent: agent})
+    defer agent.stopOrchestrator() // after HTTP and runnable draining
 
     // 7. Graceful shutdown
-    ctx, cancel := context.WithCancel(context.Background())
+    ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer cancel()
-
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-    go func() {
-        <-sigChan
-        log.Println("Shutting down gracefully...")
-        cancel()
-    }()
 
     // 8. Run framework (blocking)
     log.Printf("Starting agent on port %d", getPort())
     if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-        log.Fatalf("Framework error: %v", err)
+        return fmt.Errorf("run framework: %w", err)
     }
+    // Built-in HTTP draining is complete (or returned its timeout error).
+    // Deferred cleanup of application-owned clients/telemetry runs afterwards.
+    return nil
 }
 
 // validateConfig(), initTelemetry(), getPort() — standard helpers.
-// See examples/travel-chat-agent/main.go for complete implementations.
+// See examples/travel-chat-agent/main.go for configuration helpers, and
+// examples/agent-with-orchestration for the managed initializer and lifecycle.
 ```
+
+When discovery retry is enabled, `BaseAgent.Initialize` can return before Redis
+becomes available. A one-shot `InitializeOrchestrator(agent.Discovery)` therefore
+cannot provide recovery. The application initializer implements `core.Runnable`:
+it checks `ctx.Err()`, reads `agent.GetDiscovery()`, and waits cancellably using
+`Config.Discovery.RetryInterval` until discovery is available. It initializes the
+orchestrator with that context and publishes the successfully started instance
+through a synchronized accessor used by handlers. While waiting, orchestration
+execution endpoints return unavailable and health checks remain accessible.
+
+Use `GetDiscovery()` for runtime reads; direct `Discovery` assignment is for
+configuration before initialization. Stop the application-owned orchestrator
+after `Framework.Run` returns, and guard against a late initializer publishing
+after cleanup has begun. The complete implementation is in
+[agent-with-orchestration/research_agent.go](../../examples/agent-with-orchestration/research_agent.go).
+This pattern requires the framework release containing `GetDiscovery` and the
+joined HTTP lifecycle; local workspace builds can use the implementation before
+that release is published.
 
 `WithCORSDefaults()` is convenient for local browser-facing examples because
 it accepts the headers used by the reference chat UI. For production, restrict
@@ -1853,15 +1851,15 @@ modules: `ai`, `core`, `orchestration`, and `telemetry`.
 ```go
 module github.com/truvaagents/truva-g3/examples/your-agent
 
-go 1.27.0
+go 1.27.2
 
 require (
     github.com/google/uuid v1.6.0
-    github.com/truvaagents/truva-g3/ai v0.5.0
-    github.com/truvaagents/truva-g3/core v0.5.0
-    github.com/truvaagents/truva-g3/orchestration v0.5.0
-    github.com/truvaagents/truva-g3/telemetry v0.5.0
-    go.opentelemetry.io/otel v1.45.0
+    github.com/truvaagents/truva-g3/ai v0.6.0
+    github.com/truvaagents/truva-g3/core v0.6.0
+    github.com/truvaagents/truva-g3/orchestration v0.6.0
+    github.com/truvaagents/truva-g3/telemetry v0.6.0
+    go.opentelemetry.io/otel v1.47.0
 )
 
 // Use local workspace modules for development
@@ -2349,7 +2347,7 @@ This is a **context drift** problem: as the framework grows the resume contract 
 
 1. **Orchestration endpoints `Internal: true`** — `/orchestrate/*` and `/chat/stream` must be internal to prevent recursive self-calls. Domain-specific endpoints may use `Internal: false` for multi-agent hierarchies
 2. **Separate prompt responsibilities** — keep identity and universal behavior in `PromptConfig`; use explicitly bound skills for conditional, reusable, or versioned procedures
-3. **Deferred orchestrator init** — always via background goroutine after Discovery is available
+3. **Deferred orchestrator init** — use a registered `core.Runnable` that waits cancellably for `GetDiscovery()`; publish the started orchestrator through a synchronized accessor
 4. **Check orchestrator availability** before processing — return 503 if still initializing
 5. **Surface AI provider errors correctly** — Use `errors.As(err, &pe)` with `core.ProviderError` to extract the real HTTP status from AI provider errors. Return the original status code (e.g., 400, 429) instead of wrapping everything as 500. See the handler example in [Step 4](#7-step-4-implement-handlers)
 6. **Extended AI timeouts** — 240s+ for reasoning models; cap session history at ~50 messages
@@ -2380,78 +2378,32 @@ This is a **context drift** problem: as the framework grows the resume contract 
 
 ## 18. Quick Reference
 
-### Minimal Non-Streaming Agent
+### Minimal Lifecycle Wiring
+
+Use the agent and framework construction from Step 7 above. After registering
+the HTTP capabilities and before calling `Run`, add the managed initializer:
 
 ```go
-package main
+// Fragment inside run(); agent and framework have already been constructed.
+framework.RegisterRunnable(&orchestratorInitializer{agent: agent})
+defer agent.stopOrchestrator()
 
-import (
-    "context"
-    "encoding/json"
-    "log"
-    "net/http"
-    "os"
-
-    "github.com/truvaagents/truva-g3/ai"
-    "github.com/truvaagents/truva-g3/core"
-    "github.com/truvaagents/truva-g3/orchestration"
-    "github.com/truvaagents/truva-g3/telemetry"
-    _ "github.com/truvaagents/truva-g3/ai/providers/openai"
-)
-
-type MinimalAgent struct {
-    *core.BaseAgent
-    orchestrator *orchestration.AIOrchestrator
+ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+defer cancel()
+if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+    return fmt.Errorf("run framework: %w", err)
 }
-
-func main() {
-    core.SetCurrentComponentType(core.ComponentTypeAgent)
-    telemetry.Initialize(telemetry.UseProfile(telemetry.ProfileDevelopment))
-    defer telemetry.Shutdown(context.Background())
-
-    agent := &MinimalAgent{BaseAgent: core.NewBaseAgent("minimal-agent")}
-    agent.AI, _ = ai.NewClient()
-
-    agent.RegisterCapability(core.Capability{
-        Name:     "orchestrate",
-        Endpoint: "/orchestrate",
-        Internal: true,
-        Handler: func(w http.ResponseWriter, r *http.Request) {
-            var req struct{ Query string `json:"query"` }
-            json.NewDecoder(r.Body).Decode(&req)
-
-            result, err := agent.orchestrator.ProcessRequest(r.Context(), req.Query, nil)
-            if err != nil {
-                http.Error(w, err.Error(), 500)
-                return
-            }
-
-            w.Header().Set("Content-Type", "application/json")
-            json.NewEncoder(w).Encode(result)
-        },
-    })
-
-    framework, _ := core.NewFramework(agent,
-        core.WithPort(8357),
-        core.WithRedisURL(os.Getenv("REDIS_URL")),
-        core.WithDiscovery(true, "redis"),
-    )
-
-    go func() {
-        for agent.Discovery == nil {
-            // wait
-        }
-        config := orchestration.DefaultConfig()
-        deps := orchestration.OrchestratorDependencies{
-            Discovery: agent.Discovery, AIClient: agent.AI,
-        }
-        agent.orchestrator, _ = orchestration.CreateOrchestrator(config, deps)
-        agent.orchestrator.Start(context.Background())
-    }()
-
-    framework.Run(context.Background())
-}
+return nil
 ```
+
+`orchestratorInitializer` and `stopOrchestrator` are application types/methods,
+defined in the complete
+[agent-with-orchestration implementation](../../examples/agent-with-orchestration/research_agent.go).
+The initializer uses the framework discovery retry interval and `GetDiscovery()`;
+handlers use a synchronized orchestrator accessor and return HTTP 503 while it
+is unavailable. Cleanup runs after HTTP draining and prevents a late initializer
+from publishing an orchestrator. This keeps startup recovery, request handling,
+and shutdown consistent with the lifecycle described in Step 7.
 
 ### Environment Variables Reference
 

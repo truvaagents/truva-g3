@@ -2592,6 +2592,24 @@ headers such as `Content-Type` in the transport layer, and call
 successful response with `client.codec.Decode`; decode a successful event
 stream with `client.codec.DecodeStream`. Always close the response body.
 
+Buffered codec failures retain their reader/JSON cause through `Unwrap` with the
+stable `decode OpenAI wire response` message. Preserve that chain when adding
+adapter context so cancellation/deadline identity remains available. If an error
+response races expiration of the attempt context, retain both causes; the stock
+OpenAI-compatible adapter joins them only when `!errors.Is(decodeErr, contextErr)`.
+An already-wrapped context cause keeps the decoder's exact message. The chain
+stops on returned cancellation/deadline identity, including a provider-local
+call deadline with an active outer caller. A completed successful response
+retains its existing behavior.
+
+The buffered error additionally exposes the optional fact method
+`ResponseBodyReadError() error`. It reports the actual non-EOF reader failure or
+nil when decoding failed without that evidence. The common AI observation helper
+uses existing `transport`/`decode` classifications; incomplete JSON at clean EOF
+belongs to decoding. Context and partial-stream classifications retain precedence.
+Keep the cause chain when wrapping this error; the fact changes observations, not
+retry permission, and introduces no codec-owned telemetry or retry loop.
+
 Those two helpers retry **transport/HTTP** failures only. An adapter that needs
 in-band error recovery can instead opt into `ExecuteWithRetryDecoded(ctx, req,
 prepare, decode)`. `prepare` may be nil or acquire attempt-local credentials;
@@ -2608,6 +2626,11 @@ Decode streaming responses within the callback; after any delivered callback,
 return `Retryable:false`. Never wrap a full HTTP retry loop inside the decoder.
 Classify structured provider errors at the adapter boundary, preserving public
 chain flags. A synthetic default status is not evidence of a transient error.
+For example, the OpenRouter adapter treats a credible untyped HTTP/in-body 408 as
+`timeout`, keeps status 408 and enables its existing bounded recovery signals.
+Known terminal and unknown nonempty types retain their policies. This is an
+adapter-local contract, not a change to the codec or every compatible provider's
+status policy. Caller/provider-call expiration and delivered output still prevent recovery.
 Return available usage with the result, and supply `ProviderRequestID` only under
 an explicit bounded/sanitized provider observation contract. The existing HTTP-only
 helpers remain available; adoption is explicit, not a requirement for custom SDK

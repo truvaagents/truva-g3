@@ -378,7 +378,7 @@ Layer 4: ContextualReResolver sees:
 Retry:  convert_currency({amount: 46828.5}) → HTTP 200 ✓
 ```
 
-> 📖 **Full Details**: See [LLM-First Hybrid Parameter Resolution](#-production-ready-enhancements) for the complete 4-layer architecture.
+> 📖 **Full Details**: See [LLM-First Hybrid Parameter Resolution](#22-production-ready-enhancements) for the complete 4-layer architecture.
 
 #### Observing Plans in Jaeger
 
@@ -1581,7 +1581,7 @@ export TRUVAG3_TIERED_MIN_TOOLS=20
 | All tools | ~13,000 | - |
 | Tiered | ~6,500 | **50%** |
 
-**Context-aware Phase 2+ re-selection:** During [multi-phase iterative planning](#iterative-planning-environment-variables), the tiered provider automatically detects phase context and builds a continuation selection prompt that includes prior tools used, the planner's continuation note, and a compact result summary. This enables differentiated tool discovery across phases — e.g., Phase 1 selects search/discovery tools while Phase 2 selects weather/currency tools based on Phase 1 results.
+**Context-aware Phase 2+ re-selection:** During [multi-phase iterative planning](#environment-variables), the tiered provider automatically detects phase context and builds a continuation selection prompt that includes prior tools used, the planner's continuation note, and a compact result summary. This enables differentiated tool discovery across phases — e.g., Phase 1 selects search/discovery tools while Phase 2 selects weather/currency tools based on Phase 1 results.
 
 #### 3. Service Provider (Large Scale: 100s-1000s of agents)
 

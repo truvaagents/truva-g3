@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Preserve the original cause of buffered OpenAI-wire decoding failures through
+  `errors.Is`/`errors.As`, with the existing outward diagnostic. Cancellation,
+  deadline expiration and interrupted reads remain distinguishable from JSON
+  syntax/type errors across providers using the shared codec.
+- Classify credible OpenRouter HTTP/in-body 408 as a provider timeout eligible
+  for configured bounded recovery. Preserve 408, including typed timeout envelopes;
+  known terminal and unknown nonempty error types retain their policies. Other
+  compatible aliases, retry budgets/defaults and streaming no-replay are unchanged.
+- Preserve both the expired attempt context and a returned provider/decode error
+  at the OpenAI-compatible execution boundary only when the error does not already
+  match it, retaining the decoder's exact message on mid-body cancellation/timeouts.
+  Returned caller or provider-call deadline identity stops recovery, including
+  when the outer caller remains active; pre-header timeout behavior is unchanged.
+- Distinguish buffered response decoding from observed body-read failures in
+  existing AI error observations. Malformed/type-invalid/unfinished JSON at clean
+  EOF reports `decode`; an observed non-EOF reader failure reports `transport`.
+  Preserve reader and JSON causes and context/partial-stream precedence without
+  changing retry decisions, payloads or adding telemetry labels.
+
 ## v0.6.0
 
 Requires Go 1.27.2 or newer. See the [root changelog](../CHANGELOG.md)

@@ -1336,7 +1336,7 @@ cluster. It does not require an AI-provider key or another TruvaG3 example.
 
 ### Prerequisites
 
-You need Go 1.27+, Docker or Podman, Kind, kubectl, curl, jq, and OpenSSL. The
+You need Go 1.27.2+, Docker or Podman, Kind, kubectl, curl, jq, and OpenSSL. The
 setup helper detects a running Docker or Podman engine; set
 `TRUVAG3_CONTAINER_RUNTIME` when you need to select one explicitly.
 

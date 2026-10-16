@@ -574,7 +574,7 @@ Sequenced for a solo maintainer. Phases are independent enough that pausing betw
 
 The minimum to make every URL on both surfaces crawlable and submitted to Google. **Required for the "come up in search" goal.** Independent of launch — ship before or after, but **before** is preferable so launch traffic lands in a GSC that's already collecting data.
 
-38. **Docs surface cleanup.** Delete [docs-site/src/pages/markdown-page.mdx](../docs-site/src/pages/markdown-page.mdx) (Docusaurus scaffolder demo leaking `/markdown-page` into the sitemap). Add [docs-site/static/robots.txt](../docs-site/static/robots.txt):
+38. **Docs surface cleanup.** Delete `docs-site/src/pages/markdown-page.mdx` (Docusaurus scaffolder demo leaking `/markdown-page` into the sitemap; the file has since been removed). Add [docs-site/static/robots.txt](../docs-site/static/robots.txt):
     ```
     User-agent: *
     Allow: /
@@ -643,7 +643,7 @@ These improve *how pages appear* in search results and on social previews. **Non
     
     Audit by `view-source:` on the homepage + a representative blog post + a representative whitepaper.
 
-45. **Social previews (Open Graph / Twitter Card).** Add `og:title`, `og:description`, `og:url`, `og:image`, and `twitter:card` to each `www/**/*.html` page. Produce default OG card at `www/assets/img/og-card.png` (1200×630). Docusaurus pages already emit OG meta from `themeConfig.image` and per-page frontmatter — but the current `themeConfig.image` points at the Docusaurus scaffolder card (generic "Docusaurus" branding), so replace [docs-site/static/img/docusaurus-social-card.jpg](../docs-site/static/img/docusaurus-social-card.jpg) with a TruvaG3-branded image of the same dimensions; same path means no config change.
+45. **Social previews (Open Graph / Twitter Card).** Add `og:title`, `og:description`, `og:url`, `og:image`, and `twitter:card` to each `www/**/*.html` page. The original proposal was to replace the Docusaurus scaffolder card; the current `themeConfig.image` now points to [docs-site/static/img/og-image.png](../docs-site/static/img/og-image.png). Audit that current image and per-page metadata rather than recreating the removed scaffolder path. Treat the website's separate image assets according to each page's actual metadata.
 
 ### Launch
 

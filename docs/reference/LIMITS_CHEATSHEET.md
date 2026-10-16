@@ -356,7 +356,7 @@ Despite legacy `CHARS` names, continuation size accounting uses UTF-8 bytes
 before final prompt encoding. Failed steps and the newest success are retained
 under a soft aggregate target; escaping and later framing can increase sent size.
 
-> `…_RESULT_MAX_CHARS` now sizes only the **non-JSON** floor preview (logs/markdown/CSV) — JSON results are digested, and orchestrator JSON delegation responses are additionally child-summary-extracted, so child sub-steps stay visible regardless. `…_MAX_TOTAL_CHARS` is a **soft target** for the whole section (not a hard cap — failed steps and the newest successful step are always kept, and notes are appended after the budget decision): digests fill newest-first; older steps evict with a "showing N of M" note (~268 B/digest measured → ~122 steps fit 32 KB). `…_MAX_ESCALATIONS` calls are newest-first, sequential fast-model calls and fire ~never on all-JSON workloads. Raise `…_DIGEST_SCALAR_MAX` so the planner sees longer salient values inline at plan time.
+> `…_RESULT_MAX_CHARS` now sizes only the **non-JSON** floor preview (logs/markdown/CSV) — JSON results are digested, and orchestrator JSON delegation responses are additionally child-summary-extracted, so child sub-steps stay visible regardless. `…_MAX_TOTAL_CHARS` is a **soft target** for the whole section (not a hard cap — failed steps and the newest successful step are always kept, and notes are appended after the budget decision): digests fill newest-first; older successful steps evict with a "showing N of M" note. How many fit depends on the actual digest sizes; the current default aggregate target is 192 KiB. `…_MAX_ESCALATIONS` calls are newest-first, sequential fast-model calls and fire ~never on all-JSON workloads. Raise `…_DIGEST_SCALAR_MAX` so the planner sees longer salient values inline at plan time.
 
 > **Migration (upgrading from pre-Phase-14):** `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` previously truncated **every** completed-step result (raw, per-step). It now governs **only the non-JSON floor preview** — valid-JSON steps are digested and no longer honor it. The env var name and its default (`10000`) are unchanged, so **no action is required**; JSON steps simply render as structure-complete digests instead of raw 10 KB truncations. If a deployment relied on the old raw-truncation behavior for JSON results, there is no equivalent toggle — the digest path supersedes it.
 
@@ -465,6 +465,15 @@ Controls when and how a shared-error summary is embedded into the remediation co
 | AI provider retry (heterogeneous `NewChain` `ClientEntry`) | Caller-owned client behavior | Caller-owned | Configure the injected client |
 | AI provider initial retry delay | 1s, then exponential backoff | `TRUVAG3_AI_RETRY_DELAY` (positive Go duration) | `AIConfig.RetryDelay`; HTTP 429/503, or eligible decoded semantic 429/503 in `ai/providers/openai` and its registered aliases, may increase it with `Retry-After`. One shared budget covers HTTP and decoded retries in adopting adapters; direct Azure remains transport-only. Each wait ends at the earlier caller deadline or absolute wait cap (positive HTTP-client timeout, otherwise the 180s framework fallback); this cap does not cancel a successful streaming response's transport context |
 
+Credible OpenRouter HTTP/in-body 408 timeouts use the same existing provider
+attempt budget and remain normalized as 408. They can fail over if another chain
+entry exists. Zero local retries, caller cancellation, caller/provider-call deadline expiration, stream
+no-replay and conservative terminal/unknown-type policies still apply. Other
+compatible aliases' 408 behavior is unchanged; no new operational limit is added.
+The chain treats a returned `context.DeadlineExceeded` as terminal even when it
+comes from the provider's own call timeout and the outer caller remains active.
+This differs from an eligible provider-returned 408 with an active attempt context.
+
 Tool-step refusal wins over budgets: explicit `retryable:false` stops every
 same-step resend. Transport/408/429/5xx retry unchanged; only eligible
 non-transient 4xx reaches parameter correction, with no unchanged 4xx resend.
@@ -522,7 +531,7 @@ They are distinct from the implemented [retry budgets](#retry-budgets) above.
 | Write timeout | 35m | `TRUVAG3_HTTP_WRITE_TIMEOUT` | — |
 | Idle timeout | 120s | `TRUVAG3_HTTP_IDLE_TIMEOUT` | — |
 | Max header bytes | 1 MB | `TRUVAG3_HTTP_MAX_HEADER_BYTES` | — |
-| Shutdown timeout | 10s | `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT` | — |
+| Shutdown timeout | 10s | `TRUVAG3_HTTP_SHUTDOWN_TIMEOUT` | Built-in agents/tools join one HTTP drain using its configured budget independently of caller deadlines/cancellation. Each caller can cancel its own wait; Start still joins the drain. Positive env duration required; zero typed config selects default, negative fails. Timeout is returned, not forced handler termination. |
 
 ## Framework Runnable Lifecycle
 
@@ -684,6 +693,20 @@ Managed requests renew activity at one-third of the effective signal TTL.
 Each submission is bounded by `min(TTL/3, execution cleanup timeout)`;
 activity removal and investigation cleanup share the execution-cleanup budget.
 This does not extend request/step/model timeouts or renew investigation claims.
+
+## Built-in Telemetry Provider Defaults
+
+| Behavior | Current value | Configuration boundary |
+| --- | --- | --- |
+| Trace sampler | `AlwaysSample` (100% in every profile) | Explicit provider choice; profile selection and `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` do not change it |
+| Metric export interval | 30 seconds | Fixed in `NewOTelProvider`'s periodic reader |
+| Empty provider endpoint | `localhost:4318` | `Initialize(Config)` / direct constructor use the supplied endpoint; application bootstrap resolves its endpoint environment values |
+| Emitting-instance identity | UUID v4 per provider lifetime | Non-empty `Config.ServiceInstanceID` / `WithServiceInstanceID` > `TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID` > generated UUID; explicit identities must differ across concurrent emitters |
+
+`TRUVAG3_TELEMETRY_SAMPLING_RATE` has no current reader or field. Metric emission
+sampling through `WithSampleRate` is separate from trace sampling. Profiles do
+not install payload sanitization; legacy redaction fields are not consumed by
+the metric/trace emission path. See the [telemetry configuration contract](https://github.com/truvaagents/truva-g3/blob/main/telemetry/README.md#configuration-ownership).
 
 ## Correlation and W3C Baggage
 

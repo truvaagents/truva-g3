@@ -1,6 +1,6 @@
 # TruvaG3 Telemetry Module Architecture
 
-**Version**: 1.13
+**Version**: 1.14
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
 **Purpose**: Production-grade observability with OpenTelemetry integration
 **Audience**: Framework developers, application developers, operations teams
@@ -460,13 +460,14 @@ created by those factories are wrapped normally.
 
 8. **Phase number propagation**: For multi-phase iterative planning, the executor also sends `X-TruvaG3-Phase-Number` as an HTTP header. `core.ExtractRequestContext()` extracts it into context, and `InstrumentedAIClient.resolvePhaseNumber()` reads it (with OTel baggage fallback). The `LLMCallRecord.PhaseNumber` field (`omitempty`, 0 = single-phase/Phase 1) enables the registry-viewer to correlate agent LLM calls to specific planning phases.
 
-9. **Sanitized error ownership**: `LLMCallRecord.Error` is observation-only.
-   The producing caller—`ai.InstrumentedAIClient` for provider calls—must
-   sanitize the string before invoking `RecordLLMCall`. Telemetry recorders
-   store the supplied value verbatim; they do not parse provider-specific
-   payloads or attempt to recover safe text from raw error bodies. Provider
-   adapters must therefore keep raw response bodies out of returned errors,
-   while the producer applies credential redaction as defense in depth.
+9. **Error-record ownership**: telemetry recorders store `LLMCallRecord.Error`
+   verbatim. They do not parse or redact provider-specific payloads. Selected
+   AI observation producers currently emit bounded classifications or use legacy
+   sanitization helpers; those exceptions are documented in the Framework Design
+   Principles and are not a general telemetry sanitization guarantee. Applications
+   own any transforming logger, recorder or exporter they explicitly install.
+   Legacy `Config.PIIRedaction`/`PIIPatterns` fields do not activate filtering in
+   the metric/trace emission path.
 
 10. **Correlation is not a metric dimension**: The centralized
    metric-enrichment boundary excludes reserved request-, user-, session-,
@@ -564,14 +565,14 @@ var (
 
     // Ensures single initialization
     initOnce sync.Once
+    // Preserve the first result, including failure
+    initErr error
 )
 
 // Initialize sets up the global telemetry system (ONCE)
 func Initialize(config Config) error {
-    var initErr error
-
     initOnce.Do(func() {
-        registry, err := createRegistry(config)
+        registry, err := newRegistry(config)
         if err != nil {
             initErr = err
             return
@@ -711,9 +712,33 @@ type OTelProvider struct {
 └─────────────────────────────────────────────────────┘
 ```
 
+### Emitting-instance identity
+
+Each `NewOTelProvider` owns one immutable `service.instance.id` resource
+attribute, shared by its metric and trace providers. By default it is a random
+UUID v4 generated once at construction, not per request or export. Concurrent
+replicas and replacement SDKs therefore have independent cumulative counters,
+without Kubernetes API access, pod-name assumptions or new dependencies.
+
+Resolution is non-empty `Config.ServiceInstanceID` (or direct-constructor
+`WithServiceInstanceID`) → `TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID` → generated UUID.
+An empty typed value means unset; a present-empty environment value, invalid
+UTF-8, surrounding whitespace or control characters fails construction before
+exporters are created. Explicit identities must be distinct among concurrent
+emitters of the same service. Do not share a static override across replicas.
+`Initialize` remembers its first result, including failure; retrying it does
+not turn a failed initialization into success or reinitialize the singleton.
+
+Collectors/backends must preserve instance identity when forming metric
+series. The example collector's resource-to-telemetry conversion exposes it as
+`service_instance_id` in Prometheus. Compute counter rates/increases per series
+before aggregating by service. This adds one resource identity per SDK lifetime,
+not request-cardinality labels. Existing collided historical series cannot be
+repaired by this change; evaluate corrected data after redeployment.
+
 ### Endpoint Configuration
 
-**Standard Environment Variables** (OpenTelemetry specification):
+**Application wiring and SDK behavior:**
 
 ```bash
 # Primary configuration
@@ -722,18 +747,22 @@ OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4318"
 # Service identification
 OTEL_SERVICE_NAME="weather-service"
 
-# Optional: Sampling rate for traces
-OTEL_TRACES_SAMPLER="always_on"
-
-# Optional: Export protocol (defaults to http/protobuf)
-OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
+# The stock provider uses OTLP/HTTP exporters and an AlwaysSample sampler.
+# Sampling/protocol environment variables do not replace those explicit choices.
 ```
 
-**TruvaG3 Configuration Priority**:
-1. Explicit `Config` passed to `Initialize()`
-2. `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable
-3. `TRUVAG3_TELEMETRY_ENDPOINT` (framework-specific)
-4. Default: `http://localhost:4318`
+`Initialize(Config)` and `NewOTelProvider` use the supplied endpoint, defaulting
+an empty value to `localhost:4318`. They do not resolve endpoint environment
+precedence or merge generic `OTEL_RESOURCE_ATTRIBUTES`. Applications assemble
+their configuration explicitly. `EnableTelemetry(agent, "")` reads
+`OTEL_EXPORTER_OTLP_ENDPOINT` before using the localhost default. Core's telemetry
+configuration and application bootstrap code are separate composition layers;
+they do not initialize this optional module automatically.
+
+`service.name` comes from the constructor's service name; `service.version` is
+currently `1.0.0`; `service.type` is supplied or inferred, and emitting-instance
+identity follows the resolution documented above. The built-in sampler remains
+`AlwaysSample` regardless of profile or `OTEL_TRACES_SAMPLER` settings.
 
 ### Metric Type Mapping
 
@@ -1171,7 +1200,8 @@ spec:
 #### ✅ Kubernetes Configuration
 
 - [ ] Set `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable
-- [ ] Set `OTEL_SERVICE_NAME` for service identification (optional)
+- [ ] Set `Config.ServiceName` when initializing telemetry; if using
+      `OTEL_SERVICE_NAME`, have application bootstrap pass its resolved value
 - [ ] Set pod template `metadata.labels.app: <service-name>` — required for Loki log
       pipeline to derive `service_name` (via `k8sattributes`). Must equal
       `OTEL_SERVICE_NAME` and the framework logger's service name, or traces/metrics
@@ -1195,27 +1225,27 @@ spec:
 ### Environment Variables Reference
 
 ```bash
-# Required for telemetry to function
+# Application bootstrap can read these and pass the resolved Config values.
+# The constructor itself does not read endpoint/name environment variables.
 OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4318"
-
-# Recommended for production
 OTEL_SERVICE_NAME="weather-service"
-OTEL_SERVICE_NAMESPACE="production"
-OTEL_SERVICE_VERSION="v1.2.3"
 
-# Optional: Sampling configuration
-OTEL_TRACES_SAMPLER="always_on"           # Development
-OTEL_TRACES_SAMPLER="traceidratio"        # Production
-OTEL_TRACES_SAMPLER_ARG="0.1"             # Sample 10%
-
-# Optional: Resource attributes
-OTEL_RESOURCE_ATTRIBUTES="deployment.environment=production,cluster.name=us-west-2"
+# Optional instance override; use a distinct value for each concurrent emitter.
+# Leave absent for the default per-provider UUID.
+# TRUVAG3_TELEMETRY_SERVICE_INSTANCE_ID="unique-emitter-id"
 ```
+
+The constructor installs an explicit sampler and resource. Generic sampling and
+resource environment variables shown in OpenTelemetry SDK documentation do not
+override those choices. Apply additional resource enrichment or sampling through
+an explicitly configured provider/collector rather than assuming a profile does it.
+`OTEL_SERVICE_NAMESPACE` and `OTEL_SERVICE_VERSION` are not consumed by this
+constructor; it currently sets `service.version` to `1.0.0`.
 
 ### Dockerfile Best Practices
 
 ```dockerfile
-FROM golang:1.27.0-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -1279,8 +1309,6 @@ spec:
           value: "http://otel-collector:4318"
         - name: OTEL_SERVICE_NAME
           value: "weather-tool"
-        - name: OTEL_SERVICE_NAMESPACE
-          value: "production"
 
         # Application configuration
         - name: REDIS_URL
@@ -1421,7 +1449,11 @@ telemetry.Counter("requests.total",
 ctx = telemetry.WithBaggage(ctx, "user_id", userID)
 ```
 
-**Built-in Protection**: TruvaG3 telemetry has cardinality limiter (default: 1000 unique combinations).
+**Built-in protection:** the registry limits values of configured labels per
+metric, replacing additional values with `other`. The default map is
+`agent_id: 100`, `capability: 50`, `error_type: 50`, `user_id: 100`; labels not
+in the map pass through. This is not a global count of label combinations or
+metric series. Direct provider emission bypasses the registry limiter.
 
 ### Pitfall 5: OTEL Collector Misconfiguration
 
@@ -1580,9 +1612,14 @@ if err := telemetry.Initialize(config); err != nil {
 
 3. **Enable cardinality protection**:
    ```go
-   config := telemetry.Config{
-       Profile: telemetry.ProfileProduction,
-       CardinalityLimit: 1000,  // Limit unique label combinations
+   config := telemetry.UseProfile(telemetry.ProfileProduction)
+   config.ServiceName = "my-service"
+   config.CardinalityLimits = map[string]int{
+       "agent_id": 100, "capability": 50, "error_type": 50, "user_id": 100,
+       "endpoint": 100, // Add an application-owned bounded label.
+   }
+   if err := telemetry.Initialize(config); err != nil {
+       return err
    }
    ```
 
@@ -1677,15 +1714,18 @@ BenchmarkBaggagePropagation-10          5000000   234.1 ns/op    128 B/op    3 a
 | CPU Per 1M Metrics/sec | ~5% | ~5% | On 4-core system |
 | Network Bandwidth | ~1 KB/s | ~10 KB/s | Depends on metric volume |
 
-### Scalability Limits
+### Configuration Boundaries
 
-| Dimension | Limit | Mitigation |
-|-----------|-------|------------|
-| Unique Metric Names | 10,000 | Use consistent naming conventions |
-| Label Combinations | 1,000 (default) | Cardinality limiter enforced |
-| Metrics/Second | 100,000 | Batching and sampling |
-| Concurrent Emitters | Unlimited | Lock-free atomic operations |
-| Trace Spans/Second | 10,000 | Sampling (1%-10% recommended) |
+The performance figures above are historical reference measurements, not
+enforced limits or a capacity guarantee for another deployment.
+
+| Dimension | Current behavior | Operator responsibility |
+|-----------|------------------|-------------------------|
+| Metric names | No global name-count cap | Keep the set bounded |
+| Label values | `CardinalityLimits` applies per configured label and metric on registry emission | Configure relevant labels; unlisted labels pass through |
+| Scalar `CardinalityLimit` | Stored configuration, not a total-series enforcement control | Use the per-label map and monitor backend series count |
+| Metrics/spans per second and concurrent emitters | No framework throughput quota | Measure SDK, collector and backend capacity for the deployment |
+| Trace sampling | 100% for every stock profile | Use an explicit provider/collector policy for volume reduction |
 
 ---
 
@@ -1714,6 +1754,7 @@ skills does not add a telemetry initialization requirement.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.14 | 2026-10-13 | Separate emitting SDKs with configurable, default-generated instance identity shared by traces and metrics; retain first singleton initialization errors |
 | 1.13 | 2026-10-04 | Format-compatible optional completion provenance and separate reasoning in opt-in debug records; exporter/metric/lifecycle behavior unchanged |
 | 1.12 | 2026-09-29 | Fix nil registry clearing with a typed atomic pointer; serialize public shutdown and verify post-shutdown no-ops without changing initialization or exporter-error behavior |
 | 1.11 | 2026-09-08 | Removed recorder numbered-DB options and deprecation-only resolution notices; owning construction uses Core's canonical DB-0 factory while injected-client lifetime and request diagnostics remain unchanged |
