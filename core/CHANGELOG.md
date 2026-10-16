@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.6.1
 
 - Label agent initialized/shutdown lifecycle counters with `module=core`.
   This creates new labelled series after adoption; historical series are unchanged.
