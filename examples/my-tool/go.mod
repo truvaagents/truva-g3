@@ -1,12 +1,6 @@
 module github.com/truvaagents/truva-g3/examples/my-tool
 
-go 1.27.0
-
-// Use local workspace modules for development
-replace (
-	github.com/truvaagents/truva-g3/core => ../../core
-	github.com/truvaagents/truva-g3/telemetry => ../../telemetry
-)
+go 1.27.2
 
 // Run `go mod tidy` after writing your tool's Go code.
 // Tidy will populate the indirect dependencies (otel, redis, etc.) automatically.

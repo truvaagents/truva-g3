@@ -1,5 +1,5 @@
 # Standalone image. Framework modules are resolved from the versions in go.mod.
-FROM golang:1.27.0-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 
 RUN apk add --no-cache ca-certificates git
 WORKDIR /app

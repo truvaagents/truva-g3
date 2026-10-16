@@ -7,7 +7,7 @@ RUN apk add --no-cache git make gcc musl-dev ca-certificates
 
 WORKDIR /app
 
-# Copy local modules referenced by replace directives
+# Copy local modules selected by the workspace build below
 COPY core/ ./core/
 COPY telemetry/ ./telemetry/
 COPY memory/ ./memory/
@@ -25,6 +25,11 @@ ENV GOOS=linux
 ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
 
 # Download remaining dependencies and build
+# Workspace mode explicitly selects the copied framework sources.
+RUN go mod edit -replace=github.com/truvaagents/truva-g3/core=/app/core \
+    -replace=github.com/truvaagents/truva-g3/telemetry=/app/telemetry \
+    -replace=github.com/truvaagents/truva-g3/memory=/app/memory \
+    -replace=github.com/truvaagents/truva-g3/ai=/app/ai
 RUN go mod tidy && go mod download
 
 # Build the binary with optimizations

@@ -1,13 +1,11 @@
 # Standalone Dockerfile for scheduler-tool
 # Builds the tool independently from a published truvag3 release — no
-# workspace dependencies. The replace directives in go.mod must be removed
-# (or the framework modules must be available on GitHub at the pinned
-# version) for this build to succeed.
+# workspace dependencies. go.mod pins the published framework modules.
 #
 # Usage (from this directory):
 #   docker build -t scheduler-tool:latest .
 
-FROM golang:1.27.0-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make gcc musl-dev ca-certificates

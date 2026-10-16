@@ -1,5 +1,5 @@
 # Standalone Dockerfile for places-tool
-FROM golang:1.27.0-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 RUN apk add --no-cache git make gcc musl-dev ca-certificates
 WORKDIR /app
 COPY go.mod go.sum ./
