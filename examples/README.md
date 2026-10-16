@@ -449,6 +449,16 @@ When adding or updating examples:
 - Use the shared setup library from `k8-deployment/setup-env-lib.sh` instead of
   duplicating cluster and infrastructure logic.
 
+The migrated entry points use `signal.NotifyContext` and wait for
+`Framework.Run(ctx)` before closing application-owned dependencies. Their HTTP
+drain requires the unreleased core lifecycle changes in this checkout. Verify
+them with local framework modules during development. Before publishing a
+standalone release build, update its framework pins to a release containing
+those changes; earlier tags do not acquire this behavior by compiling the new
+entry point. The default HTTP drain budget is 10s, configurable through
+`TRUVAG3_HTTP_SHUTDOWN_TIMEOUT`. Allow additional process termination time for
+application cleanup and telemetry export.
+
 Known documentation follow-up work:
 
 - Add READMEs for examples currently marked `Pending` in the catalog.

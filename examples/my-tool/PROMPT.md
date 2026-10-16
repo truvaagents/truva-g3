@@ -96,7 +96,7 @@ boundary before moving on.
 
 ## Step 2 — Capture findings in `plan.md`
 
-```
+````text
 Step 2 of 12: write everything you learned in Step 1 to a new file
 `plan.md` in this folder.
 
@@ -139,7 +139,7 @@ For each capability we'll expose, a section like:
 - KEY_NAME — purpose, source
 
 Pause for my review before writing any Go code.
-```
+````
 
 **What to expect:** a `plan.md` file you can read top-to-bottom. Verify
 the capability list matches your intent and the request/response shapes

@@ -25,7 +25,10 @@ This tool provides system utility capabilities that agents can discover and use.
 
 ### Prerequisites
 
-You need Docker, Kind, kubectl, and Go installed. See the [examples README](../README.md#2-quick-start) for detailed installation instructions for each platform.
+You need a working Docker or Podman runtime, Kind, kubectl, and Go installed. See
+the [Getting Started prerequisites](../../GETTING_STARTED.md#1-prerequisites) for
+installation instructions for each platform and the
+[examples quick start](../README.md#quick-start) for deployment order.
 
 **Quick verification:**
 ```bash

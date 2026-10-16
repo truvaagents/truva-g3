@@ -21,6 +21,12 @@ gateway is not part of this in-cluster pair.
 
 ## How they get deployed — don't deploy by hand
 
+**Checkout prerequisite:** the tracked repository currently contains neither
+`grocery-store-api/` nor `product-catalog-api/`, although paired setup scripts
+reference them. Confirm the required source is available before claiming those
+mock-backed flows can be deployed. The descriptions below document the intended
+paired setup when those dependencies are supplied. The enterprise simulator is present.
+
 - **`grocery-store-api` has no `setup.sh`.** [agent-with-resilience](../agent-with-resilience/)'s
   `setup.sh` builds its image, loads it into Kind, and applies its
   `k8-deployment.yaml` as part of that example's deploy. Run *that* example's

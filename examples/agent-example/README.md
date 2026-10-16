@@ -453,11 +453,11 @@ go version
 **Manual installation (recommended for latest version):**
 ```bash
 # Download Go (replace version as needed)
-curl -LO https://go.dev/dl/go1.27.0.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
 
 # Remove any previous installation and extract
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.27.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
 
 # Add to PATH (add to ~/.bashrc or ~/.profile for persistence)
 export PATH=$PATH:/usr/local/go/bin
@@ -1259,31 +1259,25 @@ func (r *ResearchAgent) handleReady(w http.ResponseWriter, req *http.Request) {
 ```
 
 ### 3. Graceful Shutdown
-Implement proper shutdown handling:
+Use a signal context and let the framework finish HTTP draining before closing
+application-owned clients. The core lifecycle changes described in the
+[development notes](../README.md#development-notes) are required for this pattern.
 
 ```go
 func main() {
-    // ... framework setup ...
+    if err := run(); err != nil {
+        log.Fatalf("Service failed: %v", err)
+    }
+}
 
-    // Graceful shutdown
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-    go func() {
-        <-sigChan
-        log.Println("Shutting down gracefully...")
-
-        // Give ongoing requests time to complete
-        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer cancel()
-
-        if err := framework.Shutdown(ctx); err != nil {
-            log.Printf("Shutdown error: %v", err)
-        }
-        os.Exit(0)
-    }()
-
-    framework.Run()
+func run() error {
+    // ... framework setup and deferred dependency cleanup ...
+    ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    defer cancel()
+    if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+        return fmt.Errorf("run framework: %w", err)
+    }
+    return nil
 }
 ```
 

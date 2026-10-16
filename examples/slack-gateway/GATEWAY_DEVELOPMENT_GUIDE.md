@@ -438,13 +438,13 @@ Gateway testing differs substantially from Tool testing:
 - [ASYNC_ORCHESTRATION_GUIDE.md](../../docs/orchestration/ASYNC_ORCHESTRATION_GUIDE.md) — Pattern B task queue reference; HITL + async combination
 - [DISTRIBUTED_TRACING_GUIDE.md](../../docs/observability/DISTRIBUTED_TRACING_GUIDE.md) — trace context propagation, `StartLinkedSpan` for cross-boundary spans
 - [FRAMEWORK_DESIGN_PRINCIPLES.md](../../FRAMEWORK_DESIGN_PRINCIPLES.md) — why gateways are reference implementations, not framework modules
-- [slack-gateway/PLAN.md](./PLAN.md) — concrete first gateway implementation
+- The concrete Slack gateway implementation plan is not shipped in this checkout; this guide remains a design reference.
 - [chat-ui](../chat-ui) — closest architectural sibling (client of agents, same non-mesh category)
 - [slack-tool](../slack-tool) — outbound Slack counterpart; complements but does not replace the gateway
 
 ---
 
 **Next steps for this draft:**
-- Validate patterns against the first full Slack Gateway implementation (Phase 1 of [PLAN.md](./PLAN.md)).
+- Validate patterns against a full Slack Gateway implementation before presenting this draft as a runnable example.
 - Once a second gateway (WhatsApp or Teams) ships, extract any genuinely duplicated code into a small `truvag3/gateway` helper package and promote this guide to `docs/`.
 - Consider whether `core` should gain a `ComponentTypeGateway` enum for telemetry labeling — low priority until multiple gateways exist.

@@ -451,11 +451,11 @@ go version
 **Manual installation (recommended for latest version):**
 ```bash
 # Download Go (replace version as needed)
-curl -LO https://go.dev/dl/go1.27.0.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
 
 # Remove any previous installation and extract
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.27.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
 
 # Add to PATH (add to ~/.bashrc or ~/.profile for persistence)
 export PATH=$PATH:/usr/local/go/bin
@@ -954,11 +954,14 @@ This mode is used in the test scenarios below to:
 
 ### Testing Prerequisites
 
-This example is fully self-contained. All required components are included in the TruvaG3 repository:
+The paired setup expects the components below. The tracked checkout currently
+lacks `examples/mock-services/grocery-store-api/`; obtain and verify that
+dependency before running the complete scenario. A fresh clone alone does not
+contain every required component.
 
 | Component | Location | Description |
 |-----------|----------|-------------|
-| `grocery-store-api` | [`../mock-services/grocery-store-api/`](../mock-services/grocery-store-api/) | Mock API with error injection |
+| `grocery-store-api` | Expected at `../mock-services/grocery-store-api/`; currently not tracked | Mock API with error injection |
 | `grocery-tool` | [`../grocery-tool/`](../grocery-tool/) | TruvaG3 tool that proxies to the API |
 | `research-agent-resilience` | This directory | The resilient research agent |
 
