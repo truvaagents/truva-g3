@@ -11,6 +11,7 @@ This guide will walk you through everything step-by-step. We'll use the [`travel
 - [Architecture Overview](#architecture-overview)
 - [Session Management: Remembering Conversations](#session-management-remembering-conversations)
 - [SSE Streaming: Real-Time Responses](#sse-streaming-real-time-responses)
+  - [Clarification delivery and history](#clarification-delivery-and-history)
 - [AI Orchestration: Making It Smart](#ai-orchestration-making-it-smart)
 - [Putting It All Together](#putting-it-all-together)
 - [HTTP Handlers: The Entry Points](#http-handlers-the-entry-points)
@@ -385,8 +386,27 @@ We use different events for different purposes:
 | `chunk` | Part of AI response | `{"text": "The weather"}` |
 | `usage` | Token stats | `{"prompt_tokens": 100, "completion_tokens": 50}` |
 | `finish` | Stream ending reason | `{"reason": "stop"}` |
-| `done` | All complete | `{"request_id": "abc", "total_duration_ms": 1234}` |
+| `done` | This turn's completion | `{"request_id": "abc", "total_duration_ms": 1234}`; a clarification-aware adapter also includes optional `clarification` |
 | `error` | Something went wrong | `{"code": "rate_limit", "message": "...", "retryable": true}` |
+
+### Clarification delivery and history
+
+`OrchestratorResponse.Clarification` is structured input requested by this turn.
+The synthesized response can ask the same question conversationally, while the
+object retains `question`, optional `missing_fields` and `partial_progress` for
+UI controls. Preserve it explicitly in buffered output, the adapter's final
+`done` event and assistant metadata when session reload must show it. This is
+an application SSE contract, not an automatic extra event from the framework's
+token callback. The minimal callback below illustrates token/progress delivery;
+its `SendDone` signature alone cannot carry the clarification object.
+
+The DevOps chat example carries the object and distinguishes generated history
+from failed live delivery. Other example adapters require their own review
+before claiming equivalent coverage. A delegated child asks its parent; that
+does not automatically create a root question. The current turn ends without
+a HITL checkpoint, and a later answer starts a new invocation.
+See the [clarification API contract](../reference/API_REFERENCE.md#clarification-outcomes-and-delegated-callers)
+and [adapter completion/error guidance](../building/AGENT_DEVELOPMENT_GUIDE.md#8-step-5-add-sse-streaming-streaming-agents-only).
 
 ### The StreamCallback Interface
 
@@ -801,6 +821,26 @@ func (t *TravelChatAgent) ProcessWithStreaming(
         return fmt.Errorf("streaming orchestration failed: %w", err)
     }
 
+    // A native interruption may have nil err but still be incomplete.
+    if result.PartialContent || !result.StreamCompleted || len(result.Errors) > 0 {
+        partialMetadata := map[string]interface{}{
+            "request_id":       result.RequestID,
+            "partial_content":  result.PartialContent,
+            "stream_completed": result.StreamCompleted,
+            "finish_reason":    result.FinishReason,
+            "errors":           result.Errors,
+        }
+        if result.Clarification != nil {
+            partialMetadata["clarification"] = result.Clarification
+        }
+        t.sessionStore.AddMessage(sessionID, Message{
+            Role: "assistant", Content: result.Response,
+            Timestamp: time.Now(), Metadata: partialMetadata,
+        })
+        return fmt.Errorf("incomplete streamed response %s: %w",
+            result.RequestID, core.ErrStreamPartiallyCompleted)
+    }
+
     // === SEND FINAL STATS ===
     if result.Usage != nil {
         callback.SendUsage(
@@ -834,6 +874,15 @@ func (t *TravelChatAgent) ProcessWithStreaming(
 }
 ```
 
+The example above retains incomplete output before returning a wrapped
+`core.ErrStreamPartiallyCompleted`. Its HTTP/SSE adapter should report an
+incomplete outcome with `retryable:false`, keeping partial content available
+without automatically repeating completed tool effects. A nil Go error from
+orchestration alone is not proof of complete delivery. The
+[agent guide's SSE handler](../building/AGENT_DEVELOPMENT_GUIDE.md#sse-handler)
+shows the matching error check. This is application handling of the existing
+framework flags; it adds no new framework retry policy.
+
 ### Adding Human Approval for Sensitive Operations
 
 For chat agents handling sensitive operations (payments, data deletion, account changes), you can add Human-in-the-Loop (HITL) approval checkpoints. When configured, the orchestrator pauses before executing sensitive tools and waits for human approval via your approval system (Slack, dashboard, etc.).
@@ -841,15 +890,12 @@ For chat agents handling sensitive operations (payments, data deletion, account 
 ```go
 // Add HITL to your orchestrator configuration
 controller := orchestration.NewInterruptController(policy, checkpointStore, handler)
-orchestrator := orchestration.NewAIOrchestrator(config, discovery, aiClient,
-    orchestration.WithHITL(controller),
-)
+orchestrator.SetInterruptController(controller)
 
-// When a sensitive operation is detected, the orchestrator:
-// 1. Creates a checkpoint and pauses execution
-// 2. Sends webhook to your approval system
-// 3. Waits for approve/reject command
-// 4. Continues or aborts based on the response
+// The policy/controller persist an interrupt and use the configured handler
+// to notify the application. Approval records a decision; the separately wired
+// resume coordinator and transport run approved work. See the HITL guide for
+// backend composition, resume setup and JSON/SSE delivery.
 ```
 
 → See [Human-in-the-Loop User Guide](../orchestration/HUMAN_IN_THE_LOOP_USER_GUIDE.md) for complete HITL setup and configuration

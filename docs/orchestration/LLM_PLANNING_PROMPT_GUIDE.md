@@ -20,6 +20,8 @@ Welcome! If you're building agents that handle tasks across different domains—
 - [Advanced: Template-Based Customization](#advanced-template-based-customization)
 - [Advanced: Custom PromptBuilder](#advanced-custom-promptbuilder)
   - [Failure evidence and exact references](#failure-evidence-and-exact-references)
+  - [Clarification across delegated turns](#clarification-across-delegated-turns)
+  - [Tiered selection correction](#tiered-selection-correction)
 - [Environment Variable Configuration](#environment-variable-configuration)
 - [Kubernetes Deployment](#kubernetes-deployment)
 - [Troubleshooting](#troubleshooting)
@@ -1651,6 +1653,60 @@ does not append a second transcript. Exact whole-value references retain native
 types: use a scalar dotted path when the destination requires a string rather
 than referring to its enclosing object. Embedded interpolation stays text.
 
+#### Clarification across delegated turns
+
+`needs_user_input` is a request for information from the agent's caller. For a
+delegated child, that caller is its parent agent. Guidance can direct the planner
+to use known request values and available tool evidence before asking the caller
+for a choice or fact those sources cannot supply. The framework does not infer
+this decision from prose or domain keywords.
+
+For example, a fresh model plan can end the turn with:
+
+```json
+{
+  "terminal": true,
+  "steps": [],
+  "needs_user_input": {
+    "question": "Which reporting period should I use?",
+    "missing_fields": ["reporting_period"],
+    "partial_progress": "The report source has been identified."
+  }
+}
+```
+
+The phase loop retains completed prior phases, skips execution of the
+clarification plan and runs clarification-aware synthesis. The execution result
+uses `clarification_needed`; the response uses `clarification`. A registered
+orchestrator capability returning a valid framework response through a
+successful dispatch receives readable, bounded answer/question previews in the
+parent's continuation context. The derived view does not replace the
+executor-held response used for parameter binding.
+Custom receipt shapes retain ordinary digest rendering.
+
+The parent planner may supply a value already known, fetch evidence, ask its own
+caller, or explain a limitation. A further phase still depends on its terminal
+flag, iterative-planning setting and remaining budget. A child's question is not
+automatically copied into the parent's structured response. In particular,
+terminal or exhausted parents can leave the question only in retained child
+evidence and synthesized prose.
+
+Clarification ends this invocation; it creates no HITL checkpoint or durable
+wait. Later input is a new request owned by the caller's conversation/task flow.
+An unattended caller applies its own notification and follow-up policy.
+Clarification alone is not an error, and it does not clear earlier failed steps.
+Custom adapters explicitly forward the optional `clarification` field if their
+JSON/SSE envelope should expose it. See
+[Clarification Requests](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#clarification-requests).
+
+Both built-in synthesis paths receive one JSON-encoded object inside
+`<clarification_needed>`, with Go's HTML-safe Unicode escaping. A section-like
+string is data: `\u003c` decodes once to `<`. The prompt encoding does not change
+the typed result or raw model answer, and debug capture retains the actual
+encoded prompt. The built-in clarification synthesis guidance describes an
+ended turn, rather than a suspended execution. Adding role instructions or
+skills does not introduce a new resume protocol or guaranteed escalation.
+
 #### Model plan intent and correction budgets
 
 Fresh model plan JSON must establish routing intent: use nonempty `steps` for
@@ -1705,6 +1761,25 @@ hook-mutated and resumed plans do not acquire this generated-plan normalization.
 Hook mutations do face the shared stricter dependency validator; same-phase and
 surplus `implicit_deps` are rejected rather than normalized away.
 
+#### Tiered selection correction
+
+Tiered selection returns exact `agent_name/capability_name` strings as one JSON
+array. Its initial and continuation calls share the 20,000-token base output
+default, configurable with `TRUVAG3_TIERED_SELECTION_MAX_TOKENS`,
+`TieredCapabilityConfig.SelectionMaxTokens` or the existing option/AI-options
+seams. Provider reasoning headroom and model output ceilings remain separate.
+This is tool-catalog selection, not Agent Skills activation or resource selection.
+
+Invalid IDs receive `<selection_correction>` feedback against the same frozen
+catalog, within the existing retry allowance. A fully valid replacement replaces
+the previous selection. If correction fails, the last nonempty validated subset
+can be retained while the caller is active; cancellation remains terminal.
+The existing `RegenerationFeedbackMaxBytes` limit also bounds this added encoded
+feedback section. It does not bound the full catalog or create another retry
+budget. Mixed valid/invalid selections may therefore make additional model calls;
+debug/usage records describe each actual attempt. See
+[Capability Provider Architecture](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#16-scaling-to-hundreds-of-agents---capability-provider-architecture).
+
 #### Framework-owned system finalization
 
 Planning system prompts pass through one final framework boundary after the
@@ -1734,8 +1809,11 @@ skill tags themselves.
 Skill dynamic values—including the live request, known enrichments, instruction
 strings, and selected resource bodies—are encoded before builder interpolation.
 This prevents authored or external text from closing framework sections. The
-semantic precedence-entity audit still receives the decoded request, so
-model-facing encoding does not degrade audit identity extraction.
+semantic precedence-entity audit decodes the extracted request value before
+entity extraction; a decode failure is recorded as inconclusive rather than
+failing the request. Its current first-match section parsing has the limits
+described in
+[Context Precedence Observability](../building/EFFECTIVE_PROMPTS_GUIDE.md#93-context-precedence-observability).
 
 For the complete reserved-tag and precedence rules, see the
 [Effective Prompts Guide](../building/EFFECTIVE_PROMPTS_GUIDE.md#9-reserved-xml-tags--orchestration-framework).

@@ -1853,9 +1853,42 @@ package.
 invalid raw values are not retained. `WithoutConversationID` shadows inherited
 conversation identity while preserving unrelated context values.
 
+#### Incoming Caller Context
+
+```go
+const MaxIncomingCallIDLength = 512
+
+type IncomingCall struct {
+    RequestID         string // Required immediate caller execution ID
+    StepID            string // Optional step local to that execution
+    OriginalRequestID string // Optional request-family root
+}
+
+func WithIncomingCall(ctx context.Context, call IncomingCall) (context.Context, error)
+func IncomingCallFromContext(ctx context.Context) (IncomingCall, bool)
+func WithoutIncomingCall(ctx context.Context) context.Context
+func IncomingCallMiddleware(logger Logger) func(http.Handler) http.Handler
+```
+
+Each present identifier is exact, non-empty, W3C-safe visible ASCII, at most
+512 bytes. Invalid input returns a bounded error and clears inherited incoming
+facts. Standard `BaseAgent` / `BaseTool` servers install the middleware
+automatically; custom hosts compose it explicitly. It captures existing
+request/step/original-request headers as a coherent envelope and clears the slot
+on every request. Identical repeats are accepted; conflicting, invalid or
+explicitly empty headers omit the whole relationship and emit a bounded warning.
+It does not change current IDs, application payloads, deadlines or HTTP writer
+interfaces, and it does not authenticate the caller. In-process delegation uses
+`WithIncomingCall` directly. Managed orchestration consumes these facts before
+assigning its own execution identity.
+
 #### ExtractRequestContext
 
-Extract orchestration context from HTTP request headers. Call this in agent/tool HTTP handlers to enable LLM debug recording correlation.
+Extract HTTP headers into legacy current-context slots. This remains useful for
+non-orchestrating handlers that intentionally record under the caller's request.
+Orchestrating agents use automatic incoming-call capture and the harness's own
+execution identity; they do not need to install this helper for delegation
+lineage. The two context contracts remain separate.
 
 ```go
 func ExtractRequestContext(ctx context.Context, r *http.Request) context.Context
@@ -2552,7 +2585,8 @@ native tools require a Responses API adapter, which this inclusion does not add.
 These restrictions are native-route contracts, not rules automatically applied
 to every compatible endpoint.
 
-Exact OpenRouter `deepseek/deepseek-v4.1-flash` and `z-ai/glm-5.3-flash` rows
+Exact OpenRouter `deepseek/deepseek-v4.1-flash`, `z-ai/glm-5.3-flash` and
+`z-ai/glm-5.3` rows
 declare JSON object support. Exact `openai/gpt-5.6-luna`, `openai/gpt-6-luna`
 and `openai/gpt-6.1-sol` add JSON schema and OpenAI-style reasoning. GPT-6 Luna
 and GPT-6.1 Sol each have a scoped built-in temperature-removal rule:
@@ -3082,6 +3116,14 @@ variables use `TRUVAG3_OPENROUTER_MODEL_{ALIAS}`. Per-call selection wins over
 `WithModel`; a selected alias then resolves through its non-empty environment
 override before the built-in catalog.
 
+Built-in OpenRouter `default` (including an unspecified model) resolves to
+`deepseek/deepseek-v4.1-flash`; `smart` resolves to `z-ai/glm-5.3`. `fast` remains
+`openai/gpt-6-luna`, and `code` remains `openrouter/pareto-code`. Exact router
+IDs such as `openrouter/auto` still pass through. Alias selection does not infer
+capabilities: the independently reviewed exact `z-ai/glm-5.3` row declares
+JSON-object support only, not JSON-schema or portable reasoning support.
+Existing request budgets and protected routing/privacy rules are unchanged.
+
 **Configuration priority:**
 ```go
 // 1. Explicit configuration (highest priority)
@@ -3123,7 +3165,8 @@ accepted by every entry.
 OpenAI's general `default` resolves to `gpt-6.1-sol`. Planning and synthesis
 inherit it when no phase/client override selects another model. The `fast`
 aliases select `gpt-6-luna` (OpenAI) and `openai/gpt-6-luna` (OpenRouter);
-other alias mappings are unchanged. Override with a concrete model or a non-empty
+other native OpenAI alias mappings are unchanged. Override with a concrete model
+or a non-empty
 `TRUVAG3_OPENAI_MODEL_DEFAULT` (for example, `gpt-5.6-terra` to retain the prior
 default). Azure/shared-catalog endpoint resolvers also receive the new semantic
 default; route-owned deployment names are not automatically changed. GPT-6.1 Sol rejects
@@ -3146,7 +3189,7 @@ for native-extra changes, sampling policy, rollback and verification scope.
 ai.WithProviderAlias("openai")          // → gpt-5.6-sol
 ai.WithProviderAlias("openai.deepseek") // → deepseek-reasoner
 ai.WithProviderAlias("openai.groq")     // → openai/gpt-oss-120b
-ai.WithProviderAlias("openai.openrouter") // → openrouter/auto
+ai.WithProviderAlias("openai.openrouter") // → z-ai/glm-5.3
 
 // "fast" for quick responses
 ai.WithProviderAlias("openai")          // → gpt-6-luna
@@ -4410,6 +4453,7 @@ type LLMCallRecorder interface {
 ```go
 type LLMCallRecord struct {
     CallType         string               `json:"call_type"`
+    TraceID          string               `json:"trace_id,omitempty"`
     SourceComponent  string               `json:"source_component,omitempty"`
     Description      string               `json:"description,omitempty"`
     StepID           string               `json:"step_id,omitempty"`
@@ -4435,6 +4479,8 @@ type LLMCallRecord struct {
 ```
 
 `PhaseNumber` identifies the producing phase when supplied; zero is omitted.
+`TraceID` identifies this call, including calls in linked background traces.
+Built-in recorders fill an omitted value from context and retain supplied values.
 The three completion facts describe that call's provider response, not domain
 success. Empty finish/provenance fields mean unreported. `Error` is an
 observation string sanitized by the producer; the recorder stores it verbatim.
@@ -5140,7 +5186,7 @@ func CreateOrchestratorWithOptions(deps OrchestratorDependencies, opts ...Orches
 **Available options:**
 - `WithCapabilityProvider(type, url)` - Configure capability discovery
 - `WithTieredResolution(enabled)` - Enable tiered capability resolution (token optimization)
-- `WithTieredSelectionRetry(enabled, maxRetries)` - Retry tiered selection on empty LLM responses and parse failures (default: true, 2)
+- `WithTieredSelectionRetry(enabled, maxRetries)` - Bounded correction of empty responses, parse failures and invalid exact tool IDs; retain the last validated nonempty subset if correction fails while the caller is active (default: true, 2 additional attempts)
 - `WithTelemetry(enabled)` - Enable metrics and tracing
 - `WithFallback(enabled)` - Graceful degradation
 - `WithPlanParseRetry(enabled, maxRetries)` - Retry plan generation on JSON parse failures
@@ -5661,10 +5707,10 @@ type TieredCapabilityConfig struct {
 
     // SelectionMaxTokens is the maximum output tokens for tiered selection LLM calls.
     // Higher values allow complex multi-tool selections but cost more tokens.
-    // Default: 2000 | Env: TRUVAG3_TIERED_SELECTION_MAX_TOKENS
+    // Default: 20000 | Env: TRUVAG3_TIERED_SELECTION_MAX_TOKENS
     SelectionMaxTokens int `json:"selection_max_tokens,omitempty"`
 
-    // RetryEnabled enables retry on empty LLM responses and parse failures.
+    // RetryEnabled enables retry on empty responses, parse failures and invalid tool IDs.
     // Default: true | Env: TRUVAG3_TIERED_SELECTION_RETRY_ENABLED
     RetryEnabled bool `json:"retry_enabled,omitempty"`
 
@@ -5681,11 +5727,21 @@ config := orchestration.DefaultConfig()
 config.EnableTieredResolution = true
 config.TieredResolution = orchestration.TieredCapabilityConfig{
     MinToolsForTiering: 25,    // Override threshold (default: 20)
-    SelectionMaxTokens: 3000,  // Override selection output tokens (default: 2000)
-    RetryEnabled:       true,  // Retry on empty responses / parse failures (default: true)
+    SelectionMaxTokens: 3000,  // Lower selection output tokens (default: 20000)
+    RetryEnabled:       true,  // Empty / malformed / invalid-ID correction (default: true)
     MaxRetries:         2,     // Up to 2 retries after initial failure (default: 2)
 }
 ```
+
+The selector freezes its eligible catalog for an invocation. Corrections use
+the existing `MaxRetries` allowance and the encoded-section limit in
+`IterativePlanning.RegenerationFeedbackMaxBytes`. A fully valid replacement
+replaces the selected set; a mixed answer retains its valid subset while
+correction continues. If correction fails, that last usable subset is returned
+while the caller remains active. Cancellation stays an error. The first `[]`
+preserves existing prior-tool recovery/fallback behavior. Mixed answers can now
+cost more model calls; actual usage/debug data are recorded once per call, and
+content validation does not count as a provider-health failure.
 
 ### PromptConfig
 
@@ -5795,7 +5851,7 @@ type IterativePlanConfig struct {
     // Default: 4 | Env: TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS
     MaxValidationRounds int `json:"max_validation_rounds"`
 
-    // Encoded additional correction context, not the whole prompt/token budget.
+    // Encoded additional plan or tiered-selector correction context, not the whole prompt.
     // The effective value must be greater than zero when validated.
     // Default: 16384 | Env: TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES
     RegenerationFeedbackMaxBytes int `json:"regeneration_feedback_max_bytes"`
@@ -5855,7 +5911,7 @@ precedence over that environment-backed snapshot.
 
 ### ContinuationResultMaxChars
 
-Floor-preview size (in chars) for a **non-JSON** completed-step result in continuation planning prompts (Phase 14). JSON step results are rendered as a structure-complete digest (skeleton) instead — this knob governs only the fallback preview for non-JSON blobs (logs, markdown, CSV) that the planner reads when the continuation distiller does not summarize the step.
+Floor-preview size in UTF-8 bytes (legacy `Chars` name) for a **non-JSON** completed-step result in continuation planning prompts. Ordinary JSON results use structural digests. Registered, validated framework delegation envelopes also share this allocation between readable answer/question previews, generic extension fields at their original paths and bounded observed child outcomes.
 
 ```go
 type OrchestratorConfig struct {
@@ -5865,7 +5921,12 @@ type OrchestratorConfig struct {
 }
 ```
 
-**Default:** `10000`. **Related:** When an orchestrator step's response contains a `steps[]` array, the continuation builder extracts a structured child-sub-step summary (from the full response, before any trimming) and appends a "Do NOT duplicate" directive — so child-step visibility holds regardless of this knob.
+**Default:** `10000`. Delegation recognition requires the exact agent/capability
+in the full current catalog and valid framework-envelope fields. Missing or
+conflicting registrations and custom receipts retain generic rendering. Child
+facts distinguish succeeded, failed and skipped; omissions are reported rather
+than interpreted as retry policy. Raw responses and full typed template bindings
+are unchanged.
 
 ### Continuation Digest Budgeting (Phase 14)
 
@@ -5882,7 +5943,7 @@ type OrchestratorConfig struct {
 }
 ```
 
-- **`ContinuationResultMaxTotalChars`** — a **soft byte target**, despite the historical `Chars` name, for the whole completed-steps section; defaults to 196608 bytes (192 KiB) and drives newest-first eviction. Older successful steps evict with a "showing N of M" note; the number that fits depends on their actual rendered sizes. **Not a hard cap:** failed steps are always kept, the newest successful step is always kept even if it alone exceeds the budget, and the N-of-M note plus any orchestrator child-summaries are appended after the budget decision — so the rendered section can exceed it.
+- **`ContinuationResultMaxTotalChars`** — a **soft byte target**, despite the historical `Chars` name, for the completed-steps section; defaults to 196608 bytes (192 KiB) and drives newest-first eviction. Delegated body, child facts and framing are canonically encoded once and counted before retention. Ordinary digest accounting retains its existing behavior. Failed steps and the newest success stay protected; encoding, protected results and omission notes can exceed this target. Budget telemetry reports retained cost and protected overflow.
 - **`ContinuationMaxEscalations`** — max non-JSON steps escalated to the continuation distiller (a fast-model summary) per phase, **newest-first**. Sequential fast-model calls on the phase-gating path; `0` disables. Fires ~never on all-JSON workloads.
 - **`ContinuationDigestArraySample`** — per-array head-sample size (arrays render as the first N elements + a length sentinel).
 - **`ContinuationDigestScalarMax`** — max length of a string value kept inline before elision; raise it to surface longer salient values (status/error strings) at plan time.
@@ -6275,15 +6336,17 @@ Process requests with real-time streaming responses. Tokens are delivered as the
 func (o *AIOrchestrator) ProcessRequestStreaming(
     ctx context.Context,
     query string,
-    tools []*ServiceInfo,
+    metadata map[string]interface{},
     callback core.StreamCallback,
 ) (*StreamingOrchestratorResponse, error)
 ```
 
-Native delivery requires the streaming interface and `SupportsStreaming()` to
-return true. Otherwise orchestration uses simulated delivery and emits the
-bounded `streaming_fallback` diagnostic. Simulated chunks are split on UTF-8
-rune boundaries, so a callback never receives half of a multibyte character.
+For a legacy `core.StreamingAIClient`, `SupportsStreaming()` determines native
+delivery eligibility. A request-aware-only `core.StreamingAIRequestClient` is
+also accepted without requiring that legacy method. Otherwise orchestration uses
+simulated delivery and emits the bounded `streaming_fallback` diagnostic. Simulated
+chunks are split on UTF-8 rune boundaries, so a callback never receives half of
+a multibyte character.
 
 If native synthesis returns partial output with `core.ErrStreamPartiallyCompleted`,
 including a wrapped/joined error, orchestration returns that output without a
@@ -6323,16 +6386,92 @@ type OrchestratorResponse struct {
     // Aggregated token usage across all LLM calls in this request
     Usage           *core.TokenUsage          // Total prompt + completion tokens
     UsageByPhase    map[string]core.TokenUsage // Breakdown by orchestration phase
+    Clarification   *ClarificationRequest     // Optional input request from this turn
 }
 ```
 
 Phase names in `UsageByPhase`: `planning`, `correction`, `synthesis`, `micro_resolution`, `schema_mapping`, `distillation`, `semantic_retry`, `error_analysis`, `tiered_selection`.
 
+#### Clarification outcomes and delegated callers
+
+These fields apply to buffered `ProcessRequest` responses and the embedded
+response in `ProcessRequestStreaming`:
+
+```go
+type ClarificationRequest struct {
+    Question        string   `json:"question"`
+    MissingFields   []string `json:"missing_fields,omitempty"`
+    PartialProgress string   `json:"partial_progress,omitempty"`
+}
+```
+
+Fresh model plans require a nonblank `question` when `needs_user_input` is
+present. The model-plan decoder enforces this; it is not a new global validator
+for application-created typed/direct plans.
+The response JSON name is `clarification` with `omitempty`; absent or decoded
+`null` means this response contains no structured clarification. Model plans use
+`needs_user_input`, and execution results use `clarification_needed`. These are
+existing views of the same outcome at different boundaries.
+
+A planner clarification ends the current phase loop before executing that
+plan's steps or entering HITL. Earlier step results remain available for
+synthesis, including their failures. Clarification itself adds no execution
+failure, but it does not turn failed earlier steps into successful ones or
+establish that the requested business task is complete.
+
+For a delegated call, the immediate parent is the caller. If a continuation is
+available, its planner can use an answer already in context, obtain it from a
+capability, or request genuinely missing caller input. Registered framework
+delegation responses retain readable, bounded answer/question previews in that
+continuation context; omitted data is labelled and full recorded values remain
+available to parameter binding. This is a prompt view, not automatic escalation
+or an executor recovery policy. A terminal plan, disabled iterative planning or
+an exhausted budget may prevent another parent decision. The child's question
+then remains child evidence; it is not automatically copied to the root's
+`Clarification` field.
+
+For example, a child response can contain this excerpt:
+
+```json
+{
+  "request_id": "orch-child",
+  "response": "Which region should I inspect?",
+  "clarification": {
+    "question": "Which region should I inspect?",
+    "missing_fields": ["region"]
+  }
+}
+```
+
+If the parent already knows the region, it may supply it in a new child
+invocation. Otherwise it may ask its own caller. A later answer always arrives
+in a new invocation; clarification creates no checkpoint or waiting task and
+does not use HITL resume. An unattended application owns notification, retained
+business-task state and the trigger for a follow-up.
+
+Custom adapters explicitly pass through `response.Clarification` in buffered
+JSON, their final SSE event, and assistant metadata when history must restore
+it. SSE event names/envelopes belong to the application; core token callbacks
+do not automatically serialize the terminal object. Text-only consumers can
+display `Response`, whose wording is produced by synthesis. A final write/flush
+failure is separate from the completed framework invocation; it does not
+authorize replaying completed effects.
+
+The DevOps example currently rejects `execution.Success=false` before its
+successful-response delivery path. Delivering a question alongside failed work
+needs a separate adapter contract; the framework/Viewer can retain the evidence
+without that adapter delivering it as a successful completion.
+
+Both built-in synthesis paths encode the structured object once as JSON inside
+`<clarification_needed>`. JSON string escapes such as `\u003c` protect literal
+tag-like data; JSON decoding the section once restores the original fields.
+Raw model/debug evidence and adapter delivery observations remain distinct.
+
 **Example - SSE Chat Endpoint:**
 ```go
 func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
-    flusher := w.(http.Flusher)
+    writer := http.NewResponseController(w)
 
     // Set SSE headers
     w.Header().Set("Content-Type", "text/event-stream")
@@ -6345,8 +6484,14 @@ func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
     result, err := h.orchestrator.ProcessRequestStreaming(ctx, req.Message, nil,
         func(chunk core.StreamChunk) error {
             if chunk.Content != "" {
-                fmt.Fprintf(w, "data: %s\n\n", chunk.Content)
-                flusher.Flush()
+                data, err := json.Marshal(map[string]string{"text": chunk.Content})
+                if err != nil {
+                    return err
+                }
+                if _, err := fmt.Fprintf(w, "event: chunk\ndata: %s\n\n", data); err != nil {
+                    return err
+                }
+                return writer.Flush()
             }
             return nil
         },
@@ -6357,10 +6502,37 @@ func (h *ChatHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    // Send completion event
-    fmt.Fprintf(w, "event: done\ndata: {\"request_id\": \"%s\"}\n\n", result.RequestID)
+    // A nil Go error can still accompany partial native output.
+    done := map[string]interface{}{
+        "request_id":       result.RequestID,
+        "stream_completed": result.StreamCompleted,
+        "partial_content":  result.PartialContent,
+    }
+    if len(result.Errors) > 0 {
+        done["errors"] = result.Errors
+    }
+    // Preserve structured clarification in this application's completion event.
+    if result.Clarification != nil {
+        done["clarification"] = result.Clarification
+    }
+    data, err := json.Marshal(done)
+    if err != nil {
+        return // Report on the owning application operation.
+    }
+    if _, err := fmt.Fprintf(w, "event: done\ndata: %s\n\n", data); err != nil {
+        return // Record delivery failure; do not rerun completed work.
+    }
+    if err := writer.Flush(); err != nil {
+        return // Same delivery-failure reporting boundary.
+    }
 }
 ```
+
+`done` means this application response ended; consumers inspect its partial and
+error fields independently of the optional clarification. This minimal protocol
+example omits request validation and application logging/history helpers; the
+[agent guide](../building/AGENT_DEVELOPMENT_GUIDE.md#8-step-5-add-sse-streaming-streaming-agents-only)
+describes completion-error reporting and the DevOps adapter's implementation.
 
 **Example - With Step Callbacks:**
 ```go
@@ -6407,7 +6579,7 @@ config := &orchestration.OrchestratorConfig{
     EnableTieredResolution: true,  // Default: true
     TieredResolution: orchestration.TieredCapabilityConfig{
         MinToolsForTiering: 20,    // Trigger threshold
-        SelectionMaxTokens: 2000,  // Selection output tokens
+        SelectionMaxTokens: 20000, // Per-call base selection output allowance
     },
     PromptConfig: orchestration.PromptConfig{
         SystemInstructions: "You are a helpful assistant specializing in travel planning.",
@@ -6530,6 +6702,7 @@ do not implement the optional capability continue through `ExtendTTL`.
 ```go
 type LLMInteraction struct {
     Type              string                     `json:"type"`
+    TraceID           string                     `json:"trace_id,omitempty"`
     HookPhase         string                     `json:"hook_phase,omitempty"`
     Timestamp         time.Time                  `json:"timestamp"`
     DurationMs        int64                      `json:"duration_ms"`
@@ -6564,6 +6737,24 @@ type LLMInteraction struct {
 ```
 
 `PhaseNumber` is the producing phase when provided; zero is omitted.
+`TraceID` is per-interaction provenance, filled from context when omitted by a
+built-in store. Missing trace IDs on legacy interactions remain unknown, not
+inferred from the record aggregate. Redis and memory stores retain the first
+valid observed aggregate `LLMDebugRecord.TraceID`, backfilling only absent,
+empty or invalid values. It is a fallback reference, not proof that all calls
+share a trace or that the first writer was the main execution. The execution
+record's trace remains authoritative; older aggregates may contain the last
+writer's trace. This change does not rewrite historical records.
+`DedupeLLMInteractions` retains its existing five-field surrogate for unknown
+or matching call traces; two different valid trace IDs prevent pairing those
+rows. It does not infer legacy provenance or modify raw stored interactions.
+For record-level `OriginalRequestID`, nonempty root baggage retains precedence.
+If it is absent, built-in writers use `core.GetOriginalRequestID` only when
+`core.GetRequestID` matches the request being recorded and the root passes the
+incoming identifier contract; otherwise they use the record's own request ID.
+Managed orchestration stamps this typed root and copies it into its detached
+knowledge-extraction context. Baggage capacity therefore does not silently
+split that managed request family. No historical data is backfilled.
 `HookPhase` classifies hook-local interactions (`pre`/`post`), and `Category`
 distinguishes model calls from embedding, vector-database, storage or logic
 observations. Empty category retains the legacy model-call rendering default.
@@ -6802,12 +6993,31 @@ from the more specific result-metadata reason. Legacy records can omit both.
 #### Persistence contract
 
 `ExecutionStore` remains the required request-oriented persistence contract.
+Managed executions, `ExecutionSummary`, `ExecutionCheckpoint` and public
+`CheckpointResponse` expose optional `parent_request_id` / `parent_step_id`.
+They identify the immediate invoking execution and its local step, separately
+from the existing root `original_request_id`. A parent field is captured on
+the child independently of whether its response reaches the parent. Legacy
+records and direct-plan API producers can omit it. Supported checkpoint resume
+restores the checkpoint's root/parent rather than the approval caller; old
+writers can drop additive fields on rewrite. No historical backfill occurs.
+
+`StoredExecution.CreatedAt` / summary `CreatedAt` identify snapshot-write time
+and can advance after execution settlement; they are not immutable run-start
+timestamps. The existing trace index holds one request ID per trace; its last
+successful mapping write wins. `GetByTraceID` returns one record, not the family.
+Immediate parent fields do not introduce ancestor TTL promotion. Resolving a
+previously missing root can activate the existing root-retention behavior.
+
 Conversation lookup is additive capability discovery:
 
 ```go
 type StoredExecution struct {
     // Existing correlation, request, plan, result, HITL, phase, skill, and
     // metadata fields are omitted here for brevity.
+
+    ParentRequestID string `json:"parent_request_id,omitempty"`
+    ParentStepID    string `json:"parent_step_id,omitempty"`
 
     // PipelineHooks is the ordered, request-local hook invocation record.
     // It is provider-neutral and does not require a tracing backend.
@@ -7403,8 +7613,11 @@ These durations do not extend checkpoint retention or human approval time.
 `ParentCheckpointID string`, and `ParentResumeAttemptID string`.
 The ownership state retains attempt/owner, previous approval status, lease
 deadline, outcome, and reserved/finalized successor identities.
-`CheckpointResponse` maps the original public fields and parent/successor
-navigation, excluding internal ownership. Nested application data is unchanged.
+`CheckpointResponse` maps the original public fields, optional execution
+`parent_request_id` / `parent_step_id`, and checkpoint parent/successor
+navigation, excluding internal ownership. Execution-parent fields identify a
+delegation; they are distinct from `parent_checkpoint_id` / resume ownership.
+Nested application data is unchanged.
 
 A claim returns an isolated snapshot with its preceding approval status while
 the stored record is `resuming`. Only `approved` and `expired_approved`
@@ -7519,6 +7732,8 @@ type ExecutionCheckpoint struct {
     CheckpointID       string                 `json:"checkpoint_id"`
     RequestID          string                 `json:"request_id"`
     OriginalRequestID  string                 `json:"original_request_id,omitempty"` // For trace correlation
+    ParentRequestID    string                 `json:"parent_request_id,omitempty"`
+    ParentStepID       string                 `json:"parent_step_id,omitempty"`
     InterruptPoint     InterruptPoint         `json:"interrupt_point"`
     Decision           *InterruptDecision     `json:"decision"`
     Plan               *RoutingPlan           `json:"plan"`

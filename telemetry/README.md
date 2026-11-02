@@ -1853,6 +1853,28 @@ unknown. Normal spans carry bounded classifications and presence flags, not
 reasoning or response bodies. See the [completion contract](../docs/reference/API_REFERENCE.md#request-aware-ai-api)
 and [tracing guide](../docs/observability/DISTRIBUTED_TRACING_GUIDE.md).
 
+Built-in debug recorders also retain each call's optional `trace_id`, filling
+it from context when omitted. Linked background work may use another trace
+under the same request ID. The record-level reference retains the first valid
+observed trace (backfilling absent/invalid values); the execution record owns
+the main execution trace. Historical call traces stay unknown when unrecorded.
+The aggregate is a lookup reference, not proof that every call shared one trace
+or that its first writer was the main execution. Upgrade every writer sharing
+the request before relying on that stability; an older writer can still replace
+the aggregate metadata.
+
+Root-family metadata uses nonempty root baggage first. With no root baggage,
+built-in writers accept a valid typed core root only for a matching current
+request; otherwise they use the record's own ID. Managed and detached
+orchestration recording preserves that typed identity even at baggage capacity.
+
+A delegated managed orchestration records its own request, step and phase
+identity. Incoming parent phase/plan values are cleared at its entry; parent
+request/step links belong to the execution record and request-start observation.
+A passive handler using `core.ExtractRequestContext` can instead record under
+the caller's identity. These are different recording scopes, even when their
+HTTP calls participate in the same distributed trace.
+
 ### Critical: Initialization Order
 
 **The telemetry module MUST be initialized BEFORE creating your AI client.** Otherwise, `telemetry.GetTelemetryProvider()` returns `nil` and AI spans won't be captured.

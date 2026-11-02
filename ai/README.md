@@ -687,8 +687,8 @@ client, _ := ai.NewClient(ai.WithProviderAlias("openai.groq"))
 sharing the wrong `OPENAI_API_KEY` or base URL.
 
 For OpenRouter, the minimal environment is `OPENROUTER_API_KEY=...`; the
-default URL is `https://openrouter.ai/api/v1`. Its built-in `default` and
-`smart` aliases use `openrouter/auto`, `fast` uses
+default URL is `https://openrouter.ai/api/v1`. Its built-in `default` alias uses
+`deepseek/deepseek-v4.1-flash`, `smart` uses `z-ai/glm-5.3`, `fast` uses
 `openai/gpt-6-luna`, and `code` uses `openrouter/pareto-code`. Override the
 aliases independently when deterministic or task-specific model selection
 matters:
@@ -707,12 +707,20 @@ environment override and falls back to the built-in fast mapping. See
 [OpenRouter configuration](../docs/building/AI_PROVIDERS_SETUP_GUIDE.md#openrouter-configuration)
 for complete constructor, per-call, request-aware, and precedence examples.
 
+Alias selection does not infer model capabilities. The exact `z-ai/glm-5.3`
+capability row declares JSON-object support only, not JSON-schema or portable
+reasoning support; existing token budgets and protected routing/privacy rules
+are unchanged.
+
 The adapter protects `provider.data_collection=deny` and `provider.zdr=true`
-on every request. The `default`, `smart`, and `code` aliases are routers and
-bypass AI-output caches; `fast` is a concrete model and can be cache-eligible
-when no native fallback list is present. One unstable router entry makes its
-whole failover chain cache-ineligible. No built-in `free` alias is advertised because the required
-privacy-constrained live probe failed. Exact `:free` IDs remain experimental
+on every request. The built-in `default`, `smart`, and `fast` selections are
+concrete models and can be AI-output-cache eligible when no native fallback
+list is present. `code` still selects a router and bypasses AI-output caches.
+Explicit `openrouter/auto` and other exact router IDs still pass through;
+router-valued alias overrides remain cache-ineligible. One unstable router entry
+makes its whole failover chain cache-ineligible. No built-in `free` alias is
+advertised because the required privacy-constrained live probe failed.
+Exact `:free` IDs remain experimental
 pass-through values.
 
 **The New Solution:** Each alias has its own namespace!
@@ -1083,9 +1091,9 @@ overrides were removed after the check.
 
 | Alias | Purpose | OpenAI | Anthropic | OpenRouter | Gemini | DeepSeek | Groq | Together | xAI | Qwen |
 |-------|---------|--------|-----------|------------|--------|----------|------|----------|-----|------|
-| **`default`** | General use, balanced | `gpt-6.1-sol` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `deepseek-ai/DeepSeek-V4-Flash-0731` | `grok-3-beta` | `qwen-plus` |
+| **`default`** | General use, balanced | `gpt-6.1-sol` | `claude-sonnet-5` | `deepseek/deepseek-v4.1-flash` | `gemini-2.5-flash` | `deepseek-chat` | `openai/gpt-oss-120b` | `deepseek-ai/DeepSeek-V4-Flash-0731` | `grok-3-beta` | `qwen-plus` |
 | **`fast`** | Latency-oriented catalog choice | `gpt-6-luna` | `claude-haiku-5-5` | `openai/gpt-6-luna` | `gemini-3.5-flash-lite` | `deepseek-chat` | `llama-3.1-8b-instant` | `google/gemma-4-31B-it` | `grok-2` | `qwen-turbo` |
-| **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-beta` | `qwen-max` |
+| **`smart`** | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5-5` | `z-ai/glm-5.3` | `gemini-3.1-pro-preview` | `deepseek-reasoner` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-beta` | `qwen-max` |
 | **`premium`** | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | _(N/A)_ | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ | _(N/A)_ |
 | **`code`** | Code generation & analysis | `gpt-5.6-sol` | `claude-opus-5-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `deepseek-chat` | `openai/gpt-oss-120b` | `moonshotai/Kimi-K3` | `grok-3-mini-beta` | `qwen3-coder-plus` |
 | **`vision`** | Image understanding | `gpt-4.1` | `claude-opus-5-5` | _(N/A)_ | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | _(N/A)_ | `grok-2-vision-latest` | _(N/A)_ |

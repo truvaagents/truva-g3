@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Fall back to a validated typed core root for the same request when root
+  baggage is absent in LLM-debug recording. Preserve existing nonempty baggage
+  precedence and record-local fallback, without ancestry inference or a new API.
+
+- Keep the first valid LLM-debug record trace stable across linked background
+  writes and backfill absent/invalid trace references atomically. Record each
+  interaction's own optional `trace_id`; preserve supplied values and fill an
+  omitted value from context. No payload, retention or historical-data rewrite.
+
 ## v0.6.1
 
 - Include bounded `operation` fields in initialization and module-registration

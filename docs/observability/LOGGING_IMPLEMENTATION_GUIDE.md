@@ -1270,6 +1270,7 @@ Use these field names across all your services:
 | `operation` | string | The operation being performed | "research_topic", "get_weather" |
 | `request_id` | string | One orchestration execution/request | "orch-1785207229452819002" |
 | `original_request_id` | string | HITL/delegation request-family root | "orch-1785207229452819002" |
+| `parent_request_id` / `parent_step_id` | string | Optional immediate delegation caller and its local step on the child request-start log; distinct from root and checkpoint lineage | "orch-parent" / "step-18" |
 | `conversation_id` | string | Optional validated multi-turn conversation identity; high-cardinality and metric-ineligible in framework flows | "chat-456" |
 | `trace_id` | string | Active W3C trace identity | "5b54aa1e7925acb809e77479b5797f5d" |
 | `span_id` | string | Active W3C span identity | "e75ad960517fa8fe" |
@@ -1288,6 +1289,18 @@ Use these field names across all your services:
 | `capability` | string | Capability being invoked | "get_weather" |
 
 ### Good vs Bad Field Names
+
+Managed orchestration clears inherited current step/phase/plan context at entry
+and logs the receiving execution's request ID. The start log includes non-empty
+`parent_request_id` / `parent_step_id` separately. Incomplete optional transport
+correlation logs `operation=incoming_call_context`, `status=omitted`,
+`error_type=invalid_correlation` and bounded field/reason classifications under
+`framework/core`. Exact baggage rejection or root conflict logs
+`operation=execution_correlation` with the same omission/error classification.
+Both diagnostics use fixed error text and omit raw rejected IDs/headers. A
+standalone resume helper without a logger still emits the bounded correlation
+span event. These fields provide navigation; they do not authenticate callers
+or create additional metric dimensions.
 
 ```go
 // BAD - inconsistent naming
@@ -1610,6 +1623,35 @@ payload-fidelity audit. They are not complete coverage and applications must
 not rely on them as a security boundary. Built-in debug stores preserve the
 values supplied to them; adopters own classification, access control, and any
 required sanitization policy.
+
+### Delegation and Clarification Delivery Logging
+
+Delegated continuation rendering logs bounded observed child outcome counts
+under `operation=continuation_child_extraction`, with request/step/agent
+correlation and omitted counts. It does not emit raw child responses. Selector
+correction reuses `operation=tiered_selection`; `status=retained_subset` and a
+fixed `reason` explain recovery without adding a provider-health error. Exact
+selection feedback and responses remain in opt-in LLM debug records, one per
+actual call. Cancellation partial-result handoff reuses the existing phase error
+and terminal publisher; it adds no second terminal log or synthetic success.
+
+`operation=clarification_short_circuit` records the producing execution's
+question decision; `operation=synthesis_clarification_mode` records its
+clarification-aware synthesis. These do not establish that a parent asked its
+caller, that an SSE client received the question, or that the business task is
+complete. Use the child's own request ID and immediate parent/step fields to
+locate the decision.
+
+An application that fails to write or flush its final SSE completion records
+that transport error on its own operation, with `request_id`, `operation`,
+`error` and `duration_ms`, and reports application failure rather than success.
+The framework's existing completion log and persisted lifecycle remain evidence
+of execution completion. Keep generated response/history metadata distinct from
+observed live delivery; a transport failure is not permission to repeat effects.
+The DevOps example implements this distinction, including deferred terminal
+frames after HITL coordinator finalization. Other adapters need their own
+pass-through and delivery handling; it is not added automatically by the token
+callback. See the [agent guide](../building/AGENT_DEVELOPMENT_GUIDE.md#8-step-5-add-sse-streaming-streaming-agents-only).
 
 ### Pipeline-Hook Evidence Logging Boundary
 

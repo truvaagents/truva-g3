@@ -2390,6 +2390,42 @@ candidate, regardless of whether extraction happens before or after
 module performs final source resolution and storage; core remains a
 dependency-free context/header carrier.
 
+### Incoming Caller Context
+
+Standard agent/tool servers capture the caller's request ID and optional
+step/root IDs automatically, separately from current execution identity:
+
+```go
+call, present := core.IncomingCallFromContext(r.Context())
+// call.RequestID identifies the invoking execution; call.StepID is local to it.
+```
+
+For a custom HTTP host, compose
+`core.IncomingCallMiddleware(logger)(handler)`. For in-process delegation,
+provide the caller explicitly and handle validation errors:
+
+```go
+childCtx, err := core.WithIncomingCall(ctx, core.IncomingCall{
+    RequestID: callerID,
+    StepID:    stepID,
+})
+if err != nil {
+    return err
+}
+// Pass childCtx to the receiving orchestrator's ProcessRequest call.
+```
+
+`core.WithoutIncomingCall(ctx)` explicitly clears the incoming slot. IDs are
+exact W3C-safe visible-ASCII values of at most 512 bytes; the request ID is
+required. The HTTP middleware clears inherited incoming facts on every request,
+including requests without caller headers. Identical repeated values are
+accepted; conflicting, invalid or explicitly empty headers omit the whole
+envelope and log a bounded warning while application work continues. Invalid
+`WithIncomingCall` input also returns a context with the incoming slot cleared.
+These fields do not authenticate the caller. Orchestrating receivers assign
+their own execution IDs; `ExtractRequestContext` remains the separate legacy
+helper for non-orchestrating handlers that record under an incoming request.
+
 ## 10. Best Practices
 
 ### 1. Choose the Right Component Type

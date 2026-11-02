@@ -1,6 +1,6 @@
 # TruvaG3 Telemetry Module Architecture
 
-**Version**: 1.14
+**Version**: 1.16
 **Module**: `github.com/truvaagents/truva-g3/telemetry`
 **Purpose**: Production-grade observability with OpenTelemetry integration
 **Audience**: Framework developers, application developers, operations teams
@@ -413,9 +413,33 @@ created by those factories are wrapped normally.
    reasoning as an answer nor decides whether a provider finish is task success;
    it preserves the producer's record, without new metric labels or exporters.
 
+   Each interaction also has optional `trace_id`. Built-in writers fill an
+   omitted value from the recording span context and preserve supplied values.
+   The record-level `trace_id` retains the first valid observed 32-character,
+   lowercase, nonzero trace ID; an absent, empty or invalid aggregate can be
+   backfilled atomically. Later linked background calls retain their own trace
+   without replacing that reference. Arrival order is not guaranteed to be
+   execution order, so the aggregate is not the authoritative main execution
+   trace. Use the execution record for that identity. Legacy interactions have
+   unknown traces; older aggregate records may contain the last writer's trace.
+   No historical data is rewritten or inferred, and append/retention/index
+   semantics remain unchanged. In-memory debug storage follows the same rule.
+   All processes writing a shared request must be upgraded before claiming
+   stability: older writers still use unconditional metadata replacement.
+
+   Request-family metadata keeps the existing nonempty `original_request_id`
+   baggage precedence. When that member is absent, a built-in writer may use
+   `core.GetOriginalRequestID` only when the core current request ID matches
+   the record being written and the root satisfies the incoming identifier
+   contract. Otherwise the record's own request ID remains the fallback.
+   Managed orchestration stamps that typed root, including when bounded baggage
+   cannot carry it; detached work explicitly copies the matching typed identity.
+   The recorder neither reconstructs ancestry nor evicts unrelated baggage.
+
 3. **Request-local atomicity and advisory projection**: One Redis Lua operation
-   appends the interaction, performs first-valid metadata backfill with
-   `HSETNX`, reads the request-scoped retention-floor marker, and applies TTLs.
+   appends the interaction, conditionally backfills the first valid trace and
+   initializes first-writer metadata with `HSETNX`, reads the request-scoped
+   retention-floor marker, and applies TTLs.
    Those keys share the request hash tag and therefore one cluster slot. The
    deployment-wide recent index cannot share every request slot, so it is
    updated afterward with bounded index-only retry. A failed index update does
@@ -451,14 +475,27 @@ created by those factories are wrapped normally.
 
 7. **Request context propagation**: The orchestrator's executor sends
    framework-managed request, step, plan, phase, original-request,
-   conversation, agent, and investigation headers. Agents extract the request,
-   step, plan, phase, original-request, conversation, and agent headers via
-   `core.ExtractRequestContext()`; investigation-owner propagation is not part
-   of that helper. An initialized `otelhttp` transport also carries standard
-   W3C Trace Context and W3C Baggage; the explicit conversation header is a
-   framework fallback, not a replacement for standard propagation.
+   conversation, agent, and investigation headers. Standard core servers capture
+   immediate caller request/step/root facts automatically in `IncomingCall`.
+   Non-orchestrating handlers that intentionally share the caller's recording
+   scope can use `core.ExtractRequestContext()` for current request, step, plan,
+   phase, original-request, conversation and agent values; investigation-owner
+   propagation is not part of that helper. An initialized `otelhttp` transport
+   also carries standard W3C Trace Context and W3C Baggage; explicit framework
+   headers provide correlation fallbacks, not replacements for standard
+   propagation.
 
-8. **Phase number propagation**: For multi-phase iterative planning, the executor also sends `X-TruvaG3-Phase-Number` as an HTTP header. `core.ExtractRequestContext()` extracts it into context, and `InstrumentedAIClient.resolvePhaseNumber()` reads it (with OTel baggage fallback). The `LLMCallRecord.PhaseNumber` field (`omitempty`, 0 = single-phase/Phase 1) enables the registry-viewer to correlate agent LLM calls to specific planning phases.
+8. **Phase number propagation and child ownership**: The executor sends
+   `X-TruvaG3-Phase-Number` for multi-phase iterative planning.
+   `core.ExtractRequestContext()` can place that value in current context for a
+   non-orchestrating handler; `InstrumentedAIClient.resolvePhaseNumber()` reads
+   current context with an OTel baggage fallback. A managed child orchestration
+   establishes its own request identity and clears the caller's step, phase and
+   plan before hooks and planning. Its recorded phases describe the child's
+   execution, not the phase in which its parent delegated. The optional
+   `LLMCallRecord.PhaseNumber` is omitted at zero (single-phase/Phase 1). Use the
+   child's recorded `parent_request_id` and `parent_step_id` to navigate back to
+   the invocation; parent correlation is not copied into each LLM interaction.
 
 9. **Error-record ownership**: telemetry recorders store `LLMCallRecord.Error`
    verbatim. They do not parse or redact provider-specific payloads. Selected
@@ -507,6 +544,17 @@ type NoOpLLMCallRecorder struct{}
 ---
 
 ## Baggage Correlation Contract
+
+Immediate delegation parentage is an orchestration record/span/log contract.
+Core's `IncomingCallMiddleware` captures caller headers in a separate transport
+context; it does not set current identity or add parent baggage. At managed
+orchestration entry, the child establishes its own request identity and clears
+inherited step/phase/plan context. The shared distributed trace remains intact.
+Parent IDs appear on the child request span and start log, not as metric labels
+or fields copied into each LLM interaction. Existing HTTP server span attributes
+continue describing transport correlation. Existing LLM fields and opt-in
+payload capture remain compatible; per-interaction `trace_id` is additive, and
+request-local ownership remains unchanged.
 
 `WithBaggage` remains the convenience API for ordinary telemetry enrichment.
 It accepts multiple key/value pairs, truncates an overlong key or value,
@@ -972,12 +1020,18 @@ func main() {
 
 ```go
 // Service A (Entry point)
-func (a *ServiceA) HandleRequest(ctx context.Context, req Request) {
-    // Add baggage for distributed context
-    ctx = telemetry.WithBaggage(ctx,
-        "request_id", req.ID,
-        "user_id", req.UserID,
-        "tenant_id", req.TenantID)
+func (a *ServiceA) HandleRequest(ctx context.Context, req Request) error {
+    // This application requires these exact correlation values.
+    for _, item := range [][2]string{
+        {"request_id", req.ID}, {"user_id", req.UserID}, {"tenant_id", req.TenantID},
+    } {
+        next, err := telemetry.WithBaggageExact(ctx, item[0], item[1],
+            telemetry.WithMetricLabelEligibility(false))
+        if err != nil {
+            return err // An optional correlation policy could diagnose and continue instead.
+        }
+        ctx = next
+    }
 
     // Start span for this service
     ctx, span := telemetry.StartSpan(ctx, "service-a.handle-request")
@@ -986,11 +1040,12 @@ func (a *ServiceA) HandleRequest(ctx context.Context, req Request) {
     span.SetAttribute("request.size", len(req.Data))
 
     // Call Service B (context propagates automatically)
-    result, err := a.callServiceB(ctx, req)
+    _, err := a.callServiceB(ctx, req)
 
     if err != nil {
         span.RecordError(err)
     }
+    return err
 }
 
 // Service B (Downstream)
@@ -1003,16 +1058,18 @@ func (b *ServiceB) ProcessRequest(ctx context.Context, data []byte) {
     ctx, span := telemetry.StartSpan(ctx, "service-b.process-request")
     defer span.End()
 
-    // Metrics include baggage automatically
+    span.SetAttribute("request_id", requestID)
+    span.SetAttribute("user_id", userID)
+
+    // Correlation belongs in spans/logs, not metric labels.
     telemetry.Counter("service-b.requests",
-        "user_id", userID,  // From context
-        "request_id", requestID)
+        "module", "example", "operation", "process")
 
     // Processing...
 }
 ```
 
-**Result**: Complete trace across all services with correlated metrics.
+**Result**: Connected traces with exact request identity and bounded metric labels.
 
 ---
 
@@ -1754,6 +1811,8 @@ skills does not add a telemetry initialization requirement.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.16 | 2026-11-01 | Retain the first valid debug-record trace, backfill missing/invalid trace metadata atomically, and preserve each interaction's trace for linked background work without changing payloads or retention |
+| 1.15 | 2026-11-01 | Clarify incoming caller versus child-local correlation, additive parent request span/log fields, preserved distributed ancestry and unchanged per-execution LLM recording |
 | 1.14 | 2026-10-13 | Separate emitting SDKs with configurable, default-generated instance identity shared by traces and metrics; retain first singleton initialization errors |
 | 1.13 | 2026-10-04 | Format-compatible optional completion provenance and separate reasoning in opt-in debug records; exporter/metric/lifecycle behavior unchanged |
 | 1.12 | 2026-09-29 | Fix nil registry clearing with a typed atomic pointer; serialize public shutdown and verify post-shutdown no-ops without changing initialization or exporter-error behavior |

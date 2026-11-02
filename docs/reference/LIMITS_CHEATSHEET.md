@@ -28,7 +28,7 @@ and [shared memory](#shared-memory).
 | Synthesis model override | — | `TRUVAG3_SYNTHESIS_MODEL` | `WithSynthesisAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
 | Micro-resolution & semantic-retry model override | — | `TRUVAG3_MICRO_RESOLUTION_MODEL` | `WithMicroResolutionAIOptions(&AIOptionsOverride{Model: StringPtr(m)})` |
 | Micro-resolution & semantic-retry output | 2000 / 1000 | `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` | `WithMicroResolutionAIOptions(&AIOptionsOverride{MaxTokens: IntPtr(n)})` |
-| Tiered selection output | 2000 | `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `WithTieredSelectionMaxTokens(n)` |
+| Tiered selection output | 20000 | `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `WithTieredSelectionMaxTokens(n)` |
 | Core AI max tokens | 2000 | `TRUVAG3_AI_MAX_TOKENS` is a reserved struct tag, not read by `LoadFromEnv` | Explicit AI-client options or orchestration call options |
 
 > `TRUVAG3_MICRO_RESOLUTION_MAX_TOKENS` / `TRUVAG3_MICRO_RESOLUTION_MODEL` are **shared**: they govern both micro-resolution and Layer 4 semantic retry (contextual re-resolution). The base **defaults differ** — micro-resolution is 2000 tokens, semantic retry is 1000 — but setting either env var (or `WithMicroResolutionAIOptions`) overrides **both**. There is no separate `TRUVAG3_SEMANTIC_RETRY_MAX_TOKENS`; raise the micro-resolution token limit if a semantic-retry response is being truncated. `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS` (see Retry Budgets) controls retry *count*, not output tokens.
@@ -227,7 +227,7 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 | Max total steps (all phases) | 200 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | — |
 | Configured phase budget (may be enlarged; see [Execution Limits](#execution-limits)) | 25m | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | — |
 | Max validation rounds | 4 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | Regen attempts after first validation failure; phase fails if exceeded |
-| Regeneration feedback | 16384 bytes | `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `IterativePlanning.RegenerationFeedbackMaxBytes`; effective value must be > 0 when validated. Encoded added correction context, not the full prompt |
+| Plan/selector correction feedback | 16384 bytes | `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `IterativePlanning.RegenerationFeedbackMaxBytes`; effective value must be > 0 when validated. Encoded added context, not the full prompt. Also bounds the complete tiered-selector correction section |
 | Distinct prior validation errors retained per phase | 8 | — | Internal bounded history; the encoded feedback limit can omit entries earlier |
 
 At most `1 + MaxValidationRounds` candidates reach validation: malformed
@@ -345,20 +345,28 @@ fail loading; unselected roles' settings are ignored by `NewDefaultBackends`.
 
 | What | Default | Env Var | `With*` Option |
 |------|---------|---------|----------------|
-| Non-JSON floor preview (per-step) | 10000 (~2500 tokens) | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | — |
+| Non-JSON floor preview / delegated view allocation (per-step) | 10000 (~2500 tokens) | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | — |
 | Aggregate digest budget (whole `<completed_steps>`) | 196608 (192 KiB) | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | — |
 | Max non-JSON → distiller escalations / phase | 8 (`0` disables) | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | — |
 | Digest array head-sample size | 3 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | — |
 | Digest inline-string cap (elision threshold) | 200 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | — |
 | Digest per-object key cap | 50 | `TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS` | — |
 
-Despite legacy `CHARS` names, continuation size accounting uses UTF-8 bytes
-before final prompt encoding. Failed steps and the newest success are retained
-under a soft aggregate target; escaping and later framing can increase sent size.
+Despite legacy `CHARS` names, these are byte budgets. Delegated framework
+envelopes count their complete canonically encoded body, child facts and framing
+before recency retention; ordinary digest accounting is unchanged. Failed steps
+and the newest success remain protected. Protected records, encoding and omission
+notes can exceed the soft target; telemetry reports protected overflow.
 
-> `…_RESULT_MAX_CHARS` now sizes only the **non-JSON** floor preview (logs/markdown/CSV) — JSON results are digested, and orchestrator JSON delegation responses are additionally child-summary-extracted, so child sub-steps stay visible regardless. `…_MAX_TOTAL_CHARS` is a **soft target** for the whole section (not a hard cap — failed steps and the newest successful step are always kept, and notes are appended after the budget decision): digests fill newest-first; older successful steps evict with a "showing N of M" note. How many fit depends on the actual digest sizes; the current default aggregate target is 192 KiB. `…_MAX_ESCALATIONS` calls are newest-first, sequential fast-model calls and fire ~never on all-JSON workloads. Raise `…_DIGEST_SCALAR_MAX` so the planner sees longer salient values inline at plan time.
+> `…_RESULT_MAX_CHARS` allocates a non-JSON floor preview and, for a registered/validated framework delegation envelope, a readable answer/question with generic output paths and bounded child outcomes. Custom receipts remain generic digests. Omissions are disclosed and raw bindings are unaffected. `…_MAX_TOTAL_CHARS` remains a 192 KiB soft target with failed/newest-success protection and recency eviction. `…_MAX_ESCALATIONS` calls remain newest-first, sequential fast-model summaries for non-JSON results. `…_DIGEST_SCALAR_MAX` controls ordinary inline scalar elision.
 
-> **Migration (upgrading from pre-Phase-14):** `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` previously truncated **every** completed-step result (raw, per-step). It now governs **only the non-JSON floor preview** — valid-JSON steps are digested and no longer honor it. The env var name and its default (`10000`) are unchanged, so **no action is required**; JSON steps simply render as structure-complete digests instead of raw 10 KB truncations. If a deployment relied on the old raw-truncation behavior for JSON results, there is no equivalent toggle — the digest path supersedes it.
+> **Migration (upgrading from pre-Phase-14):** this setting previously truncated every raw completed-step result. Ordinary JSON now uses structural digests rather than raw truncation. Validated framework delegation envelopes use the shared readable-view allocation described above. The environment name and default (`10000`) remain unchanged; there is no legacy raw-JSON truncation toggle.
+
+A readable delegated clarification does not extend phase, step, provider or
+parent deadlines or allocate another planning phase. Terminal/disabled/exhausted
+parent planning can leave the question only in the child record. Clarification
+ends the invocation and creates no separate waiting timeout; a later answer is
+a new invocation. See the [clarification contract](API_REFERENCE.md#clarification-outcomes-and-delegated-callers).
 
 ### Failed-operation prompt views
 
@@ -448,7 +456,13 @@ Controls when and how a shared-error summary is embedded into the remediation co
 |------|---------|---------|----------------|
 | Enabled | true | `TRUVAG3_TIERED_RESOLUTION_ENABLED` | `WithTieredResolution(bool)` |
 | Min tools to trigger | 20 | `TRUVAG3_TIERED_MIN_TOOLS` | — |
-| Selection max tokens | 2000 | `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `WithTieredSelectionMaxTokens(n)` |
+| Selection max tokens | 20000 | `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `WithTieredSelectionMaxTokens(n)` |
+
+This is a per-call base output allowance for both initial and continuation
+selection, not a target response size or retry budget. Explicit configuration
+may lower or raise it; AI-provider reasoning headroom and reviewed model output
+ceilings still determine the final wire allowance. Skill-selection budgets are
+separate.
 
 ## Retry Budgets
 
@@ -713,6 +727,7 @@ the metric/trace emission path. See the [telemetry configuration contract](https
 | What | Limit | Configuration |
 |------|------:|---------------|
 | Conversation ID | 512 bytes, non-empty visible-ASCII W3C-safe subset | Protocol invariant: `core.MaxConversationIDLength` |
+| Each incoming caller request/step/root ID | 512 bytes, non-empty W3C-safe visible-ASCII when present; request ID required | Protocol invariant: `core.MaxIncomingCallIDLength`; invalid optional correlation is omitted |
 | Baggage members | 64 | `telemetry.MaxBaggageItems` |
 | Baggage key | 128 bytes | `telemetry.MaxBaggageKeyLength` |
 | Baggage value | 512 bytes | `telemetry.MaxBaggageValueLength` |
@@ -852,7 +867,7 @@ operator-tunable deployment limit.
 **Complex multi-tool requests (truncation issues):**
 ```bash
 export TRUVAG3_PLAN_MAX_TOKENS=60000
-export TRUVAG3_TIERED_SELECTION_MAX_TOKENS=3000
+export TRUVAG3_TIERED_SELECTION_MAX_TOKENS=30000
 export TRUVAG3_SYNTHESIS_MAX_TOKENS=40000
 ```
 

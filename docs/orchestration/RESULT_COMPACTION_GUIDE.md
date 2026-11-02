@@ -12,6 +12,7 @@ This guide explains how TruvaG3 keeps large tool and agent results from overwhel
 4. [Layer 1 — Result Trimming (the structural floor)](#4-layer-1--result-trimming-the-structural-floor)
 5. [Layer 2 — Result Distillation (LLM-first, the synthesis path)](#5-layer-2--result-distillation-llm-first-the-synthesis-path)
 6. [Layer 3 — Continuation Digests (the planning path)](#6-layer-3--continuation-digests-the-planning-path)
+   - [6.6 Delegated answers, questions and child outcomes](#66-delegated-answers-questions-and-child-outcomes)
 7. [How a Result Flows Through](#7-how-a-result-flows-through)
 8. [Configuration](#8-configuration)
 9. [Customizing and Extending](#9-customizing-and-extending)
@@ -87,7 +88,7 @@ There are **three compaction mechanisms**, and which one runs depends on *where*
 |---|---|---|---|
 | **Result Trimming** (`StructuralTrimmer`) | synthesis, resolution-source & tool-input paths; the synthesis fail-open floor | No | a size-bounded subset (JSON → valid-JSON body + a `[trimmed …]` note; non-JSON → keyword-scored sentence selection or a byte-cut fallback) |
 | **Result Distillation** (`LLMDistiller`) | the **synthesis** prompt | Yes (fast model) | a query-relevant summary |
-| **Continuation Digests** | the **continuation planning** prompt | No (rarely yes) | structure-complete JSON skeletons |
+| **Continuation Digests** | the **continuation planning** prompt | No (rarely yes) | structural JSON digests; validated framework delegations also retain readable answers/questions and bounded child outcomes |
 
 The mental model:
 
@@ -133,7 +134,7 @@ Defaults that matter most (full tables in the [Limits Cheatsheet](../reference/L
 | Map-reduce trigger (tokens) | 150000 tokens | `TRUVAG3_RESULT_DISTILL_CONTEXT_TOKENS` |
 | Map-reduce trigger (bytes) | `0` (disabled) | `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` |
 | Continuation aggregate budget | 192 KiB | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` |
-| Continuation non-JSON floor | 10000 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` |
+| Continuation non-JSON floor / delegated-view allocation | 10000 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` |
 
 > All byte budgets are integers in bytes (16 KB = `16384`). All values are env-tunable without a code change.
 
@@ -170,7 +171,7 @@ Structural trimming preserves *shape*, but for the final answer you often want *
 Distillation is **On by default** (opt out with `TRUVAG3_RESULT_DISTILL_ENABLED=false`). When a step result exceeds `TRUVAG3_RESULT_DISTILL_THRESHOLD` (16 KB) and the orchestrator has an `AIClient`, it runs a two-stage pipeline:
 
 1. **Stage 1 — structural pre-filter.** The `StructuralTrimmer` reduces the raw result to `PreFilterBudget` (128 KB) so the LLM isn't handed the entire payload.
-2. **Stage 2 — LLM distill.** A **fast** model (Haiku 4.5 / GPT-5.6 Luna / Gemini Flash-Lite per provider, via the portable `fast` alias) summarizes the pre-filtered content to ~`TargetSize` (4 KB), *conditioned on the user's query and the step's task* so it keeps what's relevant.
+2. **Stage 2 — LLM distill.** A model selected by the portable **`fast`** alias summarizes the pre-filtered content to ~`TargetSize` (4 KB), *conditioned on the user's query and the step's task* so it keeps what's relevant. The provider catalog and application overrides determine the actual model.
 
 > **Identifier fidelity.** The JSON round-trips on the **compaction and synthesis** path — the Stage-1 pre-filter, map-reduce chunking, and the final synthesis re-parse — decode numbers with full precision preserved (`UseNumber`), so large integer identifiers (snowflake IDs, 64-bit keys, anything above 2⁵³) survive **verbatim** rather than being silently rounded to a float or rewritten in scientific notation. The distill prompt also instructs the model to copy identifiers, keys, timestamps, and numeric values byte-for-byte; on evidence-style data (records, log lines, rows) it selects and copies matching units rather than paraphrasing them. (This covers what the *LLM* sees; the tool→tool template-resolution path — `{{step-N.field}}` binding — still decodes with standard JSON and can round a large number to a float, so don't rely on it to carry a 64-bit ID between tools.)
 
@@ -222,7 +223,7 @@ The **synthesis result distiller** is scoped to the synthesis path. Parameter re
 | Map-reduce trigger (bytes) | `0` (disabled) | `TRUVAG3_RESULT_DISTILL_MAPREDUCE_THRESHOLD` | byte size above which a result map-reduces *regardless* of the token estimate (whole result → LLM, not just the pre-filtered head); `0` keeps routing context-only; a value below `PREFILTER` (128 KB) is ignored with a warning |
 | Map concurrency | 8 | `TRUVAG3_RESULT_DISTILL_MAP_CONCURRENCY` | parallel chunk distillations in the map-reduce path |
 
-> **Use a portable model alias, not a concrete name.** With a `ChainClient` (multi-provider failover), set `TRUVAG3_RESULT_DISTILL_MODEL` to `fast` / `default` / `smart` — a concrete model name is provider-specific and breaks failover (the chain classifies a 404 as a non-retryable client error and stops instead of trying the next provider). The `fast` alias resolves to each provider's efficient tier (Haiku 4.5 / GPT-5.6 Luna / Gemini Flash-Lite). Per-call AI options (model, max tokens, temperature, system prompt) can be overridden programmatically with `WithResultDistillAIOptions(...)`.
+> **Use a portable model alias, not a concrete name.** With a `ChainClient` (multi-provider failover), set `TRUVAG3_RESULT_DISTILL_MODEL` to `fast` / `default` / `smart` — a concrete model name is provider-specific and breaks failover (the chain classifies a 404 as a non-retryable client error and stops instead of trying the next provider). The `fast` alias resolves through each provider's current catalog and application overrides; see the [provider setup guide](../building/AI_PROVIDERS_SETUP_GUIDE.md). Per-call AI options (model, max tokens, temperature, system prompt) can be overridden programmatically with `WithResultDistillAIOptions(...)`.
 
 ### 5.6 Disclosure notes: how a compacted result flags what it dropped
 
@@ -243,7 +244,12 @@ Compaction is **honest about loss.** Whenever any layer *deterministically* drop
 
 ## 6. Layer 3 — Continuation Digests (the planning path)
 
-Between phases, the continuation planner re-reads completed steps to decide what's next. It doesn't need the *values* in those results — it needs their *structure*, so it can reference fields and avoid re-issuing work. So instead of distilling (an LLM call per step) or truncating (which mangles JSON), completed-step results are rendered as **structure-complete JSON digests**.
+Between phases, the continuation planner re-reads completed steps to decide
+what to do next. Ordinary JSON results use structural digests so the planner
+can reference their fields without receiving every value. Delegated answers and
+questions also need readable content: validated framework-delegation responses
+use the view described in §6.6. Both are derived prompt views; parameter binding
+uses the executor-held source rather than the shortened view.
 
 ### 6.1 What a digest looks like
 
@@ -257,18 +263,29 @@ A 519 KB Loki result becomes a ~600-byte skeleton that still tells the planner: 
 
 ### 6.2 Addressability — the key idea
 
-Digests are **lossy on values but complete on structure**, and that's deliberate: the planner references fields with `{{step-N.fieldpath}}` templates, and **the full value resolves from memory at execution time** — not from the digest. So a plan can say `{{step-9.response.data.streams}}` and the executor binds the *entire* 200-entry array at run time, even though the planner only ever saw the skeleton.
+Digests retain paths within their sampled coverage; wide objects and arrays
+can omit keys or entries as described above. Templates resolve against the
+executor-held response rather than this derived view. For example,
+`{{step-9.response.data.streams}}` can bind the entire executor-held array even
+when the prompt shows only a head sample. This does not add a raw-dispatch-byte
+fidelity guarantee to the existing resolver.
 
 ### 6.3 The budget: greedy recency-fill
 
 `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` (192 KiB) is a **target** that drives eviction — not a hard cap. The fill rule:
 
-- **Failed steps are always kept** — they carry a lot of signal but take little space (they're short `[FAILED: …]` markers). They count against the budget but are never evicted.
+- **Failed steps are always kept** — their rendered error view, including any bounded structured failure evidence, counts against the budget but is protected from eviction.
 - **Successful steps fill newest-first** until the budget is spent; older ones are evicted with a `[showing N of M completed steps]` note (they remain referenceable by step-ID at execution).
 - **The newest successful step is always kept**, even if it alone exceeds the budget, so the section is never empty.
 - Steps render in **chronological order**, so the newest sits at the end of the prompt, where models pay the most attention.
 
-Because failed steps and the newest successful step are force-kept — and per-step orchestrator NOTEs plus the `[showing N of M …]` marker (always emitted, even when N = M) are appended *after* the budget decision — the rendered section can modestly exceed the target on large or failure-heavy fan-outs.
+Delegated views count their complete canonically encoded body, child facts and
+step framing before retention. Ordinary digest accounting retains its existing
+pre-enclosing-encoding byte calculation. Failed steps and the newest success
+remain protected even if they exceed the target. Later omission markers,
+ordinary-path encoding and protected records can therefore make the section
+larger than the target; it is not a hard whole-prompt ceiling. The existing
+`[showing N of M completed steps]` marker is emitted even when N equals M.
 
 ### 6.4 Non-JSON results and the escalation path
 
@@ -278,14 +295,38 @@ Not every result is JSON (logs, markdown, CSV). A non-JSON result can't be diges
 
 | Knob | Default | Env Var | What it controls |
 |---|---|---|---|
-| Aggregate budget | 196608 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | Soft byte target before enclosing prompt encoding; failed steps and the newest successful step are retained, with markers allowed beyond the target |
-| Non-JSON floor | 10000 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | floor-preview size for a non-JSON step (JSON steps are digested, not floored) |
+| Aggregate budget | 196608 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | Soft byte target; delegated encoded views/framing count before retention, ordinary accounting is unchanged, and failed steps/newest success stay protected |
+| Non-JSON floor / delegated view | 10000 bytes | `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | Non-JSON floor preview and validated framework-delegation view allocation; ordinary JSON uses digests |
 | Max escalations | 8 (`0` disables) | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | newest non-JSON steps that may escalate to the distiller per phase |
 | Array sample | 3 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | head-sample size for arrays in a digest |
 | Scalar elision cap | 200 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | max inline string length before it's elided to a `…(N chars)` descriptor |
 | Object key cap | 50 | `TRUVAG3_CONTINUATION_DIGEST_MAX_KEYS` | max keys kept per object before sampling to sorted keys + a sentinel |
 
 > These are all top-level `OrchestratorConfig` fields (env-tunable; no `With*` option) — they're numeric tuning, so they live as env vars.
+
+### 6.6 Delegated answers, questions and child outcomes
+
+A successful step invoking a registered `orchestrator` capability can receive
+a framework `OrchestratorResponse` envelope. The continuation path validates
+both registration and the response shape before using a dedicated view.
+Conflicting registrations, malformed envelopes and custom `success`/`data`
+receipts retain generic handling; the framework does not infer their meaning.
+
+Within the existing per-step allocation, the view keeps readable prefixes of
+`response`, `clarification.question` and `clarification.partial_progress`, plus
+generic output paths and bounded observed child outcomes. The child list
+distinguishes successful, failed, skipped and unknown calls. A skipped call was
+not dispatched; a failed call may have partial effects. Preview cuts and omitted
+children are disclosed. An allocation too small for a minimal view produces an
+explicit omission marker rather than malformed JSON. The body can contain a
+JSON object followed by child-outcome text, so the entire delegated view is not
+a pure-JSON document. Accounting fields omitted from this derived view remain
+in recorded responses.
+
+This makes a child's question available for a parent's next planning decision;
+it does not force another phase, choose an answer, retry effects or populate
+the root response's clarification automatically. A later answer requires a new
+invocation. See the [clarification contract](../reference/API_REFERENCE.md#clarification-outcomes-and-delegated-callers).
 
 ---
 
@@ -305,7 +346,8 @@ result produced by a step
 │                                                      └─ > model context? chunk → map-reduce
 │                                                  no AIClient? StructuralTrimmer floor
 │
-└─ headed to the CONTINUATION prompt ───────────▶ valid JSON? structure-complete digest
+└─ headed to the CONTINUATION prompt ───────────▶ registered + valid delegation? readable view + child facts
+                                                   other valid JSON? structural digest
                                                    non-JSON? floor preview (+ rare fast-model escalation)
                                                    whole section targeted by aggregate budget — soft, not a hard cap (newest-first, N-of-M eviction; failed + newest always kept)
 ```
@@ -399,7 +441,13 @@ Compaction is visible in all three telemetry channels:
   - `result_distill.cache_hit` — a supplied `DigestCache` served a prior distillation (`cached_bytes`); a miss recomputes silently.
   - `result_distill.llm_failed` — a distill call failed and fell open to the structural floor (`error`, `duration_ms`).
 
-  On the planning path, `orchestrator.continuation_budget` (with `steps_total`, `steps_shown`, `c_escalations`). Search by `request_id` in Jaeger (see [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md)).
+  On the planning path, `orchestrator.continuation_budget` includes
+  `steps_total`, `steps_shown`, `c_escalations`, `delegated_views`,
+  `retained_cost_bytes` and `protected_budget_overflow`. Delegated views reuse
+  `result_trim.completed` with `method=digest`, allocated/body bytes and
+  `content_lost`; `orchestrator.child_steps_extracted` records observed/omitted
+  child counts. These describe the emitted view, not loss of the recorded source.
+  Search by `request_id` in Jaeger (see [Distributed Tracing Guide](../observability/DISTRIBUTED_TRACING_GUIDE.md)).
 - **Metrics** — `orchestration.result_distill.{triggered,duration_ms,failed,mapreduce,cache_hit,cache_miss}` (labeled by `agent_name`) on the distillation path, and `orchestration.continuation.{section_chars,steps_shown,steps_evicted,c_escalations}` on the planning path (Histograms/Counters, labeled `module=orchestration`) for dashboards and alerts on distill volume/failures, cache hit-rate, eviction pressure, and escalation rate.
 - **Trim metadata** — a processed step carries a [`ResultTrimMetadata`](../reference/API_REFERENCE.md#resulttrimmetadata) record on `StepResult.Metadata["result_trim"]` with the authoritative `content_lost` flag plus the coverage fields (`source_coverage_ratio`, `llm_input_bytes`, `segments_analyzed`/`segments_total`, `partial_coverage`, `combine_truncated`, `chunk_strategy`). Whenever a trim changed the result (content lost **or** the serialized size changed) the loss/coverage bits are also mirrored onto a `result_trim.completed` span (`content_lost` — always — plus `source_coverage_ratio`, `llm_input_bytes`, `segments_*`, `partial_coverage`, `combine_truncated`; `chunk_strategy` stays on the record and the `mapreduce_complete` span) so Jaeger can tell a 28%-seen distill from a 100%-seen one. Detect loss programmatically from `content_lost` — never by comparing byte counts (§5.6).
 - **LLM-debug** — **when LLM-debug is enabled** (`TRUVAG3_LLM_DEBUG_ENABLED=true` or `WithLLMDebug(true)` — it's off by default), every distillation LLM call is recorded as a `result_distillation` interaction (with `call_description` like `map-reduce chunk 4/7`), viewable in the registry-viewer's LLM-debug tab alongside planning/synthesis calls. Without a debug store the recording is a no-op — the distillation itself still runs.

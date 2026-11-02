@@ -475,7 +475,15 @@ See [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/
 
 When the planner needs user-provided information to proceed, the orchestrator can surface a structured clarification request. Simple chat UIs can forward the natural-language response, while richer UIs can render structured prompts from the `Clarification` field.
 
-See [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#clarification-requests) and [API Reference](../reference/API_REFERENCE.md#processrequeststreaming).
+The current turn ends with its earlier step evidence preserved; clarification
+is separate from HITL approval and creates no waiting checkpoint. A delegated
+agent asks its immediate parent, whose next planning phase may supply the answer,
+fetch it or ask its own caller. Root escalation is not automatic. A later
+answer is a new invocation, and unattended applications own notification and
+follow-up state. Custom JSON/SSE/history adapters explicitly carry the optional
+object; text-only rendering alone does not preserve its structured fields.
+
+See [orchestration/README.md](https://github.com/truvaagents/truva-g3/blob/main/orchestration/README.md#clarification-requests) and [Clarification outcomes and delegated callers](../reference/API_REFERENCE.md#clarification-outcomes-and-delegated-callers).
 
 #### Execution Controls And Token Usage
 
