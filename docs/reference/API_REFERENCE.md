@@ -5721,6 +5721,39 @@ type TieredCapabilityConfig struct {
 }
 ```
 
+**Direct provider correction budget:**
+
+`(*TieredCapabilityProvider).SetRegenerationFeedbackMaxBytes(maxBytes int) error`
+sets the complete encoded correction-section budget before provider use. Positive
+values override; zero restores the shared 16,384-byte default; negative values
+return `ErrInvalidOrchestratorConfig` without changing the prior value. Like the
+other provider setters, it is not a concurrent runtime configuration API. It
+reads no environment and does not add another setting. To honor the existing
+`TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` setting and resolution policy:
+
+```go
+func newSelector(catalog *orchestration.AgentCatalog, client core.AIClient) (*orchestration.TieredCapabilityProvider, error) {
+    resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
+        Environment: orchestration.EnvironmentStrict,
+    })
+    if err != nil {
+        return nil, err
+    }
+    provider := orchestration.NewTieredCapabilityProvider(catalog, client, &resolved.Config.TieredResolution)
+    if err := provider.SetRegenerationFeedbackMaxBytes(resolved.Config.IterativePlanning.RegenerationFeedbackMaxBytes); err != nil {
+        return nil, err
+    }
+    return provider, nil
+}
+```
+
+Canonical resolution requires a positive effective budget. Strict environment
+resolution rejects invalid values; compatible resolution retains its existing
+per-setting fallback with diagnostics. `EnvironmentDisabled` avoids environment
+resolution. Code options are applied by the resolver after the selected env
+layer. The orchestrator factory passes the same resolved budget to the setter;
+legacy partial-config zero retains its default behavior.
+
 **Example - Enable Tiered Resolution:**
 ```go
 config := orchestration.DefaultConfig()
@@ -5738,7 +5771,10 @@ the existing `MaxRetries` allowance and the encoded-section limit in
 `IterativePlanning.RegenerationFeedbackMaxBytes`. A fully valid replacement
 replaces the selected set; a mixed answer retains its valid subset while
 correction continues. If correction fails, that last usable subset is returned
-while the caller remains active. Cancellation stays an error. The first `[]`
+while the caller remains active. The internal selection attempt returns caller
+cancellation. Public `GetCapabilities` preserves its existing all-catalog fallback
+with nil error on selection failure, including cancellation; the caller context
+remains cancelled and does not authorize more model calls or dispatch. The first `[]`
 preserves existing prior-tool recovery/fallback behavior. Mixed answers can now
 cost more model calls; actual usage/debug data are recorded once per call, and
 content validation does not count as a provider-health failure.

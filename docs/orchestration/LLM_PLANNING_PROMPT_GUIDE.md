@@ -1773,7 +1773,10 @@ This is tool-catalog selection, not Agent Skills activation or resource selectio
 Invalid IDs receive `<selection_correction>` feedback against the same frozen
 catalog, within the existing retry allowance. A fully valid replacement replaces
 the previous selection. If correction fails, the last nonempty validated subset
-can be retained while the caller is active; cancellation remains terminal.
+can be retained while the caller is active. The internal selector returns
+cancellation; public `GetCapabilities` keeps its existing full-catalog/nil-error
+fallback for selection failures, including cancellation. That fallback does not
+clear cancellation or authorize further model/dispatch work.
 The existing `RegenerationFeedbackMaxBytes` limit also bounds this added encoded
 feedback section. It does not bound the full catalog or create another retry
 budget. Mixed valid/invalid selections may therefore make additional model calls;

@@ -227,7 +227,7 @@ and the [Azure OpenAI v1 chat-completions reference](https://learn.microsoft.com
 | Max total steps (all phases) | 200 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | — |
 | Configured phase budget (may be enlarged; see [Execution Limits](#execution-limits)) | 25m | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | — |
 | Max validation rounds | 4 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | Regen attempts after first validation failure; phase fails if exceeded |
-| Plan/selector correction feedback | 16384 bytes | `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `IterativePlanning.RegenerationFeedbackMaxBytes`; effective value must be > 0 when validated. Encoded added context, not the full prompt. Also bounds the complete tiered-selector correction section |
+| Plan/selector correction feedback | 16384 bytes | `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `IterativePlanning.RegenerationFeedbackMaxBytes`; effective value must be > 0 when validated. Encoded added context, not the full prompt. Also bounds the complete tiered-selector correction section; direct callers use `SetRegenerationFeedbackMaxBytes` before use (0 = shared default, negative rejected), optionally with the value from `ResolveOrchestratorConfig` |
 | Distinct prior validation errors retained per phase | 8 | — | Internal bounded history; the encoded feedback limit can omit entries earlier |
 
 At most `1 + MaxValidationRounds` candidates reach validation: malformed
@@ -358,6 +358,15 @@ before recency retention; ordinary digest accounting is unchanged. Failed steps
 and the newest success remain protected. Protected records, encoding and omission
 notes can exceed the soft target; telemetry reports protected overflow.
 
+Internal delegated-detail policy (named/tested constants, not separate operator
+limits): `delegatedChildBudgetDivisor = 4` initially allocates at most one quarter
+of the per-step view to whole child-outcome lines, reserving most space for the
+answer/question and structured fields. `delegatedChildPreviewMaxBytes = 200`
+keeps each child line a compact index: the first line's UTF-8-safe byte prefix,
+plus an ellipsis when shortened. This is bytes, not runes. The enclosing view
+budget can reduce the child allocation further; full responses remain in raw
+records. The configurable readable answer/question allocation is unchanged.
+
 > `…_RESULT_MAX_CHARS` allocates a non-JSON floor preview and, for a registered/validated framework delegation envelope, a readable answer/question with generic output paths and bounded child outcomes. Custom receipts remain generic digests. Omissions are disclosed and raw bindings are unaffected. `…_MAX_TOTAL_CHARS` remains a 192 KiB soft target with failed/newest-success protection and recency eviction. `…_MAX_ESCALATIONS` calls remain newest-first, sequential fast-model summaries for non-JSON results. `…_DIGEST_SCALAR_MAX` controls ordinary inline scalar elision.
 
 > **Migration (upgrading from pre-Phase-14):** this setting previously truncated every raw completed-step result. Ordinary JSON now uses structural digests rather than raw truncation. Validated framework delegation envelopes use the shared readable-view allocation described above. The environment name and default (`10000`) remain unchanged; there is no legacy raw-JSON truncation toggle.
@@ -389,7 +398,7 @@ not another operator limit: it reserves room for dispatch metadata and inputs.
 
 The continuation failure share is
 `min(ContinuationResultMaxChars, ContinuationResultMaxTotalChars / (failedCount + 1))`
-in legacy pre-encoding bytes (defaults 10,000 and 32,768). Each encoded view
+in legacy pre-encoding bytes (defaults 10,000 and 196,608). Each encoded view
 also has to fit its value/step/prompt ceilings; whole values or attempts are
 omitted with markers rather than cut into invalid JSON. Built-in synthesis has
 the child limits but no equivalent continuation parent share. Raw dispatch

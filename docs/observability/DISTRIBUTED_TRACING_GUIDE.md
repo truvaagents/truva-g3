@@ -1386,8 +1386,8 @@ when their source value is present:
 
 | Header | Source | `core.ExtractRequestContext` | Tool-side server-span attribute |
 |--------|--------|------------------------------|---------------------------------|
-| `X-TruvaG3-Request-ID` | W3C baggage `request_id` | `core.GetRequestID` | `request_id` |
-| `X-TruvaG3-Original-Request-ID` | W3C baggage `original_request_id` | `core.GetOriginalRequestID` | `original_request_id` |
+| `X-TruvaG3-Request-ID` | Matching managed correlation; otherwise W3C baggage `request_id` | `core.GetRequestID` | `request_id` |
+| `X-TruvaG3-Original-Request-ID` | Matching managed correlation root; otherwise W3C baggage `original_request_id` | `core.GetOriginalRequestID` | `original_request_id` |
 | `X-TruvaG3-Conversation-ID` | validated canonical core context | validated conversation candidate | validated `conversation_id` |
 | `X-TruvaG3-Step-ID` | core step context | `core.GetStepID` | `step_id` |
 | `X-TruvaG3-Phase-Number` | W3C baggage `phase_number` | `core.GetPhaseNumber` | `phase_number` |
