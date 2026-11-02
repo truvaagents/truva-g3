@@ -31,6 +31,7 @@ Welcome to the complete guide on async tasks in TruvaG3! Think of this as your f
    - 6.3 [Task Error Codes](#63-task-error-codes)
    - 6.4 [Task Helper Functions](#64-task-helper-functions)
    - 6.5 [Best Practices for Handlers](#65-best-practices-for-handlers)
+   - 6.6 [Clarification without an interactive caller](#66-clarification-without-an-interactive-caller)
 7. [Progress Reporting](#7-progress-reporting)
    - 7.1 [TaskProgress Structure](#71-taskprogress-structure)
    - 7.2 [Integration with OnStepComplete Callback](#72-integration-with-onstepcomplete-callback)
@@ -1200,6 +1201,22 @@ func (a *Agent) HandleQuery(ctx context.Context, task *core.Task, reporter core.
 ```
 
 ---
+
+### 6.6 Clarification without an interactive caller
+
+If orchestration returns `response.Clarification`, preserve it in the task's
+result along with the response and execution identity. A worker marks the task
+completed when its handler returns successfully; that means the turn finished,
+not that the business objective was fulfilled. Clarification creates no task
+waiting state, HITL checkpoint or automatic later-answer resume.
+
+The application decides whether to notify an operator, retain a blocked
+business-task record, or end with an explanation. After an answer arrives, it
+submits a new invocation with that context and any application-owned references
+needed to avoid repeating completed effects. A delegated child's parent can
+answer or fetch missing information during an available continuation; automatic
+child-to-root escalation is not guaranteed. These policies belong outside the
+generic executor. See the [clarification contract](../reference/API_REFERENCE.md#clarification-outcomes-and-delegated-callers).
 
 ## 7. Progress Reporting
 

@@ -30,6 +30,7 @@ your application supplies the code that processes the approved request.
 ## Table of Contents
 
 - [What is HITL?](#what-is-hitl)
+  - [Clarification is a different outcome](#clarification-is-a-different-outcome)
 - [Quick Start](#quick-start)
 - [Core Concepts](#core-concepts)
 - [Agent Implementation](#agent-implementation)
@@ -78,6 +79,21 @@ User: "Buy 100 shares of AAPL"
  Execute          Stop and
   trade           notify user
 ```
+
+### Clarification is a different outcome
+
+A planner's `needs_user_input` asks for missing input and ends that invocation.
+It is returned as `OrchestratorResponse.Clarification`; it creates no approval
+checkpoint and has no approve/resume operation. A later answer starts a new
+invocation. With delegation, the immediate parent may answer or fetch the
+missing information during continuation, or ask its own caller. Propagation to
+the root is a planner decision, not an automatic HITL action.
+
+HITL instead retains a checkpoint for approval and uses the existing resume
+coordinator to execute approved work. Keep question delivery separate from
+checkpoint ownership and task completion. See the
+[clarification API contract](../reference/API_REFERENCE.md#clarification-outcomes-and-delegated-callers)
+and the [agent adapter guidance](../building/AGENT_DEVELOPMENT_GUIDE.md#8-step-5-add-sse-streaming-streaming-agents-only).
 
 ### When Should You Use HITL?
 
@@ -1052,6 +1068,16 @@ It preserves application data and exposes parent/successor navigation, but
 does not expose attempt IDs, lease deadlines, process owners, or reservations.
 Full ownership remains in persistence and internal observability. This is
 explicit protocol field selection, not payload redaction.
+
+The optional execution fields `parent_request_id` / `parent_step_id` identify
+the agent execution and local step that delegated the suspended work. They are
+separate from checkpoint parent/successor IDs. `BuildResumeContext` restores
+the saved execution root and parent, including saved parent absence; approval
+HTTP headers/baggage do not replace them. Legacy checkpoints use their saved
+request ID as the root fallback. Coordinate updates to all checkpoint writers:
+an older writer can omit additive parent fields when it rewrites a checkpoint.
+The existing linked resume trace, approval decisions and ownership rules remain
+the same.
 
 #### Resume configuration
 

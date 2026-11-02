@@ -1,6 +1,6 @@
 # TruvaG3 Core Module Architecture
 
-**Version**: 1.22
+**Version**: 1.23
 **Module**: `github.com/truvaagents/truva-g3/core`  
 **Purpose**: Foundation module architecture, contracts, and design principles  
 **Audience**: Core maintainers, module implementers, LLM coding agents
@@ -355,6 +355,28 @@ The public contract in `request_context.go` is:
 This is intentionally a small value/helper API rather than a new interface or
 session abstraction. It keeps core dependency-free and leaves resolution,
 storage, telemetry, and UI behavior to the modules that own those concerns.
+
+### Incoming caller context
+
+`IncomingCall` carries the immediate caller's request ID and optional step/root
+IDs in a separate validated value. `WithIncomingCall`,
+`IncomingCallFromContext` and `WithoutIncomingCall` preserve current execution,
+conversation, cancellation and trace context. Each non-empty ID has the same
+W3C-safe visible-ASCII contract, bounded by `MaxIncomingCallIDLength` (512 bytes).
+Invalid input clears the incoming slot and returns a bounded error without
+the rejected value. This transport envelope is correlation, not authentication.
+
+`IncomingCallMiddleware` automatically captures the existing
+`X-TruvaG3-Request-ID`, `X-TruvaG3-Step-ID` and
+`X-TruvaG3-Original-Request-ID` envelope in `BaseAgent` and `BaseTool` servers.
+Identical repeated values are accepted; conflicting, explicitly empty or
+invalid envelopes omit the entire relationship. Each request clears inherited
+incoming facts, including when headers are absent. Configured tracing middleware
+still runs outside capture; logging/recovery and response-writer interfaces
+retain their behavior. Custom hosts can compose the same middleware or use the
+value helpers for explicit in-process delegation. `ExtractRequestContext`
+retains its legacy current-context behavior; orchestration owns child identity
+and the decision to persist a relationship.
 
 ---
 
@@ -1265,6 +1287,7 @@ for composition, panic behavior, and the approved-checkpoint resume boundary.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.23 | 2026-11-01 | Separate validated incoming-call transport context and automatic server header capture; retain legacy current identity, streaming, middleware and application payload contracts |
 | 1.22 | 2026-10-15 | Built-in HTTP cancellation/drain ownership, shared explicit shutdown, validated existing shutdown env setting, and runnable cancellation on server exit; injected dependencies remain application-owned |
 | 1.21 | 2026-10-08 | Generous HTTP write default 35m and AI config timeout 5m; retain explicit overrides and existing 30m worker-task bound |
 | 1.20 | 2026-10-04 | Optional AI response finish/source/reasoning facts and separate stream reasoning channel; legacy dispatchers preserve supplied facts |

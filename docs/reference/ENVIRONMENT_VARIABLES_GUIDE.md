@@ -477,7 +477,7 @@ environment setting or timeout/default change accompanies this classification.
 | `OPENROUTER_API_KEY` | (none) | **Implemented** | OpenRouter API key; activates `openai.openrouter` auto-detection | [ai/providers/openai/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/factory.go) |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | **Implemented** | OpenRouter API base URL | [ai/providers/openai/factory.go](https://github.com/truvaagents/truva-g3/blob/main/ai/providers/openai/factory.go) |
 
-Built-in aliases are `default=smart=openrouter/auto`,
+Built-in aliases are `default=deepseek/deepseek-v4.1-flash`, `smart=z-ai/glm-5.3`,
 `fast=openai/gpt-6-luna`, and `code=openrouter/pareto-code`. Every alias can
 be overridden independently without code changes:
 
@@ -494,6 +494,9 @@ TRUVAG3_OPENROUTER_MODEL_CODE=moonshotai/kimi-k3
 selected. A per-request exact model wins over the constructor default. See the
 [OpenRouter configuration examples](../building/AI_PROVIDERS_SETUP_GUIDE.md#openrouter-configuration)
 for programmatic and request-aware forms.
+
+Exact router IDs such as `openrouter/auto` remain valid explicit selections or
+alias override values; only the built-in `default` and `smart` mappings changed.
 
 Repository example setup scripts also accept the shell-only selector below for
 an isolated live test when `.env` contains multiple provider keys:
@@ -1125,8 +1128,8 @@ budget does not bypass refusal, immutable inputs or the delegated-call limit.
 | `TRUVAG3_OAUTH_TOKEN` | (empty) | **Implemented** | OAuth Bearer token for outbound HTTP calls to tool/agent endpoints. Per-request tokens via `WithOAuthToken()` take priority. When set, executor requests include `Authorization: Bearer <token>`. | [orchestration/executor.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/executor.go) |
 | `TRUVAG3_TIERED_RESOLUTION_ENABLED` | `true` | **Implemented** | Enable tiered capability resolution for LLM token optimization. Uses 2-phase approach to reduce tokens by 50-75%. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_TIERED_MIN_TOOLS` | `20` | **Implemented** | Minimum tool count to trigger tiered resolution. Below this threshold, all tools are sent directly. Research-backed default. | [orchestration/tiered_capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/tiered_capability_provider.go) |
-| `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `2000` | **Implemented** | Max output tokens for tiered selection LLM calls. Higher values allow complex multi-tool selections but cost more tokens. | [orchestration/tiered_capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/tiered_capability_provider.go) |
-| `TRUVAG3_TIERED_SELECTION_RETRY_ENABLED` | `true` | **Implemented** | Enable retry on empty LLM responses and parse failures during tiered tool selection. Set to `false` to disable. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` | `20000` | **Implemented** | Per-call base output allowance for initial and continuation tiered selection. Positive integers may lower or raise the default; provider reasoning headroom and reviewed output ceilings still apply. This does not change skill-selection or retry budgets. | [orchestration/tiered_capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/tiered_capability_provider.go) |
+| `TRUVAG3_TIERED_SELECTION_RETRY_ENABLED` | `true` | **Implemented** | Enable bounded correction for empty responses, parse failures and invalid full tool IDs. A failed correction retains the last validated nonempty subset while the caller is active. First semantic-empty `[]` behavior is unchanged. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_TIERED_SELECTION_RETRY_MAX` | `2` | **Implemented** | Max retry attempts for tiered selection (0 = disabled). 2 means up to 3 total attempts (1 initial + 2 retries). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CAPABILITY_SERVICE_URL` | (none) | **Implemented** | External capability service URL | [orchestration/capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/capability_provider.go) |
 | `CAPABILITY_SERVICE_URL` | (fallback) | **Implemented** | Alternative capability service URL | [orchestration/capability_provider.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/capability_provider.go) |
@@ -1149,9 +1152,9 @@ budget does not bypass refusal, immutable inputs or the delegated-call limit.
 | `TRUVAG3_ITERATIVE_MAX_TOTAL_STEPS` | `200` | **Implemented** | Maximum total steps across all phases. Prevents runaway plan generation. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `25m` | **Implemented** | Configured phase budget (plan generation + execution). The phase loop raises it to the delegation allowance (`HITL.DefaultTimeout + StepTimeout`) when larger, even if the plan has no delegated step. Earlier parent deadlines still apply. | [orchestration/orchestrator.go](../../orchestration/orchestrator.go) |
 | `TRUVAG3_ITERATIVE_MAX_VALIDATION_ROUNDS` | `4` | **Implemented** | Regeneration attempts after the first validation failure; at most 1 + N validations. Malformed or intent-invalid regenerated JSON spends a round without validation; provider/boundary/cancellation errors and persistent continuation step-ID conflicts can stop earlier. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | **Implemented** | Byte limit on encoded correction context added to a selected phase prompt. The effective value must be greater than zero when validated; environment handling follows the selected configuration-resolution mode. Omitted prior evidence is marked; failure to fit required feedback stops preparation. Not a whole-prompt/token limit. | [orchestration/plan_attempt.go](../../orchestration/plan_attempt.go) |
-| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Floor-preview size in bytes (legacy setting name) for a non-JSON completed-step result. JSON results use a structural digest; delegation summaries have a separate projection. Visibility remains subject to digest and enclosing budgets. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `196608` | **Implemented** | Soft byte target (legacy setting name) for completed-step views before enclosing prompt encoding. Older successful steps may be omitted; failed steps and the newest successful step are retained, and markers can exceed the target. Failed-operation evidence is sub-allocated and also bounded by its own encoded-byte limits. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` | `16384` | **Implemented** | Byte limit on encoded added plan-correction context and the complete tiered-selector correction section. Effective value must be positive when validated. Plan preparation fails if required feedback cannot fit; selection uses its retained-subset/fallback path. Not a whole-prompt/token limit. | [orchestration/plan_attempt.go](../../orchestration/plan_attempt.go), [tiered provider](../../orchestration/tiered_capability_provider.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Floor allocation in bytes (legacy name) for non-JSON previews and validated framework-delegation answer/question, generic output and child-fact views. Ordinary JSON uses structural digests. Omissions are disclosed; enclosing budgets still apply. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `196608` | **Implemented** | Soft byte target (legacy name) for completed-step views. Delegated body, child detail and framing count after canonical encoding; ordinary digest accounting is unchanged. Failed/newest-success protection and markers can exceed the target. Failed-operation evidence has its own nested encoded-byte limits. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | `8` | **Implemented** | Phase 14: max non-JSON steps escalated to the continuation distiller (a fast-model summary) per phase, newest-first. Sequential fast-model calls on the phase-gating path, so the cap bounds latency. `0` disables; fires ~never on all-JSON workloads. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | `3` | **Implemented** | Phase 14: per-array head-sample size in a continuation digest (arrays render as the first N elements + a length sentinel). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | `200` | **Implemented** | Phase 14: max length of a string value kept inline in a digest before elision. Raise it so the planner sees longer salient values (status/error strings) at plan time. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1193,7 +1196,7 @@ export TRUVAG3_TIERED_RESOLUTION_ENABLED=true
 # Adjust threshold for when tiering kicks in (default: 20)
 export TRUVAG3_TIERED_MIN_TOOLS=25
 
-# Increase selection output tokens for complex multi-tool registries (default: 2000)
+# Lower selection output allowance for a measured lightweight workload (default: 20000)
 export TRUVAG3_TIERED_SELECTION_MAX_TOKENS=3000
 
 # Disable for small deployments (< 20 tools)
@@ -1424,8 +1427,8 @@ When tool/agent responses are large (e.g., full web pages, large API payloads), 
 
 | Variable | Default | Status | Description | Source |
 |----------|---------|--------|-------------|--------|
-| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Non-JSON floor-preview size in continuation prompts (JSON is digested). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
-| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `196608` | **Implemented** | **Soft target** for all step digests in the continuation prompt (newest-first; N-of-M eviction) — not a hard cap: failed steps and the newest successful step are always kept, and notes are appended after the budget decision. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_CHARS` | `10000` | **Implemented** | Non-JSON floor previews and validated framework-delegation views; see the detailed rows above. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
+| `TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS` | `196608` | **Implemented** | Soft completed-step target; encoded delegated framing/detail count before retention. Failed steps/newest success remain protected, so this is not a hard cap. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_MAX_ESCALATIONS` | `8` | **Implemented** | Max non-JSON→fast-model-summary escalations per continuation phase (`0` disables). | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_ARRAY_SAMPLE` | `3` | **Implemented** | Digest array head-sample size. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
 | `TRUVAG3_CONTINUATION_DIGEST_SCALAR_MAX` | `200` | **Implemented** | Digest inline-string elision threshold. | [orchestration/interfaces.go](https://github.com/truvaagents/truva-g3/blob/main/orchestration/interfaces.go) |
@@ -1752,6 +1755,7 @@ These limits are protocol constants rather than environment settings:
 | Value | Limit | Contract |
 |---|---:|---|
 | `conversation_id` | 1–512 bytes | Visible-ASCII W3C-safe subset validated by `core.ValidateConversationID` |
+| Incoming caller request/step/root IDs | Each 1–512 bytes when present | `core.MaxIncomingCallIDLength`; request ID required, optional step/root IDs |
 | W3C baggage members | 64 | `telemetry.MaxBaggageItems` |
 | Baggage key | 128 bytes | `telemetry.MaxBaggageKeyLength` |
 | Baggage value | 512 bytes | `telemetry.MaxBaggageValueLength` |
@@ -1761,6 +1765,14 @@ These limits are protocol constants rather than environment settings:
 `session_id`. A chat application may deliberately use the same opaque value
 for both, but the framework does not infer that mapping. Conversation identity
 is established on the first turn even when `conversation_turns` is empty.
+
+Incoming-call capture is automatic in standard core servers and has no new
+environment switch. Invalid envelopes omit the optional relationship. Managed
+orchestration establishes its own request identity and records optional immediate
+`parent_request_id` / `parent_step_id` separately from the family root. Exact
+baggage rejection removes stale identity while typed identity preserves managed
+recording/headers. Existing retention and query settings remain authoritative;
+these parent fields do not extend intermediate ancestors' retention.
 
 ### Features (Same as LLM Debug Store)
 

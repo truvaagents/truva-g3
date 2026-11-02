@@ -1,6 +1,6 @@
 # TruvaG3 AI Module Architecture
 
-**Version**: 1.25
+**Version**: 1.26
 **Module**: `github.com/truvaagents/truva-g3/ai`
 **Purpose**: Production-grade AI provider abstraction with multi-provider support
 **Audience**: Framework developers, application developers, operations teams
@@ -167,7 +167,8 @@ The OpenAI catalog's general `default` now resolves to `gpt-6.1-sol` rather than
 `gpt-5.6-terra`. This changes any call inheriting that alias, including planning
 and synthesis; it is not an orchestration phase-routing change. Separately,
 OpenAI's `fast` alias resolves to `gpt-6-luna`, and OpenRouter's `fast` resolves
-to `openai/gpt-6-luna`. Other alias mappings are unchanged. Developers can select
+to `openai/gpt-6-luna`. Other native OpenAI alias mappings are unchanged.
+OpenRouter's separate default/smart catalog is described below. Developers can select
 a concrete model with `ai.WithModel`, `AIOptions.Model` or `AIRequest.Generation.Model`, or map a
 semantic alias using `TRUVAG3_OPENAI_MODEL_<ALIAS>`. Alias resolution retains its
 existing environment-override precedence. Client options and presence-aware
@@ -828,6 +829,24 @@ and its contract tests are the source of truth. Exact OpenRouter model IDs pass
 through unchanged. Router models remain capability-conservative unless the
 catalog carries positive, offline-enforced evidence for the requested portable
 feature.
+
+The built-in OpenRouter `default` selects `deepseek/deepseek-v4.1-flash`, and
+`smart` selects `z-ai/glm-5.3`. `fast` remains `openai/gpt-6-luna`; `code` remains
+the `openrouter/pareto-code` router. Nonempty
+`TRUVAG3_OPENROUTER_MODEL_<ALIAS>` overrides and explicit exact model/router
+selections retain precedence. Alias selection does not infer capabilities from
+a model name. The separately reviewed exact `z-ai/glm-5.3` row declares
+JSON-object support only, not JSON-schema or portable reasoning support. Token
+budgets, reasoning controls, privacy constraints, retries and orchestration
+behavior retain their existing contracts.
+
+These concrete `default` and `smart` selections can now have stable request
+fingerprints under the existing AI-output-cache rules, as `fast` already does.
+`code`, explicit router selections and router-valued overrides remain unstable.
+A nonempty native `models` fallback list or another unstable entry prevents
+cache reuse for the whole chain; an alias alone does not guarantee eligibility.
+The resolved model already participates in the fingerprint, so this catalog
+change needs no new global policy version.
 
 The adapter always uses `max_completion_tokens` and
 translates supported portable reasoning to `reasoning.effort`. Portable effort
@@ -2140,6 +2159,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.26 | 2026-10-17 | Set only OpenRouter default/smart aliases to DeepSeek v4.1 Flash and GLM 5.3; declare independently reviewed exact GLM 5.3 JSON-object support only; document concrete-alias cache eligibility under existing rules; preserve fast/code, exact router pass-through, environment overrides and budget contracts |
 | 1.25 | 2026-10-14 | Preserve buffered decoder and observed reader cause identity; distinguish clean-EOF JSON decoding from actual read failures; classify credible OpenRouter 408 for bounded recovery while retaining status; deduplicate expired attempt-context causes and document terminal provider-call deadlines and stream no-replay |
 | 1.24 | 2026-10-11 | Classify deterministic local policy failures as caller configuration for breaker health, preserving middleware causes; clarify quota HTTP 429 same-provider stop versus chain failover |
 | 1.23 | 2026-10-09 | Close decoded-success log parity gap with successful-attempt duration; preserve retry, payload and metric ownership; refresh provider factory/constructor examples against the request-aware implementation |

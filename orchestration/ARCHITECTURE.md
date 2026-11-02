@@ -1,6 +1,6 @@
 # TruvaG3 Orchestration Module Architecture
 
-**Version**: 1.48
+**Version**: 1.52
 **Purpose**: Comprehensive architectural documentation for the orchestration module
 **Audience**: Core contributors, module developers, system architects, LLM-based coding agents
 
@@ -810,6 +810,44 @@ Existing initial/continuation parse-error events add the bounded `reason` field:
 `invalid_clarification_request` or `plan_decode_failed`.
 No new attempts, selection pass or executor behavior is introduced.
 
+#### Clarification outcome boundary
+
+`needs_user_input` ends the agent's current turn. Its result records
+`clarification_needed`; the response exposes the same typed value as
+`clarification`. This is an input request to the calling party, which may be a
+parent agent or an unattended application. It creates no approval checkpoint or
+durable waiting/resumption lifecycle. Later input starts a new invocation.
+The phase loop checks this outcome after its planning hooks and validation but
+before HITL approval or execution of that plan. Prior-phase steps remain in the
+combined result. The clarification branch itself is not an error; aggregate
+`Success` can still be false when an earlier step failed.
+
+A child outcome is evidence available to the parent, rather than an automatic
+root question. Existing terminal, iterative-planning and phase/step-budget rules
+decide whether another parent planning phase is available. A terminal or
+budget-limited parent may synthesize the child's question into prose while its
+own structured clarification remains absent. Executor scheduling, validation and
+retry semantics are unchanged.
+
+Both buffered and native-streaming synthesis builders use the same private
+renderer for `<clarification_needed>`. Go's `encoding/json` encodes one object
+with HTML-safe Unicode escapes: for example, `<` in a question becomes
+`\u003c`, not `&lt;` or an additional JSON string. This keeps all three fields
+inside one data object even when values contain section tags. This derived
+representation applies with skills enabled or disabled; one JSON decode
+restores the field values. The builders propagate preparation
+errors. Raw results and model answers are not rewritten, and LLM debug stores
+retain the actual encoded prompt passed to the client.
+
+HTTP/SSE adapters own final-frame delivery. An error after framework completion
+belongs to the adapter's operation, with the execution request/trace identity;
+it does not change the stored framework lifecycle or authorize automatic replay.
+The framework returns the optional object; custom JSON/SSE adapters and their
+history stores must explicitly forward it if they project their own response
+shape. Example-specific unsuccessful-execution guards remain independent. See
+[Clarification Requests](README.md#clarification-requests) for the field mapping,
+parent decisions and unattended-caller boundary.
+
 The default initial prompt builder, fallback/continuation format rules and
 agent-name retry guidance show
 `{"terminal": true, "steps": []}` for requests that available capabilities cannot
@@ -1297,7 +1335,58 @@ config.TieredResolution = orchestration.TieredCapabilityConfig{
 ```bash
 TRUVAG3_TIERED_RESOLUTION_ENABLED=true   # Default
 TRUVAG3_TIERED_MIN_TOOLS=20              # Research-backed default
+TRUVAG3_TIERED_SELECTION_MAX_TOKENS=20000 # Per-call base output allowance
 ```
+
+Canonical configuration and direct `NewTieredCapabilityProvider` construction
+share the 20,000-token selection default. It applies to initial and continuation
+selection and leaves room for reasoning before the final tool-ID array. Existing
+explicit config, functional options and per-phase AI-options overrides retain
+their precedence; the environment can also lower or raise the default. This
+allowance does not change selection prompts, eligibility, retry counts, fallback,
+skill-selection budgets or executor behavior. Provider reasoning headroom and
+reviewed model output ceilings still apply. Existing request span events retain
+the selection request allowance, and raw debug records retain effective
+invocation options where the AI client reports them; no new telemetry schema is
+introduced.
+
+#### Bounded selector correction
+
+Selection validates exact `agent_name/capability_name` IDs against the catalog
+frozen for that invocation. A mixed or all-invalid answer can spend the remaining
+`TieredResolution.MaxRetries` allowance on `<selection_correction>` feedback.
+`IterativePlanning.RegenerationFeedbackMaxBytes` also bounds this complete added,
+encoded section; it does not cap the base catalog prompt. There is no new budget.
+Fully valid replacements replace the selection. If later correction is malformed,
+empty, all-invalid or fails at the provider, the last nonempty validated subset
+is used while the caller remains active. Cancellation remains an error. The
+first semantic-empty `[]` keeps existing prior-tool recovery/all-catalog fallback.
+One debug record and actual usage entry correspond to each real call. Invalid
+content is not a provider-health failure. Mixed selections may incur extra calls
+that the former filter-only path avoided; provider retries/failover stay AI-owned.
+
+#### Delegated continuation views
+
+The continuation builder recognises a delegated framework response only when
+the full current catalog registers that exact resolved agent/capability as an
+orchestrator and its response validates as a framework envelope. Missing or
+conflicting registrations and custom receipts retain ordinary digest rendering.
+Readable `response` and clarification text share the existing floor allocation
+with generic extension fields at their original paths and bounded observed child
+outcomes. Succeeded, failed and skipped are facts, not a blanket prohibition on
+retry. Accounting fields can be omitted, with loss reported.
+This projection requires a successful parent `StepResult`; a failed outer
+dispatch follows failure projection instead. Its text is a bounded preview, not
+a guarantee that every child question or child step appears in full. These
+records do not automatically become the parent's own `ClarificationNeeded`.
+
+The complete delegated body and framing pass through canonical prompt preparation
+once before recency selection, so encoded bytes and child detail count together.
+Failed steps and the newest success remain protected; custom encoding and protected
+records can exceed the soft aggregate target, which telemetry reports. Arrays
+remain samples in this derived view: template binding still uses full original
+values. This adds no dispatch metadata, domain receipt interpretation, persistence
+schema or executor scheduling policy.
 
 ### Auto-Configuration
 
@@ -1989,6 +2078,17 @@ TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS=2
 
 The orchestration module includes a debug store that captures complete LLM request/response payloads for production debugging. This addresses the limitation of Jaeger spans which truncate large payloads.
 
+Updated span-preview call sites use the private `truncateTelemetryPreview` helper:
+for valid UTF-8 source text, it backs up a byte-limited prefix to a complete
+character before appending the existing ellipsis. This prevents preview-created
+invalid UTF-8 from rejecting an OTLP batch. It does not rewrite source payloads,
+debug records or model inputs, and is separate from the legacy general-purpose
+`truncateString` helper. Already-invalid source strings are not sanitized.
+This is not a universal conversion of legacy truncation paths; for example,
+tiered selection still uses its existing `truncateRequest` for request/response
+event previews. Full payload fidelity belongs to the recorded debug interaction,
+not to a bounded span preview.
+
 **Architecture:**
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -2065,6 +2165,30 @@ The orchestration module includes a debug store that captures complete LLM reque
   final execution outcome and lineage promotion may retain the current and
   root records longer
 - **Async recording**: Uses goroutines with WaitGroup for non-blocking capture
+- **Trace ownership**: Built-in stores preserve each interaction's optional
+  `TraceID`, filling an omitted value from context. The record aggregate retains
+  its first valid observed trace and backfills absent/empty/invalid values;
+  later linked background work cannot replace a valid aggregate. Redis writers
+  apply this in the same request-local atomic append/retention script; memory
+  storage and the recorder adapter retain the same per-call facts. First arrival
+  is not guaranteed to be the main execution: `StoredExecution.TraceID` owns
+  that identity. Older aggregate records may contain the last writer's trace;
+  legacy interactions without a trace remain unknown. No backfill of historical
+  call provenance, new store interface, new module edge, dedupe-key change,
+  baggage/metric label or exporter is introduced.
+  All writers must be upgraded for stable aggregate metadata; an older binary
+  can still overwrite it. Derived-view deduplication retains its five-field
+  surrogate, but two different valid interaction trace IDs disprove a pairing.
+  When either trace is unknown/legacy, the existing surrogate still applies.
+  Raw storage remains complete; this comparison does not alter recorded values
+  or infer traces for older rows.
+- **Root attribution at baggage capacity**: Stores retain nonempty root baggage
+  precedence, then accept a valid core typed root only for the same current
+  request as the debug record. Otherwise they fall back to that record's own
+  request ID. Managed entry stamps the resolved typed root and detached
+  knowledge extraction copies it for its own request, so a full baggage
+  envelope does not reclassify a child or its late calls as a separate family.
+  No store interface, module edge, ancestry inference or retention policy changes.
 - **Completion provenance ownership**: Callers that defer generic AI recording
   preserve the exact response's reasoning, finish reason and content source in
   their authoritative typed interaction, including available partial-error
@@ -2226,7 +2350,8 @@ causality surface. Their lifetime covers the complete framework-observed
 boundary, including after-planning clone, return-type, and validation checks,
 so a rejected result is recorded as a failed span. Effect payloads are not
 copied into span attributes, events, or logs. Detached knowledge extraction
-uses a fresh shutdown-owned context with copied request baggage and a linked
+uses a fresh shutdown-owned context with copied request baggage, matching typed
+request/root identity, and a linked
 `pipeline.hook.async.knowledge-extraction` root span; it does not retain the
 request's cancellation or make an ended request span its parent. The exact
 model response, fragments, and provider observations remain in execution-debug
@@ -3087,6 +3212,50 @@ success-status override, retry, or planner/executor mutation. Skill decoders
 share only a private duplicate-key token walker, retaining their existing
 number handling and error contracts. No dependency edge or new backend is added.
 
+### Delegated execution correlation
+
+Core's separate `IncomingCall` transport value is consumed by `beginRequestRun`
+before a receiving managed execution establishes its own request ID. Immutable
+typed run correlation retains the existing family root and optional immediate
+`ParentRequestID` / `ParentStepID`. A parent step is local to its parent request.
+Root/header conflicts omit optional parentage with a bounded diagnostic; a root
+alone does not establish an immediate caller. Standard ingress captures headers;
+custom hosts compose the core middleware and in-process callers provide a
+coherent incoming-call value. Direct `ExecutePlan` / `ExecutePlanWithSynthesis`
+remain outside managed parent capture; matching-owner checks prevent copying
+another run's correlation.
+
+Request entry clears inherited current step/phase/plan facts in core context and
+baggage, sets the child's own request ID, and installs request/root baggage with
+`WithBaggageExact`. Rejected identity baggage is removed rather than retaining a
+stale caller value; typed/core request and root identity remain authoritative.
+Built-in LLM-debug stores use the validated typed root as a fallback only when
+their recorded request matches the core current request, preserving legacy
+nonempty-baggage precedence. Detached knowledge extraction copies that matching
+typed root without retaining request cancellation or the active parent span.
+The executor uses
+matching managed correlation for its existing request/root HTTP headers, with
+legacy behavior for unmanaged callers. This changes correlation only, preserving
+dispatch policy, provider selection, prompts and retry behavior.
+
+The common snapshot constructor and recorder persist the optional parent pair
+on the child, including terminal and late-effect writes. `ExecutionSummary` and
+public `CheckpointResponse` carry the same pair. Checkpoint creation and the
+authoritative run snapshot preserve typed root and parent facts; supported
+`BuildResumeContext` restoration wins over approval transport metadata, including
+explicit absence of a parent. Legacy checkpoints use their saved request ID as
+the root fallback; custom low-level resume paths have no new restoration promise.
+Optional correlation does not add a required checkpoint-enricher capability.
+Old checkpoint writers can discard additive fields on rewrite, so all writers
+must be updated before claiming preservation across resume. No backfill occurs.
+
+Current TTL algorithms remain: resolving a formerly missing root can activate
+existing root-retention promotion; an immediate parent receives no new retention
+promotion. `CreatedAt` is snapshot-write time, not an immutable execution start.
+The trace index maps a trace to one request ID (last successful mapping write),
+and `GetByTraceID` returns one record. It does not enumerate a delegation family;
+Jaeger's span ancestry remains independent of this convenience index.
+
 ### Construction and request lifecycle
 
 Canonical construction resolves a complete `OrchestratorConfig` before request
@@ -3152,6 +3321,18 @@ success. A deadline is failed; caller cancellation is cancelled; HITL is
 suspended. Legacy/direct-plan records without this field have unknown lifecycle.
 No fake initial plan is stored: before the first ordinary snapshot, live activity
 and hooks are the observation surfaces. Resume uses a new linked request ID.
+
+At the executor's existing joined cancellation boundaries, return an owned
+snapshot of observed steps together with the context error. Individual step
+outcomes and raw dispatch evidence remain intact; the aggregate is unsuccessful
+and has elapsed duration. Available context facts are `termination_reason`
+(`cancelled` or `deadline`), `execution_error` and `context_cause` in result
+metadata; they do not diagnose who cancelled an unknown historical request.
+The phase error handoff merges restored step IDs once and preserves this partial
+result through buffered and native-stream delivery without synthesis or
+after-execution hooks. The existing terminal publisher remains authoritative.
+Direct-plan APIs keep their error response shape and use error retention for the
+unsuccessful stored result, without gaining a managed lifecycle observation.
 
 The request recorder assigns `RecordRevision` to each accepted snapshot. Late
 hook-effect updates merge with the latest full record; they cannot restore an
@@ -3582,6 +3763,34 @@ modularity and flexibility.
 ---
 
 ## Version History
+
+Version 1.52 (2026-11-02): document caller-owned delegated clarification through
+plan, execution and response boundaries; use shared one-object JSON encoding in
+both synthesis prompt paths. Preserve prior failures, conditional parent
+continuation and adapter-owned delivery. Describe bounded delegated answer and
+child-outcome views, selector correction within the existing attempt budget, and
+owned partial results at existing cancellation boundaries. No automatic question
+escalation, durable wait or executor retry policy is introduced.
+
+Version 1.51 (2026-11-01): retain a stable first-valid LLM-debug aggregate trace
+with empty/invalid backfill and additive per-interaction trace provenance,
+including linked background work. Preserve execution trace authority,
+request-local atomicity, mixed-writer compatibility and retention behavior.
+Reject only dedupe pairings contradicted by two valid different call traces;
+retain legacy matching when either trace is unknown.
+
+Version 1.50 (2026-11-01): capture immediate execution parentage separately
+from the root; isolate child-local request/step/phase/plan context; persist
+typed correlation through snapshots and authoritative checkpoint resume,
+including public checkpoint projections. Preserve recorder payloads and
+existing trace ancestry; document snapshot-time and scalar trace-index limits.
+Keep the updated telemetry-preview call sites on valid UTF-8 boundaries without changing
+model inputs or raw debug payloads.
+
+Version 1.49 (2026-10-17): raise the shared initial/continuation tiered-selection
+base output default from 2000 to 20000 tokens. Preserve override precedence,
+selection and retry behavior, provider budget rules and existing telemetry;
+skill-selection budgets remain separate.
 
 Version 1.48 (2026-10-15): add read-only execution-result selection, strict
 ToolResponse data inspection and execution-owner identity resolution. Domain

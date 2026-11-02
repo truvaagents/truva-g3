@@ -829,6 +829,16 @@ The LLM uses descriptions to select tools and generate JSON payloads. TruvaG3 us
 
 ## 7. Step 4: Implement Handlers
 
+Standard `BaseAgent` servers automatically capture caller request/step/root
+headers into `core.IncomingCall`, separate from current execution identity.
+Pass `r.Context()` to orchestration as in the examples below: the harness
+consumes incoming facts, assigns its own request ID and isolates local
+step/phase/plan context. There is no per-agent lineage implementation to add.
+For custom HTTP hosts, compose `core.IncomingCallMiddleware(logger)(handler)`;
+for explicit in-process delegation, use `core.WithIncomingCall` with the
+invoking execution and optional local step, checking its validation error.
+Incoming facts provide correlation and do not authenticate the caller.
+
 ### Non-Streaming Handler (ProcessRequest)
 
 ```go
@@ -843,6 +853,7 @@ import (
     "time"
 
     "github.com/truvaagents/truva-g3/core"
+    "github.com/truvaagents/truva-g3/orchestration"
     "github.com/truvaagents/truva-g3/telemetry"
     "go.opentelemetry.io/otel/attribute"
 )
@@ -856,6 +867,7 @@ type OrchestrationResponse struct {
     ExecutionTime string                 `json:"execution_time"`
     Confidence    float64                `json:"confidence"`
     Metadata      map[string]interface{} `json:"metadata,omitempty"`
+    Clarification *orchestration.ClarificationRequest `json:"clarification,omitempty"`
 }
 
 func (a *YourAgent) handleNaturalOrchestration(w http.ResponseWriter, r *http.Request) {
@@ -948,6 +960,7 @@ func (a *YourAgent) handleNaturalOrchestration(w http.ResponseWriter, r *http.Re
         ExecutionTime: time.Since(startTime).String(),
         Confidence:    result.Confidence,
         Metadata:      result.Metadata,
+        Clarification: result.Clarification,
     }
 
     // 7. Record metrics
@@ -1126,6 +1139,27 @@ func (a *YourChatAgent) ProcessWithStreaming(
         return fmt.Errorf("streaming orchestration failed: %w", err)
     }
 
+    // Native interruption can return partial output with a nil Go error.
+    // Preserve it as partial history and leave this example's success path.
+    if result.PartialContent || !result.StreamCompleted || len(result.Errors) > 0 {
+        partialMetadata := map[string]interface{}{
+            "request_id":       result.RequestID,
+            "partial_content":  result.PartialContent,
+            "stream_completed": result.StreamCompleted,
+            "finish_reason":    result.FinishReason,
+            "errors":           result.Errors,
+        }
+        if result.Clarification != nil {
+            partialMetadata["clarification"] = result.Clarification
+        }
+        a.sessionStore.AddMessage(sessionID, Message{
+            Role: "assistant", Content: result.Response,
+            Timestamp: time.Now(), Metadata: partialMetadata,
+        })
+        return fmt.Errorf("incomplete streamed response %s: %w",
+            result.RequestID, core.ErrStreamPartiallyCompleted)
+    }
+
     // 7. Send token usage stats
     if result.Usage != nil {
         callback.SendUsage(
@@ -1149,17 +1183,21 @@ func (a *YourChatAgent) ProcessWithStreaming(
 
     // 10. Send completion event
     callback.SendDone(result.RequestID, result.AgentsInvolved,
-        time.Since(startTime).Milliseconds())
+        time.Since(startTime).Milliseconds(), &result.OrchestratorResponse)
 
     // 11. Store assistant response in session history
+    assistantMetadata := map[string]interface{}{
+        "request_id": result.RequestID,
+        "tools_used": result.AgentsInvolved,
+    }
+    if result.Clarification != nil {
+        assistantMetadata["clarification"] = result.Clarification
+    }
     a.sessionStore.AddMessage(sessionID, Message{
         Role:      "assistant",
         Content:   result.Response,
         Timestamp: time.Now(),
-        Metadata: map[string]interface{}{
-            "request_id": result.RequestID,
-            "tools_used": result.AgentsInvolved,
-        },
+        Metadata:  assistantMetadata,
     })
 
     // 12. Log completion
@@ -1297,6 +1335,58 @@ func writeError(w http.ResponseWriter, statusCode int, message string, err error
 
 Define a clean interface for SSE event types:
 
+When an orchestrated turn returns `response.Clarification`, preserve that
+optional object in the adapter's buffered JSON and final SSE event, and in
+assistant-message metadata if history must restore the outcome. It is additional
+input requested by this turn, not a HITL approval or an automatically resumable
+task. A parent agent may handle a delegated question itself; root escalation
+depends on its own planning and termination rules. An unattended application
+owns any notification, retained task state and later trigger.
+
+Keep these boundaries distinct when implementing an agent-as-tool:
+
+| Boundary | Clarification field | Responsibility |
+|---|---|---|
+| Model routing plan | `needs_user_input` | Request input with a nonblank question; the phase loop ends before executing that plan |
+| Framework execution result | `clarification_needed` | Retain the question alongside earlier step evidence |
+| Framework response | `clarification` | Return the structured object alongside the synthesized conversational answer |
+| Application JSON / final SSE / assistant history | Adapter-owned envelope | Copy the optional object explicitly so live clients and history reload can display it |
+
+A delegated child's caller is its immediate parent. Given another planning
+phase, the parent can answer from existing context, fetch missing facts through
+available capabilities, or ask its own caller. The framework does not copy a
+child's question into a terminal parent's root response. A child's request ID
+and parent/step links identify who requested input; a shared trace alone does
+not establish who delivered it to the user. Prior failures stay failures, and
+clarification ends a turn without establishing completion of the business task.
+See [Clarification outcomes and delegated callers](../reference/API_REFERENCE.md#clarification-outcomes-and-delegated-callers)
+for the shared type, a child-response example and unattended caller policy.
+
+The DevOps example's successful-response path still requires
+`execution.Success=true`. A turn containing failed earlier work and a question
+can remain visible in framework/Viewer evidence without being delivered by that
+adapter. Supporting this mixed outcome requires an explicit adapter contract.
+
+Observe errors from the final completion frame as well as content chunks. For
+callbacks exposing `Err() error`, inspect it immediately after `SendDone` and
+before reporting application success. Keep a completed response in history
+under the existing store policy, marking failed live delivery separately. Record
+the error on the owning application span/log with the execution request ID and
+existing failure metrics. A broken stream cannot carry a reliable second error
+frame; automatic reruns can repeat completed effects. Framework completion and
+transport delivery are distinct evidence. See the DevOps chat example for this
+pass-through and final-frame error pattern. The response-aware interface below
+is application-owned, not a change to `core.StreamCallback` or universal field
+coverage for all examples. Its minimal sender omits delivery-error storage;
+use the DevOps implementation when adopting the complete error/history pattern.
+
+For HITL resume, a callback may buffer terminal frames until durable coordinator
+finalization. Observe their actual write/flush outcome after that boundary.
+Returning a transport-only error as an executor failure after completed effects
+can leave an approved checkpoint eligible for another attempt. The DevOps resume
+adapter defers terminal usage/finish/done and once-only history completion; its
+late delivery failure does not change the coordinator's completed checkpoint.
+
 ```go
 // sse_handler.go
 package main
@@ -1309,6 +1399,7 @@ import (
     "time"
 
     "github.com/truvaagents/truva-g3/core"
+    "github.com/truvaagents/truva-g3/orchestration"
     "github.com/truvaagents/truva-g3/telemetry"
     "go.opentelemetry.io/otel/attribute"
 )
@@ -1318,7 +1409,7 @@ type StreamCallback interface {
     SendStatus(step, message string)
     SendStep(stepID, tool string, success bool, durationMs int64)
     SendChunk(text string)
-    SendDone(requestID string, toolsUsed []string, totalDurationMs int64)
+    SendDone(requestID string, toolsUsed []string, totalDurationMs int64, response *orchestration.OrchestratorResponse)
     SendError(code, message string, retryable bool)
     SendUsage(promptTokens, completionTokens, totalTokens int)
     SendFinish(reason string)
@@ -1352,10 +1443,14 @@ func (c *SSECallback) SendChunk(text string) {
     c.sendEvent("chunk", map[string]interface{}{"text": text})
 }
 
-func (c *SSECallback) SendDone(requestID string, toolsUsed []string, totalDurationMs int64) {
-    c.sendEvent("done", map[string]interface{}{
+func (c *SSECallback) SendDone(requestID string, toolsUsed []string, totalDurationMs int64, response *orchestration.OrchestratorResponse) {
+    data := map[string]interface{}{
         "request_id": requestID, "tools_used": toolsUsed, "total_duration_ms": totalDurationMs,
-    })
+    }
+    if response != nil && response.Clarification != nil {
+        data["clarification"] = response.Clarification
+    }
+    c.sendEvent("done", data)
 }
 
 func (c *SSECallback) SendError(code, message string, retryable bool) {
@@ -1485,6 +1580,11 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     // 9. Process with streaming
     callback := NewSSECallback(w, flusher)
     if err := h.agent.ProcessWithStreaming(ctx, sessionID, req.Message, callback); err != nil {
+        if errors.Is(err, core.ErrStreamPartiallyCompleted) {
+            // Partial history/execution evidence is retained. Replay could repeat effects.
+            callback.SendError("stream_incomplete", err.Error(), false)
+            return
+        }
         // Extract core.ProviderError to surface the real error code and retryability.
         // Provider 4xx errors (bad request, rate limit) are NOT retryable by the client.
         // Server errors and transient proxy errors ARE retryable.
@@ -1525,7 +1625,7 @@ The SSE protocol used by TruvaG3 streaming agents:
 | `chunk` | AI token generated | `text` |
 | `usage` | Token usage stats | `prompt_tokens`, `completion_tokens`, `total_tokens` |
 | `finish` | AI finish reason | `reason` |
-| `done` | Request complete | `request_id`, `tools_used`, `total_duration_ms` |
+| `done` | This turn's completion | `request_id`, `tools_used`, `total_duration_ms`, optional `clarification` |
 | `error` | Error occurred | `code`, `message`, `retryable` |
 
 ---

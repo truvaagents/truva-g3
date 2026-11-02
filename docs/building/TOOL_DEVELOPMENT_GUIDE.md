@@ -815,6 +815,15 @@ func (t *YourTool) sendUpstreamError(rw http.ResponseWriter, message string, inf
 
 ### Handler Checklist
 
+`BaseTool` servers capture the incoming caller's request/step/root headers
+automatically in the separate `core.IncomingCall` slot. A custom HTTP server
+can compose `core.IncomingCallMiddleware(logger)` explicitly. Inspect it with
+`core.IncomingCallFromContext` when caller correlation is needed; this does not
+start an orchestration execution or authenticate the caller. Invalid optional
+envelopes emit a bounded warning and leave application processing available.
+Legacy `ExtractRequestContext` remains an explicit current-context helper for
+non-orchestrating handlers that intentionally record under the invoking request.
+
 Every handler should:
 
 - [ ] Extract context from request: `ctx := r.Context()`

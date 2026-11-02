@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Change only OpenRouter's built-in `default` alias to
+  `deepseek/deepseek-v4.1-flash` and `smart` alias to `z-ai/glm-5.3`. Keep `fast`
+  at `openai/gpt-6-luna` and `code` at `openrouter/pareto-code`. Nonempty alias
+  environment overrides, exact model/router pass-through and request budgets
+  retain their existing contracts.
+- Declare JSON-object support for exact OpenRouter `z-ai/glm-5.3`, independently
+  of the alias mapping. No JSON-schema or portable reasoning support is inferred;
+  protected routing/privacy constraints and exact budgeting remain unchanged.
+- The concrete OpenRouter `default` and `smart` selections can now supply a
+  stable AI-output-cache fingerprint under the existing eligibility rules.
+  `code`, explicit router selections and router-valued alias overrides remain
+  cache-ineligible; a nonempty native `models` fallback list or any unstable
+  entry still makes the whole failover chain ineligible.
+
 ## v0.6.1
 
 ### Fixed

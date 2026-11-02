@@ -1,5 +1,68 @@
 # Changelog
 
+## Unreleased
+
+- Encode structured clarification fields once as a JSON object using Go's
+  standard HTML-safe Unicode escaping
+  in both synthesis prompt paths, including when skills are disabled. Preserve
+  typed/raw outcomes and actual model-facing debug prompts. Clarification ends
+  a turn; it does not introduce waiting, resumption or automatic child-to-root
+  question escalation.
+  Earlier failed steps remain failed; adapters forwarding their own JSON/SSE
+  envelopes explicitly carry the optional structured response field. Application
+  delivery errors do not rewrite an already completed framework execution.
+
+- Preserve readable answers/questions from registered framework delegation
+  envelopes in bounded continuation views, alongside generic extension-field
+  paths and factual succeeded/failed/skipped child outcomes. Count encoded
+  delegated framing and detail before retention; disclose omissions and protected
+  overflow. Custom receipts, raw responses, bindings and executor policy remain
+  unchanged.
+- Correct invalid full tool IDs within the existing tiered-selection attempt
+  budget and frozen catalog. Retain the last usable subset if correction fails,
+  unless the caller is cancelled. Fully valid replacements replace rather than
+  union selections. Mixed selections can now cost extra calls. Reuse the existing
+  regeneration-feedback byte limit and record one debug interaction per call.
+- Return observed executor results together with cancellation/deadline errors at
+  existing joined boundaries. Preserve individual outcomes, force aggregate
+  failure, carry available context cause, and merge restored steps once. Managed
+  finalization and direct-plan error retention keep their existing ownership;
+  no synthesis or after-execution hooks run because a partial result is returned.
+
+- Preserve managed LLM-debug request-family attribution at baggage capacity,
+  using the existing validated typed core root only for a matching request.
+  Detached knowledge extraction carries that identity without retaining caller
+  cancellation. Legacy nonempty root-baggage precedence, payloads, retention
+  and execution/retry policy remain unchanged.
+
+- Preserve per-interaction trace IDs and a stable first-valid record trace in
+  Redis and memory LLM-debug stores, including the telemetry recorder adapter.
+  Linked background calls no longer replace an existing valid record trace.
+  The execution's main trace remains owned by its execution record; old call
+  traces are not inferred or backfilled. Retention is unchanged. The existing
+  five-field dedupe surrogate still applies to legacy/unknown traces; different
+  valid call traces prevent a false pairing without modifying raw records.
+
+- Record optional immediate `parent_request_id` / `parent_step_id` on managed
+  executions, summaries and HITL checkpoints/public responses. Keep the family
+  root distinct and preserve checkpoint-owned correlation across resume.
+- Isolate child request/step/phase/plan context at request entry. Use exact
+  identity baggage replacement, bounded omission diagnostics and typed managed
+  request/root headers when baggage capacity prevents propagation. Preserve
+  existing model/debug payloads, trace ancestry and executor policy.
+
+- Keep the updated span-preview call sites on UTF-8 character boundaries when their valid
+  source text exceeds a byte-prefix limit. This prevents an invalid preview
+  from rejecting an OTLP export batch. Raw payloads, debug records, model inputs
+  and the legacy general-purpose truncation helper are unchanged.
+
+- Raise the per-call base tiered tool-selection output allowance from 2,000 to
+  20,000 tokens for initial and continuation selection. Canonical configuration
+  and direct provider construction share the same default. Existing environment,
+  typed-config, functional-option and AI-options overrides remain authoritative;
+  skill-selection budgets, selection/retry behavior, provider reasoning headroom
+  and model output ceilings are unchanged.
+
 ## v0.6.1
 
 - Add opt-in `LastSuccessfulStep`, `SuccessfulToolData` and `ExecutionRequestID`

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add validated `IncomingCall` context helpers and automatic header capture in
+  agent/tool HTTP servers. Incoming caller request/step/root facts remain
+  separate from the receiver's current identity. Invalid optional correlation
+  is omitted with a bounded diagnostic; application execution and streaming
+  behavior are preserved.
+
 ## v0.6.1
 
 - Label agent initialized/shutdown lifecycle counters with `module=core`.

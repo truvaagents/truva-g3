@@ -23,6 +23,8 @@ Multi-agent coordination with AI-driven orchestration and declarative workflows.
 16. [Scaling to Hundreds of Agents](#16-scaling-to-hundreds-of-agents---capability-provider-architecture)
 17. [Performance Considerations](#17-performance-considerations)
 18. [Streaming Support](#18-streaming-support)
+    - [Clarification Requests](#clarification-requests)
+    - [Following a delegated question](#following-a-delegated-question)
 19. [Potential Enhancements](#19-potential-enhancements)
 20. [API Reference](#20-api-reference)
 21. [Best Practices & Tips](#21-best-practices--tips)
@@ -1517,6 +1519,25 @@ For the interaction between HTTP, delegation and phase budgets, see
 
 The orchestration module supports various usage patterns as demonstrated in the documentation above. Refer to the code examples in this README for implementation guidance.
 
+Continuation prompts use readable bounded answers/questions for registered,
+validated framework delegation envelopes, with generic output paths and factual
+child outcomes. Custom receipts keep ordinary digests. The existing floor and
+soft aggregate budgets still apply; encoded delegated framing/detail count before
+retention. Raw responses and template binding values remain unchanged.
+
+Tiered selection corrects invalid exact capability IDs within its existing
+attempt allowance and frozen catalog. A fully valid replacement replaces the
+set; a failed correction retains the last usable subset while the caller remains
+active. This may add calls for mixed valid/invalid answers. The existing
+`TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` also bounds its added section.
+
+When execution is cancelled at an existing joined boundary, error-returning
+managed APIs can return the observed partial `ExecutionResult` alongside the
+context error. Its aggregate is unsuccessful even if individual steps succeeded.
+The phase handoff preserves restored results once; no synthesis or after-execution
+hook runs merely because partial evidence is available. Available cause metadata
+is recorded without changing lifecycle ownership or direct-plan error retention.
+
 ## 15. Requirements
 
 - **A `core.Discovery` implementation** - Redis is the included default, not a runtime requirement
@@ -1561,6 +1582,7 @@ A 2-phase approach that reduces LLM token usage by 50-75% without external servi
 config := orchestration.DefaultConfig()
 // EnableTieredResolution: true (default)
 // TieredResolution.MinToolsForTiering: 20 (default)
+// TieredResolution.SelectionMaxTokens: 20000 (default)
 
 // Or configure explicitly
 config.EnableTieredResolution = true
@@ -1573,7 +1595,16 @@ config.TieredResolution = orchestration.TieredCapabilityConfig{
 ```bash
 export TRUVAG3_TIERED_RESOLUTION_ENABLED=true
 export TRUVAG3_TIERED_MIN_TOOLS=20
+export TRUVAG3_TIERED_SELECTION_MAX_TOKENS=20000
 ```
+
+The selection output allowance is per call, including continuation selection.
+It leaves room for reasoning models and is a ceiling rather than a target
+response length. Set a lower or higher positive value through the environment,
+`TieredCapabilityConfig.SelectionMaxTokens`, or
+`WithTieredSelectionMaxTokens(n)`; explicit code settings take precedence over
+the environment. Provider reasoning headroom and model output ceilings still
+apply. Skill-selection and retry budgets are separate and unchanged.
 
 **Token savings (example: 50 tools, user needs 3):**
 | Approach | Total Tokens | Savings |
@@ -1717,13 +1748,14 @@ Stream orchestration results token-by-token as the AI generates them:
 func (o *AIOrchestrator) ProcessRequestStreaming(
     ctx context.Context,
     query string,
-    tools []*ServiceInfo,
+    metadata map[string]interface{},
     callback core.StreamCallback,
 ) (*StreamingOrchestratorResponse, error)
 ```
 
-The shared request lifecycle chooses native delivery only when the client
-implements the streaming contract and reports `SupportsStreaming() == true`.
+The shared request lifecycle uses a legacy `core.StreamingAIClient`'s
+`SupportsStreaming()` result to choose native delivery. A request-aware-only
+`core.StreamingAIRequestClient` is also eligible without that legacy method.
 Otherwise it uses simulated delivery, emits `streaming_fallback`, and chunks
 on UTF-8 rune boundaries rather than splitting multibyte characters.
 
@@ -1844,7 +1876,7 @@ type OrchestratorResponse struct {
     Usage           *core.TokenUsage          // Total prompt + completion tokens
     UsageByPhase    map[string]core.TokenUsage // Breakdown by orchestration phase
 
-    // Set when the planner determines it needs information from the user to
+    // Set when the planner determines it needs information from its caller to
     // continue (e.g., "What are your travel dates?"). The natural-language
     // question is also woven into Response by the synthesizer; this structured
     // field is provided for sophisticated UI consumers (quick-reply chips,
@@ -1857,7 +1889,11 @@ The `UsageByPhase` map keys correspond to orchestration phases: `planning`, `cor
 
 #### Clarification Requests
 
-When the planner determines that progress depends on information only the user can provide — for example, *"What are your travel dates?"* in a multi-step trip planner — the orchestrator surfaces the question two ways simultaneously:
+When the planner determines that progress depends on information its caller must
+provide — for example, *"What are your travel dates?"* in a multi-step trip
+planner — the orchestrator supplies a structured question and asks synthesis to
+include it in the natural-language answer. The caller can be a person, another
+agent, or an unattended application:
 
 1. **`Response`** — the synthesizer weaves the question into the natural-language reply, so simple chat agents can forward it as-is without any code changes.
 2. **`Clarification`** — a structured field for UI consumers that want to render quick-reply chips, form fields, or other affordances:
@@ -1870,9 +1906,88 @@ type ClarificationRequest struct {
 }
 ```
 
-When `Clarification` is set, the orchestrator has terminated the current turn cleanly — the conversation continues on the next user message, with the new turn re-entering through `ProcessRequest` as a fresh invocation. There is no special "resume" protocol; conversation state is owned by the calling agent (typically via session-store enrichments).
+When `Clarification` is set, the orchestrator has ended the current turn because
+additional caller input is needed. A later answer re-enters through
+`ProcessRequest` as a fresh invocation. Clarification creates no HITL checkpoint,
+waiting worker or special resume protocol; the caller owns conversation and task
+state. Earlier failed steps retain their recorded outcomes.
 
-For chat agents that don't need structured clarification handling, just forward `response.Response` as-is — the embedded question reaches the user automatically. The `Clarification` field can be ignored.
+The clarification plan short-circuits before HITL approval and execution of that
+plan's steps; earlier phases remain recorded. Clarification is an outcome,
+not an error by itself. It does not reset failed steps to successful: the
+combined `ExecutionResult.Success` remains false if a prior step failed.
+
+For a delegated agent, its parent is the caller. The parent can use information
+already supplied, retrieve more evidence, ask its own caller, or finish with a
+limitation. Another planning phase depends on the existing terminal, iterative
+and budget rules. A child's question is not automatically copied to the root
+response; terminal parents can retain it only as child evidence and prose.
+
+Synthesis receives the three clarification fields as one JSON object inside
+`<clarification_needed>`, encoded with Go's standard `encoding/json` HTML-safe
+escaping. For example, a literal `<` inside a question is represented as
+`\u003c`, rather than an HTML entity or a second nested JSON string. One JSON
+decode restores the original field values. Both buffered and native-streaming
+synthesis use this representation, with skills enabled or disabled. Typed
+results, stored records and raw model responses retain their original values;
+debug capture stores the actual encoded model prompt.
+
+#### Following a delegated question
+
+Suppose a parent delegates a report request and the child needs the reporting
+period. The same child-owned question appears under different names at each
+framework boundary:
+
+| Boundary | Field | Meaning |
+| --- | --- | --- |
+| Child model plan | `needs_user_input` | The planner's request for caller input |
+| Child execution result | `clarification_needed` | The recorded outcome of the child's phase loop |
+| Child framework response | `clarification` | The structured question returned to the caller |
+| Parent continuation prompt | Bounded preview of child `clarification` | Evidence for the parent's next planning decision, when continuation is available |
+
+The structured portion of a child response can contain:
+
+```json
+{
+  "clarification": {
+    "question": "Which reporting period should I use?",
+    "missing_fields": ["reporting_period"],
+    "partial_progress": "The report source has been identified."
+  }
+}
+```
+
+If the original request already supplied the period, the parent can delegate a
+fresh request containing it. If the answer can be retrieved, the parent can plan
+the relevant tool call. When only its caller can decide, the parent can emit its
+own `needs_user_input`. An unattended caller instead applies its configured
+task/notification policy; the framework supplies no default notification channel
+or automatic waiting worker. These are planner/application decisions, not
+executor retries or automatic escalation.
+
+The readable parent view applies to successful dispatches whose registered
+orchestrator capability returned a valid framework response envelope. Custom
+receipts retain the ordinary result view. Previews and child outcome lists are
+bounded and can omit text. The derived view does not replace the executor-held
+response used for template binding; raw dispatch evidence is a separate record.
+Missing root `clarification` does not establish
+that no child requested input. See
+[continuation view limits](../docs/reference/LIMITS_CHEATSHEET.md#continuation-prompt-limits).
+
+Text-only consumers can forward `response.Response`. Consumers needing a
+structured outcome also pass through `clarification` in their JSON/SSE envelope
+and optional history metadata. A successful framework turn does not establish
+that an HTTP client received the final frame. Adapters must observe their own
+write/flush failures; this delivery error does not rewrite an already completed
+framework execution.
+
+The DevOps Chat example passes this object through buffered responses, the SSE
+`done` event and assistant history; this is an adapter implementation, not a
+guarantee that every example/custom SSE envelope already forwards it. Its
+existing unsuccessful-execution guard still applies, so a mixed failure plus
+clarification is not automatically delivered as a successful response. For
+adapter responsibilities, see the
+[Agent Development Guide](../docs/building/AGENT_DEVELOPMENT_GUIDE.md).
 
 ### Step Callbacks for Real-Time Progress
 
@@ -1923,7 +2038,7 @@ These features are not yet implemented but could be added:
 - `StepCallback` - Callback type for per-step progress notifications
 - `LLMDebugStore` - Interface for LLM debug payload storage
 - `LLMDebugRetentionPreserver` - Optional late/cross-process retention-floor capability
-- `LLMInteraction` - Single LLM call record with `SourceComponent` and `CallDescription` attribution
+- `LLMInteraction` - Single LLM call record with `SourceComponent`, `CallDescription` and optional per-call `TraceID` attribution; legacy missing traces remain unknown
 - `LLMDebugRecordSummary` - Lightweight summary with `SourceComponents` for agent name listing
 - `LLMCallRecorderAdapter` - Bridges `LLMDebugStore` to `telemetry.LLMCallRecorder`
 - `ExecutionStore` - Required request-oriented execution persistence contract
@@ -1950,7 +2065,7 @@ These features are not yet implemented but could be added:
 - `NewAIOrchestrator(config, discovery, aiClient)` - Low-level orchestrator creation
 - `NewWorkflowEngine(discovery, stateStore, logger)` - Create workflow engine
 - `ProcessRequest(ctx, request, metadata)` - Process natural language request
-- `ProcessRequestStreaming(ctx, query, tools, callback)` - Stream orchestration response with real-time tokens
+- `ProcessRequestStreaming(ctx, query, metadata, callback)` - Stream orchestration response with real-time tokens
 - `ExecutePlan(ctx, plan)` - Execute pre-defined routing plan (raw results, no synthesis)
 - `ExecutePlanWithSynthesis(ctx, plan, originalRequest)` - Workflow-mode plan execution and synthesis with DAG storage; it does not run pipeline hooks or store a governed final response
 - `WithStepCallback(ctx, callback)` - Add per-request step completion callback
@@ -2001,11 +2116,45 @@ separate from application `session_id`; an application may intentionally map
 the same opaque UUID to both concepts.
 
 `ExecutionStore.ExtendTTL` extends the requested execution and every available
-retained ancestor with cycle protection. A missing requested execution returns
+record in its existing request/root retention chain with cycle protection;
+immediate `parent_request_id` links do not add retention edges. A missing requested execution returns
 `ErrExecutionRecordNotFound`. If only a later ancestor has expired, the method
 returns success after extending the available chain and does not recreate the
 missing record. Non-positive direct Redis TTL options are normalized to the
 framework defaults after all options are applied.
+
+### Delegated execution lineage
+
+Managed request entry points capture the immediate caller from core's separate
+incoming-call context and create their own execution identity. Stored execution
+records and summaries expose optional `parent_request_id` / `parent_step_id`;
+`original_request_id` keeps the request-family root. A step ID is local to its
+parent request, and one step can have several child executions. Parent links
+remain useful when the parent fails before retaining a child response. Legacy
+records without these fields have unknown immediate parentage.
+
+Standard core HTTP servers install incoming-call capture automatically. Custom
+hosts compose `core.IncomingCallMiddleware(logger)`, and explicit in-process
+delegation uses `core.WithIncomingCall`, checking its error. The harness clears
+inherited current step/phase/plan identity before hooks/model calls and preserves
+each child's LLM-debug ownership. Exact baggage rejection removes stale values;
+typed managed identity still supplies existing request/root dispatch headers.
+Root/header conflicts omit optional parentage with a bounded diagnostic.
+
+HITL checkpoints and public checkpoint responses expose the same optional pair,
+separately from checkpoint/resume lineage. Supported `BuildResumeContext` uses
+checkpoint-owned root/parent facts, including parent absence, ahead of approval
+transport metadata. Upgrade participating checkpoint writers together: an older
+writer can discard additive fields on rewrite. Direct `ExecutePlan` and
+`ExecutePlanWithSynthesis` retain their separate API behavior and do not capture
+managed parentage from an unrelated inherited context.
+
+This adds no model calls or per-family aggregate statistics. Existing root TTL
+promotion can apply when a previously missing root is resolved; immediate
+parent fields introduce no ancestor retention. `CreatedAt` is snapshot-write
+time. `GetByTraceID` returns one last-mapped execution, while Jaeger retains the
+distributed span graph. Consumers enumerate relationships using stored parent
+facts and bounded record/index reads rather than the scalar trace lookup.
 
 ### Terminal response evidence
 
@@ -2268,14 +2417,19 @@ The orchestration module captures complete LLM request/response payloads for pro
   redaction of prompts or responses
 - **Request Correlation**: Query by the stable prefix-aware `request_id` carried
   across logs, traces, and execution records
+- **Root Attribution**: Nonempty root baggage takes precedence; a validated
+  typed core root is the fallback only for a matching current request.
+  Managed entry and detached knowledge extraction preserve that identity
+  even when the root cannot fit bounded baggage
 - **Typed Recording Families**: core orchestration calls include `plan_generation`, `correction`, `synthesis`, `synthesis_streaming`, `micro_resolution`, `semantic_retry`, `tiered_selection`, and `hallucination_detection`; optional memory/compaction features add their own types, and `ai.InstrumentedAIClient` contributes `agent_llm_call`
 - **Effective Request Evidence**: request-aware calls record sanitized requested/effective model and sampling intent plus bounded provider adjustments; prompt/system bodies remain in the existing debug payload fields and are never copied into metrics or preparation reports
 - **Source Attribution**: `SourceComponent` field identifies which agent/component made each LLM call; `SourceComponents` on summaries provides per-record agent name listing
 - **Three-Layer Resilience**: Built-in retry → optional circuit breaker → NoOp fallback
 - **Provider Tracking**: Captures the normalized provider identity returned by the selected client (for example `openai`, `anthropic`, `gemini`, `azureopenai`, `bedrock`, or a custom provider name)
-- **Atomic Storage and Retention**: One Redis operation appends the interaction,
-  updates metadata/index data, and preserves any longer or persistent TTL from
-  final execution, HITL, lineage, or investigation retention
+- **Atomic Storage and Retention**: One request-local Redis operation appends
+  the interaction, updates metadata and preserves any longer or persistent TTL
+  from final execution, HITL, lineage or investigation retention. The recent
+  index is a separate advisory projection with bounded maintenance
 - **Adopter-Owned Protection**: Built-in writers preserve exact application
   and model payloads. Applications that require sanitization must supply it
   through their logger, telemetry pipeline, store, recorder, middleware, or

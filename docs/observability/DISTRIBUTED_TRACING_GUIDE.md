@@ -263,6 +263,7 @@ interchangeably:
 |------------|-------|------------------|
 | `request_id` | One orchestration execution/request. A top-level chat turn gets one ID; delegated and resumed executions get their own IDs. | “What happened in this execution?” |
 | `original_request_id` | One request family, such as an interrupt plus its resume or a parent plus delegated execution. | “Which related executions belong to this causal request family?” |
+| `parent_request_id` / `parent_step_id` | Optional immediate invoking execution and the step local to it, recorded on the child. | “Which execution and step directly delegated this run?” |
 | `conversation_id` | Multiple top-level turns in one application conversation. Related resume/delegation executions inherit it. | “What happened across this multi-turn conversation?” |
 | `trace_id` | One distributed trace. Synchronous delegation can remain in the same trace; a later HITL resume normally starts a new linked trace. | “Which spans participated in this distributed operation?” |
 
@@ -271,6 +272,57 @@ taxonomy. An application may map one chat-session UUID to
 `conversation_id`, as the reference chat agents do, but a session may instead
 represent authentication, browser state, or another lifecycle. The framework
 therefore does not infer conversation identity from `session_id`.
+
+Standard core HTTP servers capture caller request/step/root headers using
+`IncomingCallMiddleware`, separate from current-context extraction and existing
+HTTP span stamping. Managed orchestration consumes that envelope, assigns its
+own request ID and clears inherited step/phase/plan context before hooks/model
+calls. Exact baggage replacement either installs the selected identity or
+removes its stale member; typed identity preserves recording and managed
+request/root headers when baggage cannot fit. Custom HTTP hosts install the
+same core middleware; in-process callers provide `WithIncomingCall` explicitly.
+
+For LLM-debug family attribution, nonempty root baggage retains precedence.
+If absent, built-in writers accept the validated core typed root only when
+the core current request matches the debug record's request; otherwise they
+use the record's own ID. Managed entry stamps this root, and detached knowledge
+extraction copies the matching typed identity onto its shutdown-owned context.
+This does not increase baggage limits, infer relationships or retain the
+request's cancellation/parent span in background work.
+
+The child orchestration request span and start log expose non-empty parent
+fields. Parent IDs are not added to baggage, metric labels or LLM interaction
+payloads. `orchestrator.correlation.omitted` records `request_id` first, plus
+bounded `field` and `reason`; it does not mark business execution failed.
+Existing HTTP spans continue describing incoming transport metadata. All levels
+may share one trace; Jaeger retains the HTTP/step ancestry. The execution
+store's scalar trace lookup returns only one member and is not a lineage query.
+HITL resume restores checkpoint parentage while keeping its existing linked
+trace behavior. Raw LLM payloads and completion facts remain request-local.
+
+An LLM-debug request can include calls from a linked background trace, such as
+asynchronous knowledge extraction. Built-in recorders retain each interaction's
+optional `trace_id`, filling an omitted value from the recording context. The
+debug record's aggregate trace is its first valid observed trace (with
+absent/invalid backfill), not a guaranteed execution-main trace. Later calls do
+not replace a valid aggregate. Use the execution record for the main trace and
+the interaction for that call's trace. Legacy calls remain unknown; old
+aggregates may contain a last-writer trace. Registry Viewer labels these
+separately and links LLM Debug to the execution DAG without rewriting records.
+No trace ID is added to metric dimensions or baggage by this recording change.
+Viewer deduplication keeps the existing payload/duration/step/phase surrogate,
+but preserves rows with two known valid different trace IDs rather than hiding
+a distinct-trace call. Unknown legacy traces retain the earlier matching rule.
+
+The updated orchestration call sites using `truncateTelemetryPreview` preserve
+UTF-8 character boundaries for valid source text in bounded span previews.
+This is not a guarantee for every historical preview helper. The limit counts
+prefix bytes, followed by the existing
+`...` suffix; a partial multi-byte character is excluded from that derived
+preview. This avoids OTLP protobuf rejection of an entire batch. The original
+model/tool payload and opt-in debug record remain unchanged. This is not
+automatic sanitization of source strings that were already invalid UTF-8.
+
 Automatic metric enrichment treats correlation and provider-observation names
 as reserved even when an incoming baggage member is unmarked or carries
 `truvag3_metric_label=true`. This includes request, request-family,
@@ -1459,10 +1511,15 @@ telemetry.Counter("orchestration.hybrid_resolution.success",
 
 **When calling `telemetry.AddSpanEvent()`, always put `request_id` as the first attribute.** This ensures consistent attribute ordering in Jaeger.
 
+In this example, `utf8Preview` is an application-owned helper that limits prefix
+bytes at a complete UTF-8 character boundary. It is not an exported telemetry
+API. Orchestration uses its private `truncateTelemetryPreview` for this purpose;
+plain byte slicing can make OTLP reject an otherwise valid batch.
+
 ```go
 telemetry.AddSpanEvent(ctx, "llm.plan_generation.request",
     attribute.String("request_id", requestID),  // FIRST attribute
-    attribute.String("prompt", truncateString(prompt, 2000)),
+    attribute.String("prompt", utf8Preview(prompt, 2000)),
     attribute.Int("prompt_length", len(prompt)),
     attribute.Float64("temperature", 0.3),
     attribute.Int("max_tokens", 2000),
@@ -1941,6 +1998,9 @@ The orchestration module emits span events for every LLM interaction:
 | `failure_evidence.policy_omitted` | Application input policy returned an error, so inputs for that attempt were omitted; ordinary policy denials do not emit this event | `request_id`, `step_id`, `attempt` |
 | `hitl.notification.failed` | A framework-owned authoritative checkpoint was saved, but the application notification handler failed. The checkpoint remains durable and the request is not failed; this diagnostic intentionally does not record the raw handler error | `request_id` first, `checkpoint_id`, `original_request_id`, `error_type=notification` |
 | `llm.tiered_selection.empty_recovered` | Tiered selector returned `[]`; defensive recovery used `prior_tool_ids` from phase context instead of the all-agents fallback, preserving tiered selection's token-saving purpose. Rare — only fires when the selector returns empty in a continuation phase. | `request_id`, `prior_count`, `attempt` |
+| `llm.tiered_selection.validation_failed` | Parsed selection contains invalid exact IDs; bounded correction shares the existing attempt allowance and frozen catalog. Debug records carry the actual answer and correction prompt, once per call. | `request_id`, `attempt`, `accepted_count`, `rejected_count`, `will_retry` |
+| `llm.tiered_selection.retained_subset` | Correction ended without a valid replacement; use the last validated nonempty subset while the caller is active. This is not provider-health failure accounting. | `request_id`, `selected_tool_count`, `reason` (`provider_error`, `empty_response`, `semantic_empty`, `parse_failed`, `feedback_unavailable`, `invalid_selection`) |
+| `orchestrator.child_steps_extracted` | A retained, registered framework-delegation view includes observed child outcomes and omission counts. Failed effects may be uncertain; skipped steps were not dispatched. Custom receipts keep generic rendering. | `request_id`, `child_steps_found`, `child_steps_count`, `child_steps_omitted`, bounded `child_capabilities`, `step_id`, `agent_name` |
 | `llm.tiered_selection.semantic_empty_phase1` | Phase 1 (or continuation without prior tools) saw a semantic-empty `[]` selector response; retries are short-circuited and the sentinel error is returned so `selectTools` falls back to all-agents after exactly one LLM call. Common for memory-recall and conversational queries. | `request_id`, `attempt` |
 
 \* Conditionally present — only included when > 0 or non-empty.
@@ -1966,6 +2026,72 @@ configured request extractor supplied entities without step entities;
 `request_and_step` means both sources contributed. These sources do not require
 model summarization to succeed. Read/digest/renewal/cleanup effect IDs are listed
 in the [pipeline hooks guide](../orchestration/PIPELINE_HOOKS_GUIDE.md#10-built-in-hooks-reference).
+
+### Delegation views and partial cancellation evidence
+
+Delegated continuation views reuse `result_trim.completed` with `step_id`,
+`method=digest`, `content_lost`, original/encoded body byte counts and allocated
+budget. The continuation budget event also reports `delegated_views`,
+`retained_cost_bytes` and `protected_budget_overflow`; child facts and full framing
+participate in delegated retention costs. Ordinary digest accounting remains
+unchanged. These are derived views: raw responses, dispatches, binding values
+and LLM debug evidence remain intact. `content_lost` includes actual prior
+processor loss and omissions in this emitted view, not an unused intermediate
+digest's hypothetical cuts.
+
+Cancellation can now return observed partial results at existing joined
+boundaries. Result metadata carries available `termination_reason` (`cancelled`
+or `deadline`), `execution_error` and `context_cause`; it does not infer the
+initiator of unknown cancellation. Individual successful calls remain successful,
+the aggregate is unsuccessful, and the existing managed finalizer still owns
+lifecycle classification. Returning those partial execution results does not
+itself trigger synthesis, another terminal publisher or post-success hooks.
+Direct-plan records still have no
+managed lifecycle and use unsuccessful-result error retention.
+
+### Clarification and application delivery evidence
+
+A planner's `needs_user_input` ends its current turn with the existing
+clarification termination reason; it is not an error or HITL waiting state.
+`orchestrator.clarification_short_circuit` and
+`orchestrator.synthesis.clarification_mode` describe that execution's question.
+A child's event or phase-plan question does not establish that its parent asked
+the user or that a browser received it. Preserve immediate parent/step links
+and each execution's own request identity when inspecting this evidence.
+
+The synthesis prompt's `<clarification_needed>` contains one JSON-encoded
+object. JSON string escapes such as `\u003c` keep literal tag-like content
+inside the data; these are not HTML entities. Raw LLM debug records retain that
+exact model-facing prompt. JSON decoding the section once restores the original
+structured fields. Model synthesis output, post-hook terminal response, raw
+clarification and observed SSE bytes are
+separate evidence and can differ in representation and wording.
+
+Existing clarification metrics are:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `orchestrator.clarification_turns` | Counter | Planner turns ending with a clarification |
+| `orchestrator.clarification.missing_field` | Counter | One increment per reported missing field, using the existing `field` label |
+| `orchestrator.clarification_turn.prior_phase_count` | Histogram | Phases preceding the question |
+| `orchestrator.clarification_turn.prior_step_count` | Histogram | Step results accumulated before the question |
+| `orchestrator.clarification_turn.latency_ms` | Histogram | Request duration at clarification completion |
+| `orchestrator.synthesis.clarification_mode` | Counter | Built-in synthesis entered clarification mode |
+
+These observations concern the producing execution. They do not confirm
+parent escalation, task completion, notification delivery or a human answer.
+Earlier failed steps retain their original outcomes. For field names and
+caller ownership, see the [clarification contract](../reference/API_REFERENCE.md#clarification-outcomes-and-delegated-callers).
+
+If an application's final SSE `done` write or flush fails after framework
+completion, record the delivery error on the application operation with context,
+execution `request_id`, `operation`, `error` and `duration_ms`. Keep the stored
+framework lifecycle and its existing terminal log unchanged. Application failure
+metrics replace application success for that delivery; no second framework
+terminal event or fabricated retry/resume span is emitted. Successful local
+write/flush is not a human acknowledgment. This delivery change adds no metric
+dimensions; question text remains in response/debug evidence. The existing
+per-field counter above is separate from application-delivery metrics.
 
 ### Dependency-Only Termination
 

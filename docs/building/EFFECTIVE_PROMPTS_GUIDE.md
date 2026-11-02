@@ -61,6 +61,7 @@ This guide is useful for anyone writing prompts for LLM-based systems. While the
 - [9. Reserved XML Tags — Orchestration Framework](#9-reserved-xml-tags--orchestration-framework)
   - [9.1 Tags by LLM Phase](#91-tags-by-llm-phase)
   - [9.2 Safe Tag Names for Agent Prompts](#92-safe-tag-names-for-agent-prompts)
+  - [9.3 Context Precedence Observability](#93-context-precedence-observability)
 - [10. Research Sources](#10-research-sources)
 
 ---
@@ -1043,6 +1044,7 @@ Three standalone LLM calls, each with its own prompt. All tags use the `user_mem
 | `<output_format>` | User msg | JSON array format specification with example |
 | `<phase_context>` | User msg | Prior tools used (continuation phases only) |
 | `<custom_instructions>` | User msg | Numbered domain-specific workflow rules from `CustomInstructions` |
+| `<selection_correction>` | User msg | Bounded, encoded feedback for invalid exact capability IDs; reuses the selected invocation's frozen catalog and existing retry allowance. |
 
 #### Synthesis (`synthesizer.go`)
 
@@ -1054,7 +1056,22 @@ Three standalone LLM calls, each with its own prompt. All tags use the `user_mem
 | `<user_request>` | User msg | Original user request |
 | `<agent_responses>` | User msg | Container for all agent outputs |
 | `<agent>` | User msg | Individual agent result (attrs: `name`, `task`, `status`) |
-| `<clarification_needed>` | User msg | Structured clarification data (question, missing_fields, partial_progress) when the planner emitted `needs_user_input`. Only present when `ExecutionResult.ClarificationNeeded` is set. |
+| `<clarification_needed>` | User msg | One JSON-encoded object containing `question`, optional `missing_fields` and optional `partial_progress`, when `ExecutionResult.ClarificationNeeded` is set. Go's HTML-safe Unicode escapes keep section-like field values inside the object. |
+
+Clarification is caller-facing data. The same renderer supplies this section to
+buffered and native-streaming synthesis, with skills enabled or disabled. Go's
+`encoding/json` represents `<` as `\u003c` inside strings; this is neither an HTML
+entity nor a second JSON layer. One JSON decode restores the field values. The
+raw result and model answer remain separate from this derived prompt view; LLM
+debug capture retains the actual encoded prompt.
+
+`<clarification_mode>` describes a turn that ended for missing input. It does not
+create a suspended execution, approval or automatic resume. For a delegated
+child, the parent is the caller; its next decision uses the existing planning
+and budget rules. A bounded child question in continuation data is not
+automatically the parent's own structured clarification. See
+[Clarification across delegated turns](../orchestration/LLM_PLANNING_PROMPT_GUIDE.md#clarification-across-delegated-turns)
+for the model/result/response fields and adapter boundary.
 
 #### Micro-Resolution (`micro_resolver.go`)
 
@@ -1262,8 +1279,20 @@ broadly trimming caller text. The model-facing and `LLMInteraction.Prompt`
 copies remain encoded. A decode failure produces empty request entities and an
 `inconclusive` audit, emits only the body-free
 `orchestrator.context_precedence.request_decode_failed` span event, and never
-fails the agent request. Skills-on and skills-off regression cases must yield
-identical request entities for quotes, Unicode, ampersands, and tag-like text.
+fails the agent request. When extraction identifies the intended request
+section, skills-on and skills-off paths supply equivalent semantic request text
+for quotes, Unicode, ampersands, and tag-like text.
+
+**Current parser limit:** this audit extracts the first matching section tags
+from the assembled prompt using regular expressions. An earlier literal tag
+reference, such as `<user_request>` inside a directive, can be mistaken for the
+actual section opening. With JSON-encoded request values this can produce a
+decode failure and an inconclusive audit. Profile-context extraction also
+expects the textual `Context:` block and can miss encoded content. These
+heuristic fields are diagnostic evidence, not proof that every section was
+identified or that a model followed the instruction. Inspect the actual recorded
+prompt when investigating a disputed decision; the audit does not rewrite that
+prompt or gate execution.
 
 **Contract:**
 ```go

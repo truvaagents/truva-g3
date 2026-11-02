@@ -288,8 +288,8 @@ overrides are:
 
 | Framework selection | Built-in OpenRouter model | Environment override |
 |---|---|---|
-| `default` or an unspecified model | `openrouter/auto` | `TRUVAG3_OPENROUTER_MODEL_DEFAULT` |
-| `smart` | `openrouter/auto` | `TRUVAG3_OPENROUTER_MODEL_SMART` |
+| `default` or an unspecified model | `deepseek/deepseek-v4.1-flash` | `TRUVAG3_OPENROUTER_MODEL_DEFAULT` |
+| `smart` | `z-ai/glm-5.3` | `TRUVAG3_OPENROUTER_MODEL_SMART` |
 | `fast` | `openai/gpt-6-luna` | `TRUVAG3_OPENROUTER_MODEL_FAST` |
 | `code` | `openrouter/pareto-code` | `TRUVAG3_OPENROUTER_MODEL_CODE` |
 
@@ -380,6 +380,7 @@ portable options. The current exact OpenRouter rows are:
 |---|---|---|---|
 | `deepseek/deepseek-v4.1-flash` | Yes | Not declared | Not declared |
 | `z-ai/glm-5.3-flash` | Yes | Not declared | Not declared |
+| `z-ai/glm-5.3` | Yes | Not declared | Not declared |
 | `openai/gpt-5.6-luna` | Yes | Yes | OpenAI-style |
 | `openai/gpt-6-luna` | Yes | Yes | OpenAI-style |
 | `openai/gpt-6.1-sol` | Yes | Yes | OpenAI-style |
@@ -419,11 +420,13 @@ diagnostic; explicit unsupported requests
 retain their error/warning contract. The capability table is an adapter
 contract, not a guarantee of current endpoint availability or live certification.
 
-The built-in `default`, `smart`, and `code` aliases resolve to routers, so
-requests using them are not AI-output-cache eligible. `fast` resolves to the
-concrete `openai/gpt-6-luna` model and can be cache-eligible
-when no native `models` fallback list is present. In a failover chain, one unstable
-OpenRouter entry makes the entire ordered chain cache-ineligible.
+The built-in `default`, `smart`, and `fast` selections are concrete models and
+can be AI-output-cache eligible when no native `models` fallback list is present.
+`code` still resolves to the `openrouter/pareto-code` router and is not eligible.
+Exact router IDs such as `openrouter/auto` remain pass-through selections;
+router-valued alias overrides retain the same cache restrictions. In a failover
+chain, one unstable OpenRouter entry makes the entire ordered chain
+cache-ineligible.
 
 The framework does not advertise a built-in `free` alias because the protected
 privacy live probe failed for the tested free routes. Exact `:free` model IDs
@@ -497,7 +500,8 @@ Existing environment overrides still win; Vertex publisher mappings remain
 application-owned. This does not change OpenRouter or Bedrock model selection.
 
 The native OpenAI mapping is built in; the first assignment below is optional.
-OpenRouter still needs an explicit override to select Sol rather than its router:
+OpenRouter still needs an explicit override to select Sol rather than its
+DeepSeek default:
 
 ```bash
 # Native OpenAI (provider alias: openai; already the built-in default)
@@ -536,9 +540,9 @@ client, _ := ai.NewClient(
 
 | Alias | Purpose | OpenAI | Anthropic | OpenRouter | Gemini | Groq | DeepSeek | Together |
 |-------|---------|--------|-----------|------------|--------|------|----------|----------|
-| `default` | General catalog choice | `gpt-6.1-sol` | `claude-sonnet-5` | `openrouter/auto` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` | `deepseek-ai/DeepSeek-V4-Flash-0731` |
+| `default` | General catalog choice | `gpt-6.1-sol` | `claude-sonnet-5` | `deepseek/deepseek-v4.1-flash` | `gemini-2.5-flash` | `openai/gpt-oss-120b` | `deepseek-chat` | `deepseek-ai/DeepSeek-V4-Flash-0731` |
 | `fast` | Latency-oriented catalog choice | `gpt-6-luna` | `claude-haiku-5-5` | `openai/gpt-6-luna` | `gemini-3.5-flash-lite` | `llama-3.1-8b-instant` | `deepseek-chat` | `google/gemma-4-31B-it` |
-| `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5-5` | `openrouter/auto` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-reasoner` | `moonshotai/Kimi-K3` |
+| `smart` | Reasoning-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5-5` | `z-ai/glm-5.3` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-reasoner` | `moonshotai/Kimi-K3` |
 | `premium` | Highest-tier catalog choice | `gpt-5.6-sol` | `claude-fable-5` | _(N/A)_ | `gemini-3.1-pro-preview` | _(N/A)_ | _(N/A)_ | _(N/A)_ |
 | `code` | Code-oriented catalog choice | `gpt-5.6-sol` | `claude-opus-5-5` | `openrouter/pareto-code` | `gemini-3.1-pro-preview` | `openai/gpt-oss-120b` | `deepseek-chat` | `moonshotai/Kimi-K3` |
 | `vision` | Image-capable catalog choice | `gpt-4.1` | `claude-opus-5-5` | _(N/A)_ | `gemini-2.5-flash` | _(N/A)_ | _(N/A)_ | _(N/A)_ |
@@ -599,7 +603,7 @@ export TRUVAG3_ANTHROPIC_MODEL_FAST=claude-haiku-5-5
 # For OpenAI-compatible providers, strip the "openai." prefix
 export TRUVAG3_GROQ_MODEL_DEFAULT=llama-3.1-8b-instant
 
-# Use one concrete OpenRouter model as the default instead of its auto router
+# Override OpenRouter's built-in DeepSeek default with a different concrete model
 export TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-5.6-sol
 
 # Do not override DeepSeek to V4 until the framework's V4 capability and

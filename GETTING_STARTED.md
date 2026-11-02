@@ -283,9 +283,11 @@ already rejects unrestricted Standard keys and will reject every Standard key
 in September 2026; see the
 [Gemini API-key guide](https://ai.google.dev/gemini-api/docs/api-key).
 
-OpenRouter auto-detects immediately after Anthropic. Its framework default is
-the `openrouter/auto` router; set
-`TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-5.6-sol` to pin that concrete model.
+OpenRouter auto-detects immediately after Anthropic. Its built-in `default` is
+`deepseek/deepseek-v4.1-flash`, and `smart` is `z-ai/glm-5.3`. Set
+`TRUVAG3_OPENROUTER_MODEL_DEFAULT=openai/gpt-5.6-sol` to override the default
+with that concrete model. Exact router IDs such as `openrouter/auto` remain
+available through explicit model selection or an alias override.
 The framework does not currently advertise a `free` alias because tested free
 routes failed under its mandatory privacy constraints. Exact `:free` model IDs
 remain experimental and are subject to OpenRouter's
