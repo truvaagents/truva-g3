@@ -1530,6 +1530,14 @@ attempt allowance and frozen catalog. A fully valid replacement replaces the
 set; a failed correction retains the last usable subset while the caller remains
 active. This may add calls for mixed valid/invalid answers. The existing
 `TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES` also bounds its added section.
+Direct provider users configure the same limit before use through
+`SetRegenerationFeedbackMaxBytes` (zero restores the default; negative values
+fail). Pass the value from `ResolveOrchestratorConfig` to preserve environment
+policy and code precedence; the setter does not read environment variables.
+See the [API reference](../docs/reference/API_REFERENCE.md#tieredcapabilityconfig).
+The internal selector returns cancellation; public `GetCapabilities` retains
+its existing full-catalog/nil-error fallback, with the caller context still
+cancelled.
 
 When execution is cancelled at an existing joined boundary, error-returning
 managed APIs can return the observed partial `ExecutionResult` alongside the

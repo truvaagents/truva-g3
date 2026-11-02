@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Expose `TieredCapabilityProvider.SetRegenerationFeedbackMaxBytes` for direct
+  callers and use it in the factory. It shares the existing correction budget,
+  reads no environment, and is configured before use. Zero selects the default;
+  negative values fail without mutation (and before legacy factory bootstrap).
+  Name and test the unchanged delegated-detail byte/space policies. Clarify
+  selector cancellation fallback, correlation-header sources and budget docs.
+
 - Encode structured clarification fields once as a JSON object using Go's
   standard HTML-safe Unicode escaping
   in both synthesis prompt paths, including when skills are disabled. Preserve

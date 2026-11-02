@@ -1357,9 +1357,19 @@ frozen for that invocation. A mixed or all-invalid answer can spend the remainin
 `TieredResolution.MaxRetries` allowance on `<selection_correction>` feedback.
 `IterativePlanning.RegenerationFeedbackMaxBytes` also bounds this complete added,
 encoded section; it does not cap the base catalog prompt. There is no new budget.
+The factory and direct callers use `SetRegenerationFeedbackMaxBytes` before use:
+positive bytes override, zero selects the shared 16,384-byte default, and negative
+values return `ErrInvalidOrchestratorConfig` without mutation. The setter reads
+no environment; direct callers can pass the value from `ResolveOrchestratorConfig`
+to retain its chosen environment mode and code-option precedence. Canonical
+resolution still requires a positive effective value. Legacy partial configs
+retain zero-as-unset; a negative selector budget fails before factory bootstrap.
 Fully valid replacements replace the selection. If later correction is malformed,
 empty, all-invalid or fails at the provider, the last nonempty validated subset
-is used while the caller remains active. Cancellation remains an error. The
+is used while the caller remains active. The internal selection attempt returns
+cancellation; public `GetCapabilities` retains its existing full-catalog/nil-error
+fallback for selection failures, including cancellation. The context remains
+cancelled; this fallback does not authorize further calls or dispatch. The
 first semantic-empty `[]` keeps existing prior-tool recovery/all-catalog fallback.
 One debug record and actual usage entry correspond to each real call. Invalid
 content is not a provider-health failure. Mixed selections may incur extra calls
