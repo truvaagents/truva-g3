@@ -5,8 +5,8 @@ independently of individual step success. Older records without it are labelled
 unknown. A completed request can have failed steps or a negative application
 disposition. The completed-request percentage uses all listed requests as its
 denominator; unknown records are not counted as completed. Selected details
-refresh without reselection, reject older record revisions and preserve the DAG
-viewport. LLM/hook updates are refreshed even when the lifecycle revision is
+refresh without reselection and reject older record revisions.
+LLM/hook updates are refreshed even when the lifecycle revision is
 unchanged.
 
 An independently deployable, real-time web dashboard for inspecting the TruvaG3
@@ -58,12 +58,100 @@ container-build changes described below.
   - Token usage statistics
   - Full prompt and response content
   - Duration and timestamp
+  - Interaction-specific trace ID when recorded; legacy absence stays unknown
+- The **Debug record trace** is a record-level reference, not proof that every
+  call used it. New built-in writers keep the first valid observed trace;
+  linked background calls retain their own IDs. Older aggregates may contain
+  the last writer's trace. **Open execution DAG** follows the same request to
+  its recorded execution trace without altering historical data.
 - Requires `TRUVAG3_LLM_DEBUG_ENABLED=true` on the orchestration agent
 
 ### UI Features
 - Dark theme optimized for monitoring
 - Navigation for Registry, LLM Debug, HITL, Execution DAG, Skills, and Memory
 - Vanilla HTML, CSS, and JavaScript frontend with no browser framework dependency
+- Execution DAG calls to registered agents use the starting agent's purple fill
+  and a robot marker in both Full Flow and Steps Only. Ordinary tool colors stay
+  unchanged; agent borders retain failure, pending and HITL status indicators.
+  Classification uses current registry component types and matching capabilities,
+  not service-name guesses. Missing or ambiguous registrations retain the normal
+  status styling. This decoration is not historical execution/type evidence.
+
+### Delegated Execution Navigation
+
+Recorded clarification is shown as an expandable outcome in the existing DAG
+metadata and response-node details, with the full question, missing fields and
+partial progress. It supplements the execution lifecycle: failed or cancelled
+executions retain those statuses and label the question **Recorded
+clarification**. Phase-plan questions are separately labelled **planner
+observations** and do not prove delivery to a caller. The execution and unified
+APIs preserve optional `plan.needs_user_input`, phase-plan equivalents and
+`result.clarification_needed`. Older records with no field have no indicator;
+the Viewer does not infer questions from response prose or descendants.
+
+The Execution DAG lists nested agents using optional `parent_request_id` and
+`parent_step_id` recorded on each child. Root `original_request_id` groups the
+family; it does not prove immediate parentage. Grouped, conversation and legacy
+lists preserve records with unknown, missing or inconsistent parentage. Parents
+outside a conversation are navigation links and do not change turn membership.
+
+The left list uses compact depth labels and colored arrows: **L1** cyan,
+**L2** purple, **L3** amber and **L4** green (the palette repeats for deeper
+levels; the number remains exact). **Root** and **L?** distinguish recorded
+roots from incomplete ancestry. Filtering or missing ancestors can make the
+depth unknown; the Viewer does not guess it. Indentation is capped visually,
+not the supported delegation depth. Parent links identify the invoking step.
+
+Select an agent step to open its child execution(s), including multiple children
+from one step. Click the starting agent node for its immediate parent and an
+**Open parent at invoking step** link. A **Parent Execution** tab, immediately
+after **DAG Visualization**, appears only when an immediate parent is recorded.
+It loads the exact parent record on demand and shows the parent request,
+lifecycle, invoking step and family-lookup diagnostics. Retained checkpoint
+plans/results fill missing step evidence, with current execution evidence
+taking precedence. Missing records and
+missing steps are reported separately. No invocation panel occupies the DAG
+canvas. A request that was not recorded is labelled **Request text unavailable**,
+not replaced with its parent's request. Each
+execution retains its own graph, lifecycle, LLM interactions, skills, hooks and
+statistics. Durations/tokens are not summed across descendants. Siblings are
+ordered by **last snapshot**, oldest first, then request ID; that timestamp can
+advance on a later write and does not describe invocation order.
+
+To open a retained execution directly, use
+`http://registry.localhost/?view=dag&request_id=orch-EXAMPLE` (replace
+`orch-EXAMPLE` with its URL-encoded request ID). This opens its details and
+discovers its family without first loading a conversation or finding the row in
+the current list. The URL follows successful selections while this execution
+link is active; switching to another screen removes the execution target. An
+absent or invalid target keeps the normal Registry start screen. A missing
+execution does not select a different record as a substitute.
+
+`GET /api/executions/{request_id}/lineage` returns retained execution summaries,
+parent lookup status and coverage. It is strictly read-only: stale entries are
+reported without pruning, repair or TTL updates. It uses existing bounded
+recent/conversation candidate reads plus exact ancestor reads with a shared
+10-second request deadline and the existing ordinary/exact-owner budgets. It
+does not fetch relatives' separate LLM debug payloads or enumerate via the
+single-record trace index. Candidate records are summarized/released in batches
+to limit heap use; full selected/ancestor records retain their existing read
+semantics. Missing/expired/unindexed work can leave coverage incomplete.
+
+A cold family selection performs one coalesced lookup. Known-family navigation
+reuses the summary cache; periodic refresh continues existing list/detail reads
+and adds no broad lineage scans. **Refresh related executions**, in the starting
+agent popup and the Parent Execution tab's family details, explicitly rechecks
+the family. The tab's family details show discovery time/coverage. The exact
+parent record has a separate refresh action; it does not fetch the parent's
+LLM store. A slow or
+unavailable lookup leaves selected execution details usable; older records
+without parent fields remain related/unknown. Jaeger preserves the distributed
+trace independently. Reproduce the synthetic 5,000-record capacity check with
+`GOMEMLIMIT=512MiB go test -run '^$' -bench BenchmarkExecutionLineageBusyHistory -benchmem`
+in this example's configured workspace. It compares full-record hydration,
+lineage loading and two simultaneous lookups, including allocation and peak
+heap measurements. The Redis fixture has its own reported heap; these results
+are workload-specific rather than a universal sizing promise.
 
 ### Skills Management
 

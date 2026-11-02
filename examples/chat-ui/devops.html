@@ -697,6 +697,41 @@
             font-weight: 400;
         }
 
+        .assistant-outcome {
+            margin-top: 12px;
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+
+        .clarification-details summary {
+            color: var(--accent-orange, #ffb454);
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .clarification-body {
+            margin-top: 8px;
+            color: var(--text-primary);
+            overflow-wrap: anywhere;
+        }
+
+        .clarification-body pre {
+            margin: 4px 0 10px;
+            white-space: pre-wrap;
+            font: inherit;
+        }
+
+        .clarification-body ul {
+            margin: 4px 0 10px;
+            padding-left: 20px;
+            white-space: pre-wrap;
+        }
+
+        .delivery-status-failed {
+            margin-bottom: 6px;
+            color: var(--accent-red, #ff6b6b);
+        }
+
         .assistant-message .message-content p,
         .assistant-message .message-content li {
             color: rgba(255, 255, 255, 0.72);
@@ -2181,6 +2216,8 @@
                     </div>
                 `;
 
+                renderAssistantOutcome(messageDiv, metadata);
+
                 // Update stats from metadata
                 if (metadata) {
                     if (metadata.tools_used && Array.isArray(metadata.tools_used)) {
@@ -2540,7 +2577,62 @@
             scrollToBottom();
         }
 
-        function showCompletion(messageEl, requestId, toolsUsed, durationMs) {
+        function renderAssistantOutcome(messageEl, metadata) {
+            messageEl.querySelector('.assistant-outcome')?.remove();
+            const clarification = metadata?.clarification;
+            const hasQuestion = clarification && typeof clarification.question === 'string' && clarification.question.trim();
+            const deliveryFailed = metadata?.delivery_status === 'failed';
+            if (!hasQuestion && !deliveryFailed) return;
+
+            const outcome = document.createElement('div');
+            outcome.className = 'assistant-outcome';
+            if (deliveryFailed) {
+                const delivery = document.createElement('div');
+                delivery.className = 'delivery-status-failed';
+                delivery.textContent = 'Generated response; live delivery failed.';
+                outcome.appendChild(delivery);
+            }
+            if (hasQuestion) {
+                const details = document.createElement('details');
+                details.className = 'clarification-details';
+                const summary = document.createElement('summary');
+                summary.textContent = 'Input requested';
+                details.appendChild(summary);
+                const body = document.createElement('div');
+                body.className = 'clarification-body';
+                const question = document.createElement('pre');
+                question.textContent = clarification.question;
+                body.appendChild(question);
+                const missingFields = Array.isArray(clarification.missing_fields)
+                    ? clarification.missing_fields.filter(field => typeof field === 'string') : [];
+                if (missingFields.length) {
+                    const label = document.createElement('strong');
+                    label.textContent = 'Missing fields';
+                    body.appendChild(label);
+                    const list = document.createElement('ul');
+                    missingFields.forEach(field => {
+                        const item = document.createElement('li');
+                        item.textContent = field;
+                        list.appendChild(item);
+                    });
+                    body.appendChild(list);
+                }
+                if (typeof clarification.partial_progress === 'string' && clarification.partial_progress) {
+                    const label = document.createElement('strong');
+                    label.textContent = 'Partial progress';
+                    body.appendChild(label);
+                    const progress = document.createElement('pre');
+                    progress.textContent = clarification.partial_progress;
+                    body.appendChild(progress);
+                }
+                details.appendChild(body);
+                outcome.appendChild(details);
+            }
+            const bubble = messageEl.querySelector('.message-bubble');
+            bubble.insertBefore(outcome, bubble.querySelector('.message-footer'));
+        }
+
+        function showCompletion(messageEl, requestId, toolsUsed, durationMs, clarification) {
             // Mark remaining loading items as complete
             const progressPanel = messageEl.querySelector('.progress-panel');
             progressPanel.querySelectorAll('.progress-item.loading').forEach(item => {
@@ -2582,6 +2674,8 @@
                     &#128270; ${escapeHtml(shortTraceId)}
                 </span>
             `;
+
+            renderAssistantOutcome(messageEl, { clarification });
 
             // Reset per-request usage tracking
             lastByPhase = null;
@@ -3167,7 +3261,7 @@
                     }
                     break;
                 case 'done':
-                    showCompletion(currentMessageEl, data.request_id, data.tools_used, data.total_duration_ms);
+                    showCompletion(currentMessageEl, data.request_id, data.tools_used, data.total_duration_ms, data.clarification);
                     break;
                 case 'error':
                     showErrorInMessage(currentMessageEl, data.code, data.message, data.retryable);

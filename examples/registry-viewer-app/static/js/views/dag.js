@@ -36,10 +36,16 @@ import {
 import {
     assignAfterPlanningHooksToPhases,
     buildObservedPhases,
+    buildExecutionHierarchy,
+    createExecutionLineageLoader,
+    executionLineageSummary,
+    executionDeepLinkRequestID,
+    executionSnapshotTimestamp,
     executionDisplayStepNumber,
     filterInteractionsWithRenderedParent,
     filterRenderableEdges,
-    hasVisibleRelationOwner,
+    findDelegatedExecutions,
+    isAgentInvocation,
     isPostExecutionHook,
     isPreExecutionHook,
     pipelineHookConsequence,
@@ -78,10 +84,323 @@ let activeConversationID = '';
 let listPanelMode = 'list';
 let timelineReturnFocus = null;
 let dagSearchTimer = null;
+let invocationServices = [];
+let invocationServicesPending = null;
+let invocationServicesVersion = 0;
+let invokingStepTarget = null;
+let parentExecutionLookup = null;
+const lineageLoader = createExecutionLineageLoader(async (requestID, signal) => {
+    // The generic API cache retains every ETag response. Family discovery has
+    // its own one-family lifetime and must not accumulate there.
+    const response = await fetch(`/api/executions/${encodeURIComponent(requestID)}/lineage`, { signal, cache: 'no-store' });
+    if (!response.ok) throw new Error('lineage_unavailable');
+    return response.json();
+});
+
+function selectedLineageSnapshot() {
+    return selected?.request_id ? lineageLoader.forRequest(selected.request_id) : null;
+}
+
+function loadedLineageSummaries() {
+    const records = [...executions];
+    const append = group => {
+        for (const turn of group?.turns || []) {
+            records.push(turn.execution, ...(turn.related_executions || []));
+        }
+        records.push(...(group?.orphans || []));
+    };
+    groupedExecutionGroups.forEach(append);
+    for (const cached of conversationCache.values()) if (cached.data) append(cached.data);
+    records.push(...(selectedLineageSnapshot()?.executions || []), selected);
+    return records.map(executionLineageSummary).filter(Boolean);
+}
+
+function lineageRelationLabel(entry) {
+    if (entry.execution.metadata?.resume_checkpoint_id) return 'HITL resume';
+    if (entry.reason === 'cycle') return 'Unresolved parent cycle';
+    if (entry.reason === 'root_conflict') return 'Unresolved · parent and child roots conflict';
+    if (entry.reason === 'parent_request_missing') return 'Unresolved · invoking step has no parent request';
+    if (entry.reason === 'parent_unavailable') return 'Parent unavailable';
+    if (entry.reason === 'parent_unknown') return 'Parent outside loaded records · lookup unknown';
+    if (entry.legacy) return 'Related · immediate parent not recorded';
+    return entry.depth > 0 ? 'Delegated execution' : '';
+}
+
+// Depth is absolute only when the loaded explicit chain reaches a recorded root.
+// Filtered, expired and legacy ancestry stays unknown, including its descendants.
+function renderLineageBadge(entry) {
+    const execution = entry.execution;
+    const known = entry.depthKnown === true;
+    const level = known ? String(entry.depth) : '?';
+    const tone = known ? (entry.depth ? `level-${((entry.depth - 1) % 4) + 1}` : 'root') : 'unknown';
+    const parent = execution.parent_request_id;
+    const title = known ? `Delegation depth ${entry.depth}${parent ? `; parent ${parent}` : '; root execution'}`
+        : `${lineageRelationLabel(entry) || 'Full ancestry not recorded'}${parent ? `; parent ${parent}` : ''}`;
+    const arrow = parent ? (entry.depth > 0 && !entry.reason ? '↳' : '↗') : known ? '◆' : '⋯';
+    return `<span class="dag-lineage-badge dag-lineage-${tone}" title="${escapeHtmlAttribute(title)}" aria-label="${escapeHtmlAttribute(title)}"><span aria-hidden="true">${arrow}</span> ${known && !entry.depth ? 'Root' : `L${level}`}</span>`;
+}
+
+function renderLineageRowContext(entry) {
+    const execution = entry.execution;
+    const parentID = execution.parent_request_id;
+    // Keep the full identity in the link title; the visible relationship is compact.
+    return `<div class="dag-lineage-row-context">${renderLineageBadge(entry)}${execution.metadata?.resume_checkpoint_id ? '<span class="hitl-resume-badge dag-hitl-resume">HITL Resume</span>' : ''}<span class="dag-lineage-owner">${escapeHtml(execution.agent_name || 'Agent')}</span>${parentID
+        ? `<span class="dag-lineage-parent" title="${escapeHtmlAttribute(`Parent ${parentID}${execution.parent_step_id ? ` · ${execution.parent_step_id}` : ''}`)}">← ${lineageNavigationButton(parentID, `${entry.parentAgentName || 'parent'}${execution.parent_step_id ? ` · ${execution.parent_step_id}` : ''}`, execution.parent_step_id)}</span>`
+        : entry.legacy || entry.reason ? `<span class="dag-lineage-parent">${escapeHtml(lineageRelationLabel(entry))}</span>` : ''}</div>`;
+}
+
+function executionRequestText(execution) {
+    // A missing child request is not permission to substitute its parent's task.
+    return execution?.original_request || execution?.plan?.original_request || 'Request text unavailable';
+}
+
+function selectedFamilySummaries() {
+    if (!selected) return [];
+    const all = buildExecutionHierarchy(loadedLineageSummaries()).byRequest;
+    const root = selected.original_request_id || selected.request_id;
+    const members = new Set([selected.request_id]);
+    for (const execution of all.values()) {
+        if ((execution.original_request_id || execution.request_id) === root) members.add(execution.request_id);
+    }
+    for (const execution of selectedLineageSnapshot()?.executions || []) members.add(execution.request_id);
+    const children = new Map();
+    for (const execution of all.values()) {
+        if (!execution.parent_request_id) continue;
+        if (!children.has(execution.parent_request_id)) children.set(execution.parent_request_id, []);
+        children.get(execution.parent_request_id).push(execution.request_id);
+    }
+    const queue = [...members];
+    for (let index = 0; index < queue.length; index++) {
+        const execution = all.get(queue[index]);
+        for (const id of [execution?.parent_request_id, ...(children.get(queue[index]) || [])]) {
+            if (id && all.has(id) && !members.has(id)) { members.add(id); queue.push(id); }
+        }
+    }
+    return [...members].map(id => all.get(id)).filter(Boolean);
+}
+
+function lineageNavigationButton(requestID, label, stepID = '') {
+    return `<button type="button" class="dag-open-timeline-btn" data-lineage-execution="${escapeHtmlAttribute(requestID)}"${stepID ? ` data-lineage-parent-step="${escapeHtmlAttribute(stepID)}"` : ''}>${escapeHtml(label)}</button>`;
+}
+
+function lastSnapshotLabel(execution, relative = false) {
+    if (!Number.isFinite(executionSnapshotTimestamp(execution))) return 'Unknown';
+    return relative ? formatTimeAgo(execution.created_at) : formatDateTime(execution.created_at);
+}
+
+function renderDelegatedExecutionLinks(stepID, summaries = selectedFamilySummaries()) {
+    const children = findDelegatedExecutions(summaries, selected?.request_id, stepID);
+    if (!children.length) return '';
+    return `<div class="dag-row-meta">${children.map(child => lineageNavigationButton(
+        child.request_id, `${child.metadata?.resume_checkpoint_id ? 'Resume' : 'Agent execution'}: ${child.agent_name || child.request_id}`,
+    )).join(' ')}<span>Each execution retains its own DAG and LLM records.</span></div>`;
+}
+
+function renderExecutionLineageNavigation(summaries = selectedFamilySummaries(), expanded = false) {
+    if (!selected) return '';
+    const snapshot = selectedLineageSnapshot();
+    const hierarchy = buildExecutionHierarchy(summaries, snapshot?.coverage);
+    const coverage = snapshot?.coverage;
+    const pending = lineageLoader.pending();
+    const unavailable = snapshot?.state === 'unavailable';
+    const partial = coverage?.partial || coverage?.index_incomplete;
+    const status = pending ? 'Loading related executions…'
+        : unavailable ? 'Related execution lookup unavailable. Refresh to try again.'
+        : partial ? 'Some related executions may be missing.'
+        : snapshot ? 'Retained execution history' : 'Loaded records only · history coverage unknown';
+    const updated = snapshot?.discoveredAt ? new Date(snapshot.discoveredAt).toISOString() : '';
+    const count = hierarchy.ordered.length;
+    return `<details class="dag-parent-family dag-family-panel"${expanded ? ' open' : ''}>
+        <summary><span>Related executions</span><span class="dag-family-count" title="Known retained executions; this is not a complete history count">${count}</span>${!pending && (unavailable || partial) ? '<span class="dag-family-limited">Partial history</span>' : ''}</summary>
+        <div class="dag-family-content">
+            <div class="dag-family-toolbar">
+                <div class="dag-family-discovery${unavailable || partial ? ' dag-family-warning' : ''}" role="status">
+                    <span>${escapeHtml(status)}</span>
+                    ${updated ? `<span class="dag-family-updated" title="${escapeHtmlAttribute(`Last lookup: ${formatDateTime(updated)}`)}">Updated ${escapeHtml(formatTimeAgo(updated))}</span>` : ''}
+                </div>
+                <button type="button" class="dag-family-refresh" data-refresh-execution-lineage title="Check for newly recorded related executions" aria-label="Refresh related executions" aria-disabled="${pending}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.6-2L20 9M4 15l2.3 3A7 7 0 0 0 17.9 16"/></svg>Refresh</button>
+            </div>
+            <ul class="dag-family-list" aria-label="Known related executions">
+                ${hierarchy.ordered.map(entry => {
+                    const execution = entry.execution;
+                    const current = execution.request_id === selected.request_id;
+                    const state = executionStatus(execution);
+                    const identity = execution.request_id || '';
+                    const shortID = identity.length > 18 ? `…${identity.slice(-14)}` : identity;
+                    const relation = entry.reason || entry.legacy || execution.metadata?.resume_checkpoint_id ? lineageRelationLabel(entry) : '';
+                    return `<li class="dag-family-row${current ? ' dag-family-current' : ''}" style="--family-depth: ${Math.min(entry.depth, 4)};">
+                        ${renderLineageBadge(entry)}
+                        <div class="dag-family-identity">
+                            <div class="dag-family-name">${current ? `<span aria-current="page">${escapeHtml(execution.agent_name || 'Agent')}</span><span class="dag-family-current-label">Current</span>` : lineageNavigationButton(identity, execution.agent_name || 'Agent')}</div>
+                            <div class="dag-family-meta"><span class="dag-mono" title="${escapeHtmlAttribute(identity)}">${escapeHtml(shortID)}</span>${execution.parent_step_id ? `<span>${escapeHtml(execution.parent_step_id)}</span>` : ''}${relation ? `<span class="dag-family-warning">${escapeHtml(relation)}</span>` : ''}</div>
+                        </div>
+                        <span class="dag-family-status ${state.css} ${state.state}">${escapeHtml(state.label)}</span>
+                    </li>`;
+                }).join('')}
+            </ul>
+        </div>
+    </details>`;
+}
+
+function resetParentExecutionLookup() {
+    parentExecutionLookup?.controller.abort();
+    parentExecutionLookup = null;
+}
+
+function loadParentExecution({ force = false } = {}) {
+    if (!selected?.parent_request_id) return;
+    if (!force && parentExecutionLookup?.childID === selected.request_id &&
+        parentExecutionLookup.parentID === selected.parent_request_id) return;
+    resetParentExecutionLookup();
+    const lookup = { childID: selected.request_id, parentID: selected.parent_request_id,
+        state: 'loading', data: null, controller: new AbortController() };
+    parentExecutionLookup = lookup;
+    // Read just the exact parent's execution record on demand, not its LLM store
+    // or its relatives. Keep one view-local record and discard it on selection.
+    void (async () => {
+        try {
+            const response = await fetch(`/api/executions/${encodeURIComponent(lookup.parentID)}`,
+                { signal: lookup.controller.signal, cache: 'no-store' });
+            if (response.status === 404 || response.status === 410) lookup.state = 'unavailable';
+            else {
+                if (!response.ok) throw new Error('parent_lookup_failed');
+                const data = await response.json();
+                if (data?.request_id !== lookup.parentID) throw new Error('parent_identity_mismatch');
+                lookup.data = data;
+                lookup.state = 'available';
+            }
+        } catch (_) {
+            lookup.state = 'unknown';
+        }
+        if (parentExecutionLookup === lookup && selected?.request_id === lookup.childID &&
+            selected.parent_request_id === lookup.parentID && activeTab === 'dag-parent') {
+            renderParentExecution(document.getElementById('dagDetailContent'));
+        }
+    })();
+}
+
+function renderAgentParentInfo() {
+    if (!selected) return '';
+    const parentID = selected.parent_request_id;
+    const parent = selectedFamilySummaries().find(item => item.request_id === parentID);
+    return `<div class="dag-agent-lineage-info">
+        ${parentID ? `<div class="dag-parent-field-label">Invoked by</div>
+            <div>${escapeHtml(parent?.agent_name || 'Parent agent')}</div>
+            <div class="dag-parent-identity">${escapeHtml(parentID)}</div>
+            <div>${selected.parent_step_id ? `Invoking step: ${escapeHtml(selected.parent_step_id)}` : 'Invoking step not recorded'}</div>
+            ${lineageNavigationButton(parentID, selected.parent_step_id ? 'Open parent at invoking step →' : 'Open parent execution →', selected.parent_step_id)}
+            <button type="button" class="dag-open-timeline-btn" data-open-parent-execution>Parent details</button>`
+            : `<div class="dag-parent-field-label">${selected.original_request_id && selected.original_request_id !== selected.request_id ? 'Immediate parent not recorded' : 'No recorded parent'}</div>`}
+        <div><button type="button" class="dag-open-timeline-btn" data-refresh-execution-lineage ${lineageLoader.pending() ? 'disabled' : ''}>Refresh related executions</button></div>
+    </div>`;
+}
+
+function renderParentExecution(container) {
+    if (!selected?.parent_request_id) return;
+    const familyExpanded = container.querySelector('.dag-family-panel')?.open === true;
+    const refreshFocused = container.querySelector('[data-refresh-execution-lineage]') === document.activeElement;
+    loadParentExecution();
+    const parentID = selected.parent_request_id;
+    const lookup = parentExecutionLookup;
+    const parent = lookup?.data || selectedFamilySummaries().find(item => item.request_id === parentID);
+    const stepID = selected.parent_step_id;
+    const plans = lookup?.data?.phase_plans || [];
+    const checkpoint = lookup?.data?.checkpoint;
+    // Match ordinary execution normalization: current plan/result evidence wins,
+    // with retained checkpoint evidence filling only absent step information.
+    const result = lookup?.data?.result?.steps?.find(item => item.step_id === stepID)
+        || checkpoint?.step_results?.[stepID];
+    const planSteps = plans.length ? plans.flatMap(plan => plan.steps || []) : lookup?.data?.plan?.steps || [];
+    const step = planSteps.find(item => item.step_id === stepID)
+        || checkpoint?.plan?.steps?.find(item => item.step_id === stepID)
+        || result;
+    const capability = step?.capability || step?.metadata?.capability;
+    const state = lookup?.state;
+    container.innerHTML = `<div class="dag-parent-execution">
+        <h2>Parent execution</h2>
+        <p>This execution was invoked by the parent below. Each execution keeps its own lifecycle, steps and LLM records.</p>
+        <section class="dag-parent-card">
+            <h3>${escapeHtml(parent?.agent_name || 'Parent agent')}</h3>
+            <div class="dag-parent-identity">${escapeHtml(parentID)}</div>
+            ${parent ? `<div class="status-badge ${executionStatus(parent).css}">${executionStatus(parent).label}</div><div class="dag-parent-field-label">Parent request</div><div class="dag-parent-request">${escapeHtml(executionRequestText(parent))}</div>` : ''}
+            <div class="dag-parent-actions">${lineageNavigationButton(parentID, 'Open parent execution →')}
+                <button type="button" class="dag-open-timeline-btn" data-refresh-parent-execution ${state === 'loading' ? 'disabled' : ''}>Refresh parent record</button></div>
+            <div role="status" class="dag-parent-field-label">${state === 'loading' ? 'Loading exact parent record…' : state === 'unavailable' ? 'Parent record unavailable or expired.' : state === 'unknown' ? 'Parent lookup failed; availability is unknown.' : 'Parent record loaded on demand.'}</div>
+        </section>
+        <section class="dag-parent-card">
+            <h3>Invoking step${stepID ? ` · ${escapeHtml(stepID)}` : ''}</h3>
+            ${step ? `<div>${escapeHtml(step.agent_name || step.agent || '')}${capability ? ` · ${escapeHtml(capability)}` : ''}</div><p class="dag-parent-request">${escapeHtml(step.instruction || '')}</p>` : ''}
+            ${result ? `<div class="status-badge ${result.skipped ? 'pending' : result.success ? 'success' : 'error'}">${result.skipped ? 'Skipped' : result.success ? 'Success' : 'Failed'}</div>` : ''}
+            ${stepID ? lineageNavigationButton(parentID, 'Open parent at this step →', stepID) : '<p>Invoking step was not recorded.</p>'}
+            ${stepID && state === 'available' && !step && !result ? '<p class="dag-data-warning">The invoking step is not present in the retained parent record.</p>' : ''}
+        </section>
+        ${renderExecutionLineageNavigation(selectedFamilySummaries(), familyExpanded)}
+    </div>`;
+    if (refreshFocused) container.querySelector('[data-refresh-execution-lineage]')?.focus({ preventScroll: true });
+}
+
+function refreshExecutionLineageUI() {
+    const summaries = selectedFamilySummaries();
+    if (activeTab === 'dag-parent' && selected?.parent_request_id) renderParentExecution(document.getElementById('dagDetailContent'));
+    document.querySelectorAll('[data-agent-parent-info]').forEach(element => { element.innerHTML = renderAgentParentInfo(); });
+    document.querySelectorAll('[data-lineage-step]').forEach(element => {
+        if (element.dataset.lineageRequest === selected?.request_id) element.innerHTML = renderDelegatedExecutionLinks(element.dataset.lineageStep, summaries);
+    });
+}
+
+function discoverExecutionLineage({ force = false, requestID = selected?.request_id } = {}) {
+    const version = selectionVersion;
+    const promise = lineageLoader.discover({ force });
+    if (selected?.request_id === requestID) refreshExecutionLineageUI();
+    void promise.then(() => {
+        if (version === selectionVersion && selected?.request_id === requestID) refreshExecutionLineageUI();
+    });
+}
+
+function navigateExecutionLineage(target) {
+    invokingStepTarget = target.dataset.lineageParentStep
+        ? { requestID: target.dataset.lineageExecution, stepID: target.dataset.lineageParentStep } : null;
+    if (invokingStepTarget) activeTab = 'dag-steps';
+    void selectExecution(target.dataset.lineageExecution);
+}
 
 // LRU cache for Cytoscape instances — avoids rebuild on tab switch.
 // Key: "requestId:viewMode", Value: { cy, container (child div), requestId }
 const dagCache = new Map();
+
+// Registry decoration is optional and must not delay execution rendering.
+// Update cached canvases in place so a late response preserves their viewport.
+function refreshInvocationServices() {
+    if (invocationServicesPending) return;
+    const version = ++invocationServicesVersion;
+    invocationServicesPending = fetchAPI('/api/services')
+        .then(({ data }) => {
+            if (version !== invocationServicesVersion) return;
+            invocationServices = Array.isArray(data.services) ? data.services : [];
+            updateInvocationNodes();
+        })
+        .catch(() => {
+            if (version !== invocationServicesVersion) return;
+            invocationServices = [];
+            updateInvocationNodes();
+        })
+        .finally(() => {
+            if (version === invocationServicesVersion) invocationServicesPending = null;
+        });
+}
+
+function updateInvocationNodes() {
+    for (const { cy } of dagCache.values()) {
+        if (cy.destroyed()) continue;
+        cy.batch(() => {
+            cy.nodes().forEach(node => {
+                if (node.data('stepLabel') === undefined) return;
+                const agent = isAgentInvocation(node.data('serviceName'), node.data('capability'), invocationServices);
+                node.data({ isAgentInvocation: agent, label: (agent ? '🤖 ' : '') + node.data('stepLabel') });
+            });
+        });
+    }
+}
 
 function readGroupingPreference() {
     try {
@@ -114,6 +433,12 @@ function primaryDurationMs(execution) {
 
 function jaegerTraceURL(traceID) {
     return `/api/traces/${encodeURIComponent(traceID || '')}`;
+}
+
+function renderInteractionTraceLink(interaction) {
+    const traceID = interaction.trace_id;
+    if (typeof traceID !== 'string' || !traceID.trim()) return '';
+    return `<a class="dag-viz-meta-item dag-viz-trace-link dag-call-trace-link" href="${jaegerTraceURL(traceID)}" target="_blank" rel="noopener noreferrer" title="${escapeHtmlAttribute(`Open interaction trace ${traceID} in Jaeger`)}" aria-label="${escapeHtmlAttribute(`Open interaction trace ${traceID} in Jaeger`)}">TraceID <span aria-hidden="true">↗</span></a>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,10 +759,32 @@ export function init() {
     updateGroupingModeControls();
     showExecutionListMode();
     bindDelegatedEvents();
+    refreshInvocationServices();
     fetchExecutions();
 }
 
+/** Open an explicit execution independently of list/timeline availability. */
+export function openExecution(requestID) {
+    if (typeof requestID !== 'string' || !executionDeepLinkRequestID(new URLSearchParams({ view: 'dag', request_id: requestID }).toString())) {
+        return Promise.resolve();
+    }
+    return selectExecution(requestID);
+}
+
+function updateExecutionDeepLink(requestID) {
+    if (typeof location === 'undefined' || typeof history === 'undefined') return;
+    if (!executionDeepLinkRequestID(location.search)) return;
+    try {
+        const url = new URL(location.href);
+        url.searchParams.set('request_id', requestID);
+        history.replaceState(history.state, '', url);
+    } catch (_) {
+        // Read-only/embedded history support must not block detail loading.
+    }
+}
+
 export function refresh() {
+    refreshInvocationServices();
     fetchExecutions({ preserveExpansion: true });
     if (selected && !detailRefreshPending) {
         void selectExecution(selected.request_id, { background: true });
@@ -449,7 +796,13 @@ export function refresh() {
 
 export function destroy() {
     selectionVersion++;
+    lineageLoader.destroy();
+    invokingStepTarget = null;
+    resetParentExecutionLookup();
     selected = null;
+    invocationServicesVersion++;
+    invocationServices = [];
+    invocationServicesPending = null;
     // Dismiss any open popups (they're on document.body, not inside the DAG container)
     document.querySelectorAll('.node-popup').forEach(p => p.remove());
     // Destroy all cached Cytoscape instances
@@ -497,6 +850,11 @@ function handleDagTableClick(e) {
 }
 
 function handleDagListPanelClick(e) {
+    const lineageTarget = e.target.closest('[data-lineage-execution]');
+    if (lineageTarget) {
+        navigateExecutionLineage(lineageTarget);
+        return;
+    }
     const groupingBtn = e.target.closest('[data-grouping-mode]');
     if (groupingBtn) {
         setGroupingMode(groupingBtn.dataset.groupingMode);
@@ -566,6 +924,7 @@ function handleDagListPanelClick(e) {
 
 function handleDagListPanelKeydown(e) {
     if (e.repeat || (e.key !== 'Enter' && e.key !== ' ')) return;
+    if (e.target.closest('[data-lineage-execution]')) return;
     const timelineExecution = e.target.closest(
         '[data-view-timeline-execution][role="button"]',
     );
@@ -589,7 +948,31 @@ function handleDagDetailPanelClick(e) {
 // HITL). Bound against the persistent dagDetailContent element. Each render
 // function used to bind its own listener via container.addEventListener,
 // which stacked handlers and caused expand/collapse to behave intermittently.
+function handleLineageAction(e) {
+    const lineageTarget = e.target.closest('[data-lineage-execution]');
+    if (lineageTarget) {
+        e.preventDefault();
+        navigateExecutionLineage(lineageTarget);
+        return true;
+    }
+    if (e.target.closest('[data-refresh-execution-lineage]')) {
+        if (!lineageLoader.pending()) discoverExecutionLineage({ force: true });
+        return true;
+    }
+    if (e.target.closest('[data-open-parent-execution]')) {
+        setDagDetailTab('dag-parent');
+        return true;
+    }
+    if (e.target.closest('[data-refresh-parent-execution]')) {
+        loadParentExecution({ force: true });
+        renderParentExecution(document.getElementById('dagDetailContent'));
+        return true;
+    }
+    return false;
+}
+
 function handleDagDetailContentClick(e) {
+    if (handleLineageAction(e)) return;
     // Toggle "Show more" on long step instructions
     const instrBtn = e.target.closest('[data-toggle-instruction]');
     if (instrBtn) {
@@ -1031,24 +1414,12 @@ function renderServerExecutionGroups(groups) {
         groups.forEach(group => {
             if (!group.conversation_id) {
                 (group.turns || []).forEach(turn => {
-                    rows.push(renderGroupedExecutionRow(turn.execution, {
+                    rows.push(renderHierarchyGroupedRows([turn.execution, ...(turn.related_executions || [])], turn.execution?.request_id, {
                         llmCallCount: turn.llm_call_count,
                         historyStatus: turn.history_status,
                     }));
-                    (turn.related_executions || []).forEach(related => {
-                        rows.push(renderGroupedExecutionRow(related, {
-                            related: true,
-                            relationLabel: 'Related',
-                        }));
-                    });
                 });
-                (group.orphans || []).forEach(orphan => {
-                    rows.push(renderGroupedExecutionRow(orphan, {
-                        related: true,
-                        relationLabel: orphanRelationLabel(orphan),
-                        orphan: true,
-                    }));
-                });
+                rows.push(renderHierarchyGroupedRows(group.orphans || []));
                 return;
             }
 
@@ -1057,25 +1428,13 @@ function renderServerExecutionGroups(groups) {
             if (!expanded) return;
 
             (group.turns || []).forEach(turn => {
-                rows.push(renderGroupedExecutionRow(turn.execution, {
+                rows.push(renderHierarchyGroupedRows([turn.execution, ...(turn.related_executions || [])], turn.execution?.request_id, {
                     conversationTurn: true,
                     llmCallCount: turn.llm_call_count,
                     historyStatus: turn.history_status,
                 }));
-                (turn.related_executions || []).forEach(related => {
-                    rows.push(renderGroupedExecutionRow(related, {
-                        related: true,
-                        relationLabel: 'Related execution',
-                    }));
-                });
             });
-            (group.orphans || []).forEach(orphan => {
-                rows.push(renderGroupedExecutionRow(orphan, {
-                    related: true,
-                    relationLabel: orphanRelationLabel(orphan),
-                    orphan: true,
-                }));
-            });
+            rows.push(renderHierarchyGroupedRows(group.orphans || []));
         });
         container.innerHTML = rows.join('');
     }
@@ -1088,6 +1447,16 @@ function renderServerExecutionGroups(groups) {
         );
         updateGroupedLoadMoreControl();
     }
+}
+
+function renderHierarchyGroupedRows(records, primaryID = '', primaryOptions = {}) {
+    return buildExecutionHierarchy(records).ordered.map(entry => renderGroupedExecutionRow(entry.execution, {
+        ...(entry.execution.request_id === primaryID ? primaryOptions : {}),
+        related: entry.depth > 0 || entry.legacy || !!entry.reason,
+        depth: entry.depth,
+        hierarchyEntry: entry,
+        orphan: !!entry.reason,
+    })).join('');
 }
 
 function orphanRelationLabel(execution) {
@@ -1164,12 +1533,13 @@ function renderGroupedExecutionRow(exec, options = {}) {
     const {
         conversationTurn = false,
         related = false,
-        relationLabel = '',
         orphan = false,
         llmCallCount = 0,
         historyStatus = '',
+        depth = 0,
+        hierarchyEntry = { execution: exec, depth },
     } = options;
-    const renderRelationBranch = related && hasVisibleRelationOwner(exec, orphan);
+    const renderRelationBranch = depth > 0 && !orphan;
     const isSelected = selected?.request_id === exec.request_id;
     const rowClasses = [
         isSelected ? 'selected' : '',
@@ -1190,14 +1560,12 @@ function renderGroupedExecutionRow(exec, options = {}) {
                 <span class="status-badge ${statusClass}">${statusLabel}</span>
             </td>
             <td>
-                <div class="dag-execution-title-row">
-                    ${renderRelationBranch ? '<span class="child-indicator">↳</span>' : (conversationTurn ? '<span class="dag-turn-dot" aria-hidden="true"></span>' : '')}
+                <div class="dag-execution-title-row" style="margin-left: ${Math.min(depth, 4) * 12}px;" data-lineage-depth="${depth}">
                     <div class="dag-execution-title">
-                        ${relationLabel ? `<span class="dag-relation-label">${escapeHtml(relationLabel)}</span>` : ''}
-                        <div class="service-name">${escapeHtml(truncateText(exec.original_request || 'Unknown request', related ? 48 : 58))}</div>
+                        ${renderLineageRowContext(hierarchyEntry)}
+                        <div class="service-name">${escapeHtml(truncateText(executionRequestText(exec), related ? 48 : 58))}</div>
                         <span class="request-id">${escapeHtml(requestID)}</span>
                         ${exec.interrupted ? '<span class="hitl-resume-badge">HITL Interrupted</span>' : ''}
-                        ${exec.metadata?.resume_checkpoint_id ? '<span class="hitl-resume-badge dag-hitl-resume">HITL Resume</span>' : ''}
                         ${llmCallCount ? `<span class="dag-row-meta">${llmCallCount} LLM call${llmCallCount === 1 ? '' : 's'}</span>` : ''}
                         ${historyStatus ? `<span class="dag-row-meta">${escapeHtml(historyStatus)}</span>` : ''}
                         ${exec.missing_owner_id ? `<span class="dag-row-meta">Parent: ${escapeHtml(exec.missing_owner_id)}</span>` : ''}
@@ -1212,213 +1580,50 @@ function renderGroupedExecutionRow(exec, options = {}) {
                 </div>
             </td>
             <td><span class="dag-mono">${formatDuration(duration)}</span></td>
-            <td><span class="time-ago">${formatTimeAgo(exec.created_at)}</span></td>
+            <td><span class="time-ago">${lastSnapshotLabel(exec, true)}</span><span class="dag-group-sort-note">Last snapshot</span></td>
         </tr>`;
 }
 
 function renderLegacyExecutionList() {
     const container = document.getElementById('dagTableBody');
-    const searchInput = document.getElementById('dagSearchInput');
-    const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
-
-    let filtered = executions.filter(exec => {
-        if (!matchesExecutionStatus(exec, filter)) return false;
-        if (filter === 'interrupted' && !exec.interrupted) return false;
-        if (searchTerm && !exec.original_request.toLowerCase().includes(searchTerm) &&
-            !exec.request_id.toLowerCase().includes(searchTerm)) return false;
-        return true;
-    });
-
-    // Sort the filtered list
+    if (!container) return;
+    const searchTerm = document.getElementById('dagSearchInput')?.value.toLowerCase() || '';
+    const filtered = executions.filter(exec =>
+        matchesExecutionStatus(exec, filter) &&
+        (filter !== 'interrupted' || exec.interrupted) &&
+        (!searchTerm || (exec.original_request || '').toLowerCase().includes(searchTerm) ||
+            exec.request_id.toLowerCase().includes(searchTerm))
+    );
     filtered.sort((a, b) => {
-        let valA, valB;
-        switch (sortColumn) {
-            case 'original_request':
-                valA = (a.original_request || '').toLowerCase();
-                valB = (b.original_request || '').toLowerCase();
-                break;
-            case 'total_duration_ms':
-                valA = primaryDurationMs(a);
-                valB = primaryDurationMs(b);
-                break;
-            case 'created_at':
-            default:
-                valA = new Date(a.created_at).getTime();
-                valB = new Date(b.created_at).getTime();
-                break;
-        }
-        if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
-        if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
-        return 0;
-    });
-
-    if (filtered.length === 0) {
-        container.innerHTML = `
-            <tr>
-                <td colspan="5" style="text-align: center; padding: 40px;">
-                    <div class="empty-state-icon" style="font-size: 40px; margin-bottom: 12px;">🔀</div>
-                    <div style="color: var(--text-muted);">No executions found</div>
-                </td>
-            </tr>`;
-        return;
-    }
-
-    // Group executions by original_request_id for parent-child display.
-    // Parent: where request_id === original_request_id or no original_request_id
-    // Child: where original_request_id exists and differs from request_id
-    // isHITL distinguishes HITL resumes (parent was interrupted) from agent delegation children.
-    const groups = new Map(); // key: original_request_id, value: { parent, children, isHITL }
-
-    filtered.forEach(exec => {
-        const groupKey = exec.original_request_id || exec.request_id;
-        const isParent = !exec.original_request_id || exec.request_id === exec.original_request_id;
-
-        if (!groups.has(groupKey)) {
-            groups.set(groupKey, { parent: null, children: [], isHITL: false });
-        }
-
-        const group = groups.get(groupKey);
-        if (isParent) {
-            group.parent = exec;
+        let left, right;
+        if (sortColumn === 'original_request') {
+            left = (a.original_request || '').toLowerCase();
+            right = (b.original_request || '').toLowerCase();
+        } else if (sortColumn === 'total_duration_ms') {
+            left = primaryDurationMs(a); right = primaryDurationMs(b);
         } else {
-            group.children.push(exec);
+            left = Date.parse(a.created_at) || 0; right = Date.parse(b.created_at) || 0;
         }
+        return (left < right ? -1 : left > right ? 1 : 0) * (sortDirection === 'asc' ? 1 : -1);
     });
-
-    // Determine HITL status per group: a group is HITL only if the parent
-    // or any member was interrupted (has a checkpoint). Agent delegation
-    // children inherit original_request_id via OTel baggage but are never interrupted.
-    groups.forEach(group => {
-        if (group.parent?.interrupted || group.children.some(c => c.interrupted)) {
-            group.isHITL = true;
-        }
-    });
-
-    // Sort children within each group by created_at (oldest first, so conversation flows naturally)
-    groups.forEach(group => {
-        group.children.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-    });
-
-    // Convert groups to ordered array (sorted by current sort column/direction)
-    const orderedGroups = Array.from(groups.values())
-        .filter(g => g.parent) // Only groups with a parent
-        .sort((a, b) => {
-            let valA, valB;
-            switch (sortColumn) {
-                case 'original_request':
-                    valA = (a.parent.original_request || '').toLowerCase();
-                    valB = (b.parent.original_request || '').toLowerCase();
-                    break;
-                case 'total_duration_ms':
-                    valA = primaryDurationMs(a.parent);
-                    valB = primaryDurationMs(b.parent);
-                    break;
-                case 'created_at':
-                default:
-                    valA = new Date(a.parent.created_at).getTime();
-                    valB = new Date(b.parent.created_at).getTime();
-                    break;
-            }
-            if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
-            if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
-            return 0;
-        });
-
-    // Handle orphan children (where parent wasn't in filtered results)
-    groups.forEach((group, groupKey) => {
-        if (!group.parent && group.children.length > 0) {
-            // Promote first child as pseudo-parent for display
-            group.parent = group.children.shift();
-            orderedGroups.push(group);
-        }
-    });
-
-    // Re-sort after adding orphans to maintain correct order
-    orderedGroups.sort((a, b) => {
-        let valA, valB;
-        switch (sortColumn) {
-            case 'original_request':
-                valA = (a.parent.original_request || '').toLowerCase();
-                valB = (b.parent.original_request || '').toLowerCase();
-                break;
-            case 'total_duration_ms':
-                valA = primaryDurationMs(a.parent);
-                valB = primaryDurationMs(b.parent);
-                break;
-            case 'created_at':
-            default:
-                valA = new Date(a.parent.created_at).getTime();
-                valB = new Date(b.parent.created_at).getTime();
-                break;
-        }
-        if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
-        if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
-        return 0;
-    });
-
-    // Helper to render a single execution row
-    const renderRow = (exec, isChild = false, hasChildren = false, isHITL = false) => {
-        const isSelected = selected?.request_id === exec.request_id;
-        const childClass = isChild ? 'child-row' : '';
-        const expandableClass = hasChildren ? 'expandable' : '';
-
-        return `
-        <tr class="${isSelected ? 'selected' : ''} ${childClass} ${expandableClass}"
-            data-request-id="${exec.request_id}"
-            data-original-request-id="${exec.original_request_id || exec.request_id}">
-            <td>
-                <span class="status-badge ${executionStatus(exec).css}">
-                    ${executionStatus(exec).label}
-                </span>
-            </td>
-            <td>
-                <div style="display: flex; align-items: flex-start;">
-                    ${isChild ? '<span class="child-indicator">↳</span>' : ''}
-                    <div style="flex: 1;">
-                        <div class="service-name" style="margin-bottom: 4px;">
-                            ${truncateText(exec.original_request, isChild ? 50 : 60)}
-                        </div>
-                        <span class="request-id">${exec.request_id}</span>
-                        ${exec.interrupted ? '<span class="hitl-resume-badge">HITL Interrupted</span>' : ''}
-                        ${exec.metadata?.resume_checkpoint_id ? '<span class="hitl-resume-badge" style="background: rgba(46, 204, 113, 0.15); color: #2ecc71;">HITL Resume</span>' : ''}
-                        ${isChild && !exec.interrupted && !exec.metadata?.resume_checkpoint_id ? '<span class="hitl-resume-badge" style="background: rgba(218, 143, 255, 0.15); color: var(--accent-purple);">Delegated</span>' : ''}
-                    </div>
-                </div>
-            </td>
-            <td>
-                <div class="step-progress">
-                    <span>${exec.step_count} steps</span>
-                    ${exec.failed_steps > 0 ? `
-                        <span style="color: var(--accent-red); font-size: 11px;">(${exec.failed_steps} failed)</span>
-                    ` : ''}
-                    ${exec.skipped_steps > 0 ? `<span style="color: var(--text-muted); font-size: 11px;">(${exec.skipped_steps} skipped)</span>` : ''}
-                </div>
-            </td>
-            <td>
-                <span style="font-family: 'SF Mono', monospace; font-size: 12px;">
-                    ${formatDuration(primaryDurationMs(exec))}
-                </span>
-            </td>
-            <td>
-                <span class="time-ago">${formatTimeAgo(exec.created_at)}</span>
-            </td>
-        </tr>`;
-    };
-
-    // Build HTML: parent followed by its children
-    const rows = [];
-    orderedGroups.forEach(group => {
-        const hasChildren = group.children.length > 0;
-        rows.push(renderRow(group.parent, false, hasChildren, group.isHITL));
-        group.children.forEach(child => {
-            rows.push(renderRow(child, true, false, group.isHITL));
-        });
-    });
-
-    container.innerHTML = rows.join('');
-
-    // Update last updated timestamp
-    document.getElementById('dagLastUpdated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+    // Root sections retain the chosen list sort. Explicit sibling order is
+    // always ascending snapshot time; shared root IDs do not create edges.
+    const hierarchy = buildExecutionHierarchy(filtered);
+    const ranks = new Map(filtered.map((item, index) => [item.request_id, index]));
+    const sections = [];
+    for (const entry of hierarchy.ordered) {
+        if (entry.depth === 0) sections.push([]);
+        sections[sections.length - 1].push(entry);
+    }
+    sections.sort((a, b) => ranks.get(a[0].execution.request_id) - ranks.get(b[0].execution.request_id));
+    container.innerHTML = sections.flat().map(entry => renderGroupedExecutionRow(entry.execution, {
+        depth: entry.depth,
+        hierarchyEntry: entry,
+        related: entry.depth > 0 || entry.legacy || !!entry.reason,
+        orphan: !!entry.reason,
+    })).join('') || '<tr><td colspan="5" class="dag-list-empty">No executions found</td></tr>';
+    const updated = document.getElementById('dagLastUpdated');
+    if (updated) updated.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1571,9 +1776,7 @@ function renderConversationTimeline(timeline, selectedRequestID = selected?.requ
             <section class="dag-timeline-orphans">
                 <h3>Unattached related records</h3>
                 <p>These executions reference a parent that could not be attached. Each card shows whether the parent was confirmed unavailable or the lookup was incomplete.</p>
-                ${(timeline.orphans || []).map(orphan =>
-                    renderTimelineRelatedExecution(orphan, selectedRequestID, true)
-                ).join('')}
+                ${renderTimelineHierarchy(timeline.orphans || [], selectedRequestID)}
             </section>`);
     }
     content.innerHTML = cards.join('');
@@ -1588,6 +1791,7 @@ function renderTimelineTurn(turn, index, totalTurns, selectedRequestID) {
         related.some(item => item.request_id === selectedRequestID);
     const { css: statusClass, label: statusLabel } = executionStatus(execution);
     const duration = primaryDurationMs(execution);
+    const hierarchyEntry = buildExecutionHierarchy([execution, ...related]).ordered.find(entry => entry.execution.request_id === execution.request_id);
 
     return `
         <article class="dag-timeline-card ${containsSelected ? 'contains-current' : ''} ${execution.request_id === selectedRequestID ? 'current' : ''}" ${containsSelected ? 'aria-current="true"' : ''}>
@@ -1600,17 +1804,18 @@ function renderTimelineTurn(turn, index, totalTurns, selectedRequestID) {
                     role="button"
                     tabindex="0"
                     data-view-timeline-execution="${escapeHtmlAttribute(execution.request_id || '')}"
-                    aria-label="View DAG for turn ${index + 1}: ${escapeHtmlAttribute(truncateText(execution.original_request || 'Unknown request', 90))}"
+                    aria-label="View DAG for turn ${index + 1}: ${escapeHtmlAttribute(truncateText(executionRequestText(execution), 90))}"
                     ${execution.request_id === selectedRequestID ? 'aria-current="true"' : ''}
                 >
                     <div class="dag-timeline-card-header">
                         <div>
                             <span class="dag-turn-label">Turn ${index + 1} of ${totalTurns}</span>
-                            <time datetime="${escapeHtmlAttribute(execution.created_at || '')}">${formatDateTime(execution.created_at)}</time>
+                            <time datetime="${escapeHtmlAttribute(execution.created_at || '')}">Last snapshot: ${lastSnapshotLabel(execution)}</time>
                         </div>
                         <span class="status-badge ${statusClass}">${statusLabel}</span>
                     </div>
-                    <div class="dag-timeline-request">${escapeHtml(execution.original_request || 'Unknown request')}</div>
+                    ${hierarchyEntry ? renderLineageRowContext(hierarchyEntry) : ''}
+                    <div class="dag-timeline-request">${escapeHtml(executionRequestText(execution))}</div>
                     <div class="dag-timeline-meta">
                         ${execution.agent_name ? `<span>${escapeHtml(execution.agent_name)}</span>` : ''}
                         <span>${execution.step_count || 0} steps</span>
@@ -1630,37 +1835,39 @@ function renderTimelineTurn(turn, index, totalTurns, selectedRequestID) {
                 ${related.length > 0 ? `
                     <div class="dag-timeline-related-list">
                         <div class="dag-related-heading">${related.length} related execution${related.length === 1 ? '' : 's'}</div>
-                        ${related.map(item =>
-                            renderTimelineRelatedExecution(item, selectedRequestID)
-                        ).join('')}
+                        <div class="dag-row-meta">Sibling order: last snapshot, oldest first</div>
+                        ${renderTimelineHierarchy([execution, ...related], selectedRequestID, execution.request_id)}
                     </div>` : ''}
             </div>
         </article>`;
 }
 
-function renderTimelineRelatedExecution(execution, selectedRequestID, orphan = false) {
+function renderTimelineHierarchy(records, selectedRequestID, primaryID = '') {
+    return buildExecutionHierarchy(records).ordered.filter(entry => entry.execution.request_id !== primaryID)
+        .map(entry => renderTimelineRelatedExecution(entry.execution, selectedRequestID, !!entry.reason, entry)).join('');
+}
+
+function renderTimelineRelatedExecution(execution, selectedRequestID, orphan = false, entry = {}) {
     const current = execution.request_id === selectedRequestID;
     const duration = primaryDurationMs(execution);
-    const relation = orphan
-        ? orphanRelationLabel(execution)
-        : (execution.metadata?.resume_checkpoint_id ? 'HITL resume' : 'Delegated / related');
-    const renderRelationBranch = hasVisibleRelationOwner(execution, orphan);
+    const relation = lineageRelationLabel({ ...entry, execution }) || 'Related · immediate parent not recorded';
+    const depth = entry.depth || 0;
     return `
         <div
             class="dag-timeline-related ${current ? 'current' : ''}"
+            style="margin-left: ${Math.min(depth, 4) * 12}px;" data-lineage-depth="${depth}"
             role="button"
             tabindex="0"
             data-view-timeline-execution="${escapeHtmlAttribute(execution.request_id || '')}"
-            aria-label="View DAG for ${escapeHtmlAttribute(relation.toLowerCase())} execution: ${escapeHtmlAttribute(truncateText(execution.original_request || 'Unknown request', 90))}"
+            aria-label="View DAG for ${escapeHtmlAttribute(relation.toLowerCase())} execution: ${escapeHtmlAttribute(truncateText(executionRequestText(execution), 90))}"
             ${current ? 'aria-current="true"' : ''}
         >
-            ${renderRelationBranch ? '<span class="dag-related-branch" aria-hidden="true">↳</span>' : ''}
             <div>
-                <span class="dag-relation-label">${relation}</span>
-                <div>${escapeHtml(truncateText(execution.original_request || 'Unknown request', 72))}</div>
+                ${renderLineageRowContext({ ...entry, execution })}
+                <div>${escapeHtml(truncateText(executionRequestText(execution), 72))}</div>
                 <div class="dag-timeline-meta">
                     ${execution.agent_name ? `<span>${escapeHtml(execution.agent_name)}</span>` : ''}
-                    <span>${formatDateTime(execution.created_at)}</span>
+                    <span>Last snapshot: ${lastSnapshotLabel(execution)}</span>
                     <span>${execution.step_count || 0} steps</span>
                     <span>${formatDuration(duration)}</span>
                     <span class="status-badge ${executionStatus(execution).css}">${executionStatus(execution).label}</span>
@@ -1738,13 +1945,17 @@ async function selectExecution(
     { restoreTimelineActionFocus = false, background = false } = {},
 ) {
     const version = background ? selectionVersion : ++selectionVersion;
+    if (!background) {
+        lineageLoader.select(requestId, loadedLineageSummaries().find(item => item.request_id === requestId));
+        discoverExecutionLineage({ requestID: requestId });
+    }
     if (background) detailRefreshPending = true;
     if (!background) document.querySelectorAll('.node-popup').forEach(p => p.remove());
     const detailPanel = document.getElementById('dagDetailPanel');
     if (!background) showLoading(detailPanel, 'Loading execution...');
     try {
         // Use unified endpoint to get execution, LLM debug, and HITL data in one call
-        const { data } = await fetchAPI(`/api/executions/${requestId}/unified`);
+        const { data } = await fetchAPI(`/api/executions/${encodeURIComponent(requestId)}/unified`);
         if (version !== selectionVersion || (background && selected?.request_id !== requestId)) return;
         if (background && data.record_revision && selected.record_revision > data.record_revision) return;
         // Hook and LLM debug stores can advance independently of the execution
@@ -1752,7 +1963,10 @@ async function selectExecution(
         const viewport = background && cyInstance && !cyInstance.destroyed()
             ? { zoom: cyInstance.zoom(), pan: { ...cyInstance.pan() } } : null;
         const selectionChanged = selected?.request_id !== data.request_id;
+        if (parentExecutionLookup && (parentExecutionLookup.childID !== data.request_id ||
+            parentExecutionLookup.parentID !== data.parent_request_id)) resetParentExecutionLookup();
         selected = data;
+        if (!background) updateExecutionDeepLink(selected.request_id);
         // Multi-phase support: merge all phase plan steps into plan.steps
         // so existing rendering code works unchanged
         if (selected.phase_plans && selected.phase_plans.length > 1) {
@@ -1776,7 +1990,19 @@ async function selectExecution(
             renderConversationTimeline(activeTimeline, selected.request_id);
         }
         updateDetailTabs(); // Update tab visibility based on available data
+        document.querySelectorAll('#dagDetailPanel .detail-tab').forEach(button => {
+            button.classList.toggle('active', button.dataset.tab === activeTab);
+        });
         renderExecutionDetail(viewport);
+        if (invokingStepTarget?.requestID === selected.request_id) {
+            const stepID = invokingStepTarget.stepID;
+            requestAnimationFrame(() => {
+                if (version !== selectionVersion) return;
+                const card = document.getElementById(`dag-step-details-${stepID}`);
+                card?.focus({ preventScroll: true });
+                card?.scrollIntoView({ block: 'nearest' });
+            });
+        }
         if (restoreTimelineActionFocus && listPanelMode === 'timeline') {
             requestAnimationFrame(() => {
                 const action = Array.from(document.querySelectorAll(
@@ -1795,6 +2021,9 @@ async function selectExecution(
 
 // Update tab visibility based on available data
 function updateDetailTabs() {
+    const parentTab = document.querySelector('[data-tab="dag-parent"]');
+    if (parentTab) parentTab.style.display = selected?.parent_request_id ? 'block' : 'none';
+    if (activeTab === 'dag-parent' && !selected?.parent_request_id) activeTab = 'dag-viz';
     const llmTab = document.querySelector('[data-tab="dag-llm"]');
     const hitlTab = document.querySelector('[data-tab="dag-hitl"]');
     const preTab = document.querySelector('[data-tab="dag-pre"]');
@@ -1831,10 +2060,10 @@ function updateDetailTabs() {
 }
 
 function setDagDetailTab(tab) {
-    activeTab = tab;
+    activeTab = tab === 'dag-parent' && !selected?.parent_request_id ? 'dag-viz' : tab;
     document.querySelectorAll('.node-popup').forEach(p => p.remove());
     document.querySelectorAll('#dagDetailPanel .detail-tab').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.tab === tab);
+        btn.classList.toggle('active', btn.dataset.tab === activeTab);
     });
     renderExecutionDetail();
 }
@@ -1845,10 +2074,12 @@ function renderExecutionDetail(viewport = null) {
     const container = document.getElementById('dagDetailContent');
 
     // Update detail title
-    document.getElementById('dagDetailTitle').textContent = truncateText(selected.original_request, 50);
+    document.getElementById('dagDetailTitle').textContent = truncateText(executionRequestText(selected), 50);
 
     if (activeTab === 'dag-viz') {
         renderDAGVisualization(container, viewport);
+    } else if (activeTab === 'dag-parent') {
+        renderParentExecution(container);
     } else if (activeTab === 'dag-pre') {
         renderPreExecution(container);
     } else if (activeTab === 'dag-steps') {
@@ -2221,6 +2452,49 @@ function setDagViewMode(mode) {
 // DAG Visualization
 // ---------------------------------------------------------------------------
 
+function validClarification(value) {
+    return value && typeof value.question === 'string' && value.question.trim() ? value : null;
+}
+
+function recordedClarification(execution) {
+    return validClarification(execution?.result?.clarification_needed);
+}
+
+function clarificationOutcomeLabel(execution) {
+    return executionStatus(execution).state === 'completed' ? 'Clarification requested' : 'Recorded clarification';
+}
+
+function renderClarificationDetails(value, label, description, compact = false) {
+    const clarification = validClarification(value);
+    if (!clarification) return '';
+    const missingFields = Array.isArray(clarification.missing_fields)
+        ? clarification.missing_fields.filter(field => typeof field === 'string') : [];
+    return `<details class="dag-clarification-details" style="${compact ? 'display: inline-block;' : 'margin-top: 10px;'} font-size: 12px;">
+        <summary style="cursor: pointer; color: var(--accent-orange); font-weight: 600;">${escapeHtml(label)}</summary>
+        <div style="margin-top: 8px; color: var(--text-primary); overflow-wrap: anywhere; max-width: 560px;">
+            <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">${escapeHtml(description)}</div>
+            <pre style="white-space: pre-wrap; font: inherit; margin: 0 0 10px;">${escapeHtml(clarification.question)}</pre>
+            ${missingFields.length ? `<strong>Missing fields</strong><ul style="white-space: pre-wrap; padding-left: 20px; margin: 4px 0 10px;">${missingFields.map(field => `<li>${escapeHtml(field)}</li>`).join('')}</ul>` : ''}
+            ${typeof clarification.partial_progress === 'string' && clarification.partial_progress ? `<strong>Partial progress</strong><pre style="white-space: pre-wrap; font: inherit; margin: 4px 0 0;">${escapeHtml(clarification.partial_progress)}</pre>` : ''}
+        </div>
+    </details>`;
+}
+
+function renderRecordedClarification(execution, compact = false) {
+    return renderClarificationDetails(recordedClarification(execution), clarificationOutcomeLabel(execution),
+        'Recorded outcome for this execution; client delivery is separate.', compact);
+}
+
+function renderPlannerClarifications(execution, phaseNumber = null) {
+    const plans = execution?.phase_plans?.length ? execution.phase_plans : [execution?.plan];
+    return plans.map((plan, index) => {
+        const number = plan?.phase_number || index + 1;
+        if (phaseNumber !== null && number !== phaseNumber) return '';
+        return renderClarificationDetails(plan?.needs_user_input, `Phase ${number} planner observation`,
+            'Input requested in the plan; this does not establish delivery to the caller.');
+    }).join('');
+}
+
 function renderDAGVisualization(container, viewport = null) {
     const renderedSelection = selected;
     const renderedVersion = selectionVersion;
@@ -2251,7 +2525,7 @@ function renderDAGVisualization(container, viewport = null) {
         <div class="dag-viz-container">
             ${failureNotice ? `<div class="dag-lifecycle-failure" role="status" style="padding: 12px; border-left: 3px solid var(--accent-red); color: var(--text-primary); background: rgba(255,107,107,0.08);">${escapeHtml(failureNotice)}</div>` : ''}
             <div class="dag-viz-header">
-                <div class="dag-viz-title" title="Click to expand/collapse">${formatConversationRequest(selected.original_request || 'Unknown Request')}</div>
+                <div class="dag-viz-title" title="Click to expand/collapse">${formatConversationRequest(executionRequestText(selected))}</div>
                 <div class="dag-viz-meta">
                     ${agentName !== 'orchestrator' ? `<span class="dag-viz-meta-item" style="color: var(--accent-purple);">🤖 ${escapeHtml(agentName)}</span>` : ''}
                     <span class="dag-viz-meta-item">ID: ${(selected.request_id || '').substring(0, 20)}...</span>
@@ -2259,6 +2533,7 @@ function renderDAGVisualization(container, viewport = null) {
                     <span class="dag-viz-meta-item">${stepCount} step${stepCount !== 1 ? 's' : ''}</span>
                     <span class="dag-viz-meta-item" title="${escapeHtmlAttribute(selected.duration_source || 'legacy execution duration')}">⏱️ Elapsed: ${formatDuration(totalDurationMs)}</span>
                     <span class="dag-viz-meta-item ${executionStatus(selected).css}">${executionStatus(selected).label}</span>
+                    ${renderRecordedClarification(selected, true)}
                     ${hasLLM ? `<span class="dag-viz-meta-item" style="color: var(--accent-blue);">💭 ${llmCallCount} LLM calls · aggregate ${formatDuration(llmDurationMs)}</span>` : ''}
                     ${hasHITL && !selected.interrupted ? `<span class="dag-viz-meta-item" style="color: var(--accent-orange);">⏸️ HITL</span>` : ''}
                     ${selected.phase_count > 1 ? `<span class="dag-viz-meta-item" style="color: var(--accent-teal);">🔄 ${selected.phase_count} Phases</span>` : ''}
@@ -2291,7 +2566,7 @@ function renderDAGVisualization(container, viewport = null) {
                 <!-- Full Flow Legend -->
                 <div class="dag-legend-item">
                     <span class="dag-legend-dot orchestrator"></span>
-                    <span>Agent</span>
+                    <span>Agent / delegated agent</span>
                 </div>
                 <div class="dag-legend-item">
                     <span class="dag-legend-dot llm-call"></span>
@@ -2365,6 +2640,10 @@ function renderDAGVisualization(container, viewport = null) {
                 </div>` : ''}
                 ` : `
                 <!-- Steps Only Legend -->
+                <div class="dag-legend-item" title="Registered agent invoked as a capability; border retains execution status">
+                    <span class="dag-legend-dot orchestrator"></span>
+                    <span>Delegated agent</span>
+                </div>
                 <div class="dag-legend-item">
                     <span class="dag-legend-dot completed"></span>
                     <span>Completed</span>
@@ -2909,10 +3188,16 @@ function initCytoscape() {
                     // Keep compaction visibility separate from the loss warning.
                     const wasTrimmedFull = hasTrimDisplay(trimMetaFull);
                     const trimLabelFull = wasTrimmedFull ? trimNodeLabel(trimMetaFull) : '';
+                    const serviceName = result?.agent_name || step.agent_name || step.service_name || '';
+                    const agentInvocation = isAgentInvocation(serviceName, stepCapability, invocationServices);
+                    const stepLabel = baseLabelFull + (resInfoFull.summary ? '\n' + resInfoFull.summary : '') + trimLabelFull;
                     nodes.push({
                         data: {
                             id: step.step_id,
-                            label: baseLabelFull + (resInfoFull.summary ? '\n' + resInfoFull.summary : '') + trimLabelFull,
+                            label: (agentInvocation ? '🤖 ' : '') + stepLabel,
+                            stepLabel,
+                            serviceName,
+                            isAgentInvocation: agentInvocation,
                             nodeType: 'step',
                             status: status,
                             phaseNumber: phaseNum,
@@ -3277,7 +3562,7 @@ function initCytoscape() {
         nodes.push({
             data: {
                 id: 'response',
-                label: `📤 ${successLabel}`,
+                label: `📤 ${successLabel}${recordedClarification(selected) ? `\n${clarificationOutcomeLabel(selected)}` : ''}`,
                 nodeType: 'response',
                 lifecycleState: executionStatus(selected).state,
                 success: executionStatus(selected).state === 'completed',
@@ -3365,10 +3650,16 @@ function initCytoscape() {
 
             const resInfo = getResolutionInfo(result);
             const baseLabel = step.agent_name || stepCapability;
+            const serviceName = result?.agent_name || step.agent_name || step.service_name || '';
+            const agentInvocation = isAgentInvocation(serviceName, stepCapability, invocationServices);
+            const stepLabel = baseLabel + (resInfo.summary ? '\n' + resInfo.summary : '');
             return {
                 data: {
                     id: step.step_id,
-                    label: baseLabel + (resInfo.summary ? '\n' + resInfo.summary : ''),
+                    label: (agentInvocation ? '🤖 ' : '') + stepLabel,
+                    stepLabel,
+                    serviceName,
+                    isAgentInvocation: agentInvocation,
                     capability: stepCapability,
                     instruction: step.instruction || '',
                     status: status,
@@ -3572,6 +3863,20 @@ function initCytoscape() {
                     'border-opacity': 0.9,
                     'color': '#0a84ff'
                 }
+            },
+            {
+                // Agent identity is independent of outcome: purple fill matches
+                // the starting agent, while failure/pending/HITL borders remain.
+                selector: 'node[?isAgentInvocation]',
+                style: {
+                    'background-color': '#3d1a4d',
+                    'background-opacity': 0.7,
+                    'color': '#ffffff'
+                }
+            },
+            {
+                selector: 'node[?isAgentInvocation][status="completed"]',
+                style: { 'border-color': '#da8fff' }
             },
             {
                 // Template auto-include safety net fired - amber dashed border overlay
@@ -4202,8 +4507,9 @@ function showFullFlowNodePopup(node, nodeData) {
                 </div>
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Request ID</div>
-                    <div style="font-family: 'SF Mono', monospace; font-size: 11px;">${selected.request_id}</div>
+                    <div style="font-family: 'SF Mono', monospace; font-size: 11px;">${escapeHtml(selected.request_id)}</div>
                 </div>
+                <div data-agent-parent-info>${renderAgentParentInfo()}</div>
             `;
             break;
         case 'llm_call':
@@ -4268,6 +4574,7 @@ function showFullFlowNodePopup(node, nodeData) {
                     <div style="font-size: 11px; color: var(--text-muted);">Tokens</div>
                     <div>${tokens.toLocaleString()}</div>
                 </div>` : ''}
+                ${isPlanningType(llmType) ? renderPlannerClarifications(selected, nodeData.phaseNumber || 1) : ''}
             `;
             break;
         case 'memory_llm': {
@@ -4684,6 +4991,7 @@ function showFullFlowNodePopup(node, nodeData) {
                     <div style="color: ${resultColor}; font-weight: 600;">${responseStatus.label}</div>
                 </div>
                 ${executionFailureNotice(selected) ? `<div style="margin-top: 10px; font-size: 12px;">${escapeHtml(executionFailureNotice(selected))}</div>` : ''}
+                ${renderRecordedClarification(selected)}
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Elapsed Duration</div>
                     <div>${formatDuration(responseTotalDuration)}</div>
@@ -4800,6 +5108,8 @@ function showFullFlowNodePopup(node, nodeData) {
         </div>
         ${content}
     `;
+
+    popup.addEventListener('click', handleLineageAction);
 
     // Position popup near node — appended to document.body so it's not
     // clipped by the DAG container's overflow:hidden.
@@ -4949,8 +5259,16 @@ function showNodePopup(node, step, result) {
                 </div>
             ` : ''}
         ` : '<div style="color: var(--text-muted); font-style: italic;">Not executed yet</div>'}
+        <div data-lineage-request="${escapeHtmlAttribute(selected.request_id)}" data-lineage-step="${escapeHtmlAttribute(step.step_id)}">${renderDelegatedExecutionLinks(step.step_id)}</div>
         <button type="button" data-step-details style="display: block; margin-top: 12px; background: none; border: 0; padding: 0; color: var(--accent-blue); font: inherit; cursor: pointer;">View details in Step Details →</button>
     `;
+    popup.addEventListener('click', event => {
+        const target = event.target.closest('[data-lineage-execution]');
+        if (target) {
+            event.stopPropagation();
+            navigateExecutionLineage(target);
+        }
+    });
     popup.querySelector('[data-step-details]').addEventListener('click', () => {
         setDagDetailTab('dag-steps');
         const card = document.getElementById(`dag-step-details-${step.step_id}`);
@@ -5254,8 +5572,13 @@ function toggleCapabilityJson(elementId) {
 // ---------------------------------------------------------------------------
 
 function renderStepDetails(container) {
+    const lineageSummaries = selectedFamilySummaries();
+    const targetStep = invokingStepTarget?.requestID === selected?.request_id ? invokingStepTarget.stepID : '';
+    const targetPresent = !targetStep || (selected?.plan?.steps || []).some(step => step.step_id === targetStep);
+    const targetNotice = targetPresent ? '' : `<div class="dag-data-warning" role="status">Invoking step ${escapeHtml(targetStep)} is unavailable in this retained parent record.</div>`;
+    const clarificationDetails = renderRecordedClarification(selected) + renderPlannerClarifications(selected);
     if (!selected?.plan?.steps) {
-        container.innerHTML = '<div class="empty-detail">No steps available</div>';
+        container.innerHTML = `${targetNotice}${clarificationDetails}<div class="empty-detail">No steps available</div>`;
         return;
     }
 
@@ -5350,6 +5673,8 @@ function renderStepDetails(container) {
 
     container.innerHTML = `
         <div style="overflow-y: auto; height: 100%; padding: 16px;">
+            ${targetNotice}
+            ${clarificationDetails}
             ${selected.plan.steps.map((step, idx) => {
                 const result = stepResults[step.step_id];
                 // Phase divider before this step if it's the first step of a new phase
@@ -5392,6 +5717,7 @@ function renderStepDetails(container) {
 
                 return `${phaseDivider}
                     <div class="dag-step-card ${status}" id="dag-step-details-${escapeHtmlAttribute(step.step_id)}" tabindex="-1">
+                        <div data-lineage-request="${escapeHtmlAttribute(selected.request_id)}" data-lineage-step="${escapeHtmlAttribute(step.step_id)}">${renderDelegatedExecutionLinks(step.step_id, lineageSummaries)}</div>
                         <div class="dag-step-header">
                             <div class="dag-step-title">
                                 <span class="dag-step-number" style="${stepNumColors[status]} padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12px;">Step ${executionDisplayStepNumber(idx, selected)}</span>
@@ -5934,14 +6260,15 @@ function renderSingleLLMCard(interaction, idx, displayNum, displayLabel) {
 
     return `
         <div class="dag-step-card" style="background: linear-gradient(135deg, ${config.bg} 0%, rgba(255, 255, 255, 0.03) 100%); backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); border: 1px solid ${config.border}; box-shadow: ${baseShadow};" onmouseenter="this.style.boxShadow='${hoverShadow}'; this.style.borderColor='rgba(${_r}, 0.4)';" onmouseleave="this.style.boxShadow='${baseShadow}'; this.style.borderColor='${config.border}';">
-            <div class="dag-step-header">
+            <div class="dag-step-header dag-llm-card-header">
                 <div class="dag-step-title">
                     <span style="padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12px; background: linear-gradient(135deg, ${config.bg}, rgba(255, 255, 255, 0.05)); border: 1px solid ${config.border}; color: ${config.color};">${config.icon} #${shownNum}</span>
                     <span class="dag-step-id" style="color: ${config.color}; font-weight: 600;" title="${escapeHtml(interaction.type || '')}">${typeLabel}</span>
                     ${shownLabel ? `<span style="font-family: 'SF Mono', monospace; font-size: 11px; color: var(--text-muted);" title="Correlation ID — matches the Call ID shown in the DAG node popup">${escapeHtml(shownLabel)}</span>` : ''}
                     ${interaction.step_id ? `<span class="step-id-badge" title="Associated with step">📍 ${interaction.step_id}</span>` : ''}
                 </div>
-                <div style="display: flex; align-items: center; gap: 12px;">
+                <div class="dag-llm-card-actions">
+                    ${renderInteractionTraceLink(interaction)}
                     <span style="font-family: 'SF Mono', monospace; font-size: 11px; color: var(--text-muted);">
                         ${formatDuration(interaction.duration_ms || 0)}
                     </span>

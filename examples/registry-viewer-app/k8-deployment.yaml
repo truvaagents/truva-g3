@@ -77,7 +77,7 @@ spec:
             cpu: "25m"
             memory: "64Mi"
           limits:
-            cpu: "500m"
+            cpu: "1500m"
             memory: "512Mi"
         livenessProbe:
           httpGet:
@@ -85,14 +85,14 @@ spec:
             port: 8361
           initialDelaySeconds: 5
           periodSeconds: 10
-          timeoutSeconds: 3
+          timeoutSeconds: 10
         readinessProbe:
           httpGet:
             path: /api/readiness
             port: 8361
           initialDelaySeconds: 3
           periodSeconds: 5
-          timeoutSeconds: 3
+          timeoutSeconds: 10
       volumes:
       - name: redis-ca
         secret:

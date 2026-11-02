@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/orchestration"
@@ -63,11 +64,26 @@ func writeResumeError(w http.ResponseWriter, err error) {
 // by the coordinator, not trusted from the processing callback.
 type terminalResumeCallback struct {
 	StreamCallback
-	mu        sync.Mutex
-	requestID string
-	tools     []string
-	duration  int64
-	response  *orchestration.OrchestratorResponse
+	mu             sync.Mutex
+	requestID      string
+	tools          []string
+	duration       int64
+	response       *orchestration.OrchestratorResponse
+	usage          *[3]int
+	finish         string
+	completion     func(error)
+	completionOnce sync.Once
+}
+
+func (c *terminalResumeCallback) SendUsage(prompt, completion, total int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.usage = &[3]int{prompt, completion, total}
+}
+func (c *terminalResumeCallback) SendFinish(reason string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.finish = reason
 }
 
 func (c *terminalResumeCallback) SendDone(requestID string, tools []string, duration int64, response *orchestration.OrchestratorResponse) {
@@ -84,13 +100,42 @@ func (c *terminalResumeCallback) Err() error {
 	}
 	return nil
 }
-func (c *terminalResumeCallback) complete() {
+func (c *terminalResumeCallback) deferCompletion(completion func(error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.StreamCallback.SendDone(c.requestID, c.tools, c.duration, c.response)
+	c.completion = completion
+}
+func (c *terminalResumeCallback) finishCompletion(err error) {
+	c.completionOnce.Do(func() {
+		c.mu.Lock()
+		completion := c.completion
+		c.mu.Unlock()
+		if completion != nil {
+			completion(err)
+		}
+	})
+}
+func (c *terminalResumeCallback) complete() error {
+	c.mu.Lock()
+	requestID, tools, duration, response, usage, finish := c.requestID, c.tools, c.duration, c.response, c.usage, c.finish
+	c.mu.Unlock()
+	if usage != nil {
+		c.StreamCallback.SendUsage(usage[0], usage[1], usage[2])
+	}
+	if finish != "" {
+		c.StreamCallback.SendFinish(finish)
+	}
+	c.StreamCallback.SendDone(requestID, tools, duration, response)
+	err := c.Err()
+	c.finishCompletion(err)
+	if err != nil {
+		return &finalSSEDeliveryError{requestID: requestID, cause: err}
+	}
+	return nil
 }
 
 func (t *DevOpsChatAgent) serveResumeSSE(w http.ResponseWriter, r *http.Request, checkpointID string, expiryOnly bool) {
+	startTime := time.Now()
 	setCORSHeaders(w)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
@@ -138,6 +183,7 @@ func (t *DevOpsChatAgent) serveResumeSSE(w http.ResponseWriter, r *http.Request,
 	}
 	var callback *SSECallback
 	var terminal *terminalResumeCallback
+	var sessionID string
 	startStream := func(ctx context.Context) {
 		if callback != nil {
 			return
@@ -154,7 +200,8 @@ func (t *DevOpsChatAgent) serveResumeSSE(w http.ResponseWriter, r *http.Request,
 	_, err := hitl.Resumer.ResumeWithExecutor(r.Context(), checkpointID,
 		orchestration.ResumeExecutorFunc(func(ctx context.Context, checkpoint *orchestration.ExecutionCheckpoint) (*orchestration.ExecutionResult, error) {
 			startStream(ctx)
-			sessionID, created := t.resumeSession(checkpoint)
+			var created bool
+			sessionID, created = t.resumeSession(checkpoint)
 			if created {
 				callback.sendEvent("session", map[string]interface{}{"id": sessionID})
 			}
@@ -168,6 +215,11 @@ func (t *DevOpsChatAgent) serveResumeSSE(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if err != nil {
+		if terminal != nil {
+			// Preserve generated content as undelivered on durable-finalization
+			// failure; never publish a terminal success before that boundary.
+			terminal.finishCompletion(err)
+		}
 		if callback == nil {
 			writeResumeError(w, err)
 			return
@@ -177,7 +229,12 @@ func (t *DevOpsChatAgent) serveResumeSSE(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if terminal != nil {
-		terminal.complete()
+		if deliveryErr := terminal.complete(); deliveryErr != nil {
+			var final *finalSSEDeliveryError
+			if errors.As(deliveryErr, &final) {
+				t.recordFinalSSEDeliveryFailure(r.Context(), final, "hitl_resume", sessionID, time.Since(startTime))
+			}
+		}
 	}
 }
 

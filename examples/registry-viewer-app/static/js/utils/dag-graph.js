@@ -1,4 +1,234 @@
 /**
+ * Component identity comes from the current registry, not naming conventions
+ * or an LLM-authored plan. Replicas may agree on a type; ambiguous or missing
+ * registrations stay unclassified. This is display metadata, not execution
+ * evidence or an authorization decision.
+ */
+export function isAgentInvocation(serviceName, capability, services = []) {
+    if (!serviceName || !capability || !Array.isArray(services)) return false;
+    const matches = services.filter(service =>
+        service?.name === serviceName &&
+        Array.isArray(service.capabilities) &&
+        service.capabilities.some(item => item?.name === capability)
+    );
+    return matches.length > 0 && matches.every(service => service.type === 'agent');
+}
+
+/** Summary copies deliberately exclude graphs, debug interactions and payloads. */
+export function executionLineageSummary(execution) {
+    if (!execution || typeof execution.request_id !== 'string' || !execution.request_id) return null;
+    const summary = {};
+    for (const key of [
+        'request_id', 'original_request_id', 'parent_request_id', 'parent_step_id',
+        'conversation_id', 'agent_name', 'created_at', 'record_revision', 'lifecycle',
+        'original_request', 'step_count', 'failed_steps', 'skipped_steps', 'interrupted',
+        'total_duration_ms', 'wall_clock_duration_ms', 'trace_id', 'relation_status', 'missing_owner_id',
+    ]) {
+        if (execution[key] !== undefined) summary[key] = execution[key];
+    }
+    // Keep only the existing resume fact, rather than retaining request metadata.
+    if (execution.metadata?.resume_checkpoint_id) {
+        summary.metadata = { resume_checkpoint_id: execution.metadata.resume_checkpoint_id };
+    }
+    return summary;
+}
+
+/** Execution links carry one opaque framework identifier, decoded once. */
+export function executionDeepLinkRequestID(search) {
+    const query = new URLSearchParams(search);
+    const views = query.getAll('view'), ids = query.getAll('request_id');
+    if (views.length !== 1 || views[0] !== 'dag' || ids.length !== 1) return null;
+    const id = ids[0];
+    return typeof id === 'string' && id.length > 0 && id.length <= 512 && /^[\x21-\x7e]+$/.test(id) ? id : null;
+}
+
+const goZeroTimestamp = Date.parse('0001-01-01T00:00:00Z');
+
+export function executionSnapshotTimestamp(execution) {
+    const timestamp = Date.parse(execution?.created_at);
+    // time.Time's zero value is serialized, rather than omitted, by the Go
+    // summary model. It expresses an unknown snapshot time, not year-one work.
+    return timestamp === goZeroTimestamp ? NaN : timestamp;
+}
+
+export function compareExecutionSnapshots(a, b) {
+    const left = executionSnapshotTimestamp(a);
+    const right = executionSnapshotTimestamp(b);
+    if (Number.isFinite(left) !== Number.isFinite(right)) return Number.isFinite(left) ? -1 : 1;
+    if (Number.isFinite(left) && left !== right) return left - right;
+    const leftID = String(a?.request_id || ''), rightID = String(b?.request_id || '');
+    return leftID < rightID ? -1 : leftID > rightID ? 1 : 0;
+}
+
+/** Build navigation from explicit parents only. A shared root/trace is no edge.
+ * Iterative traversal keeps deep/cyclic retained histories safe to display. */
+export function buildExecutionHierarchy(summaries, coverage = {}) {
+    const byRequest = new Map();
+    for (const record of summaries || []) {
+        if (!record || typeof record.request_id !== 'string' || !record.request_id) continue;
+        const old = byRequest.get(record.request_id);
+        if (!old || Number(record.record_revision || 0) > Number(old.record_revision || 0) ||
+            (Number(record.record_revision || 0) === Number(old.record_revision || 0) && compareExecutionSnapshots(old, record) < 0)) {
+            byRequest.set(record.request_id, record);
+        }
+    }
+    const parentLookups = new Map((coverage.parent_lookups || []).map(item => [item.request_id, item]));
+    const reasons = new Map();
+    const visited = new Set();
+    for (const id of byRequest.keys()) {
+        if (visited.has(id)) continue;
+        const path = [];
+        const positions = new Map();
+        let current = id;
+        while (byRequest.has(current) && !visited.has(current)) {
+            if (positions.has(current)) {
+                for (const cyclic of path.slice(positions.get(current))) reasons.set(cyclic, 'cycle');
+                break;
+            }
+            positions.set(current, path.length);
+            path.push(current);
+            const parent = byRequest.get(current).parent_request_id;
+            if (!parent) break;
+            current = parent;
+        }
+        for (const member of path) visited.add(member);
+    }
+    const roots = [], legacy = [], unresolved = [];
+    const childrenByRequest = new Map();
+    for (const record of byRequest.values()) {
+        const id = record.request_id;
+        const parent = record.parent_request_id;
+        const parentRecord = byRequest.get(parent);
+        if (!reasons.has(id) && record.parent_step_id && !parent) reasons.set(id, 'parent_request_missing');
+        if (!reasons.has(id) && record.original_request_id && parentRecord?.original_request_id &&
+            record.original_request_id !== parentRecord.original_request_id) reasons.set(id, 'root_conflict');
+        if (reasons.has(id)) {
+            unresolved.push(record);
+        } else if (parent && byRequest.has(parent)) {
+            if (!childrenByRequest.has(parent)) childrenByRequest.set(parent, []);
+            childrenByRequest.get(parent).push(record);
+        } else if (parent) {
+            const lookup = parentLookups.get(id);
+            reasons.set(id, lookup?.parent_request_id === parent && lookup.status === 'unavailable'
+                ? 'parent_unavailable' : 'parent_unknown');
+            unresolved.push(record);
+        } else if (record.original_request_id && record.original_request_id !== id) {
+            legacy.push(record);
+        } else {
+            roots.push(record);
+        }
+    }
+    for (const list of [roots, legacy, unresolved, ...childrenByRequest.values()]) list.sort(compareExecutionSnapshots);
+    const legacyIDs = new Set(legacy.map(item => item.request_id));
+    const ordered = [];
+    const stack = [...roots, ...legacy, ...unresolved].reverse().map(execution => ({
+        execution, depth: 0,
+        depthKnown: !reasons.has(execution.request_id) && !legacyIDs.has(execution.request_id) &&
+            execution.original_request_id === execution.request_id,
+    }));
+    const rendered = new Set();
+    while (stack.length) {
+        const entry = stack.pop();
+        const id = entry.execution.request_id;
+        if (rendered.has(id)) continue;
+        rendered.add(id);
+        ordered.push({ ...entry, reason: reasons.get(id) || '', legacy: legacyIDs.has(id),
+            parentAgentName: byRequest.get(entry.execution.parent_request_id)?.agent_name || '' });
+        const children = childrenByRequest.get(id) || [];
+        for (let index = children.length - 1; index >= 0; index--) {
+            stack.push({ execution: children[index], depth: entry.depth + 1, depthKnown: entry.depthKnown });
+        }
+    }
+    return { roots, legacy, unresolved, childrenByRequest, byRequest, ordered };
+}
+
+/** A step name has meaning only within its own execution. Preserve all calls. */
+export function findDelegatedExecutions(summaries, parentRequestID, parentStepID) {
+    if (!parentRequestID || !parentStepID) return [];
+    return [...buildExecutionHierarchy(summaries).byRequest.values()].filter(execution =>
+        execution.parent_request_id === parentRequestID && execution.parent_step_id === parentStepID
+    ).sort(compareExecutionSnapshots);
+}
+
+/** Reject old-backend raw-record fallthrough as well as malformed coverage. */
+export function validExecutionLineageResponse(data, requestID) {
+    return data?.request_id === requestID && Array.isArray(data.executions) &&
+        data.executions.some(item => item?.request_id === requestID) &&
+        data.executions.every(item => typeof item?.request_id === 'string' && item.request_id) &&
+        typeof data.partial === 'boolean' && typeof data.index_incomplete === 'boolean' &&
+        (data.reasons === undefined || (Array.isArray(data.reasons) && data.reasons.every(reason => typeof reason === 'string'))) &&
+        (data.parent_lookups === undefined || (Array.isArray(data.parent_lookups) && data.parent_lookups.every(item =>
+            typeof item?.request_id === 'string' && typeof item.parent_request_id === 'string' &&
+            ['available', 'unavailable', 'unknown'].includes(item.status))));
+}
+
+/** One view-local, summary-only discovery snapshot. Normal detail refresh does
+ * not call discover(). Aborted/late responses cannot populate another family. */
+export function createExecutionLineageLoader(load, now = () => Date.now()) {
+    let selectedID = '', generation = 0, snapshot = null, pending = null, selectedUsesSnapshot = false;
+    const contains = id => snapshot?.executions.some(item => item.request_id === id) || snapshot?.requestID === id ||
+        (snapshot && id === selectedID && selectedUsesSnapshot);
+    const cancel = () => {
+        generation++;
+        pending?.controller.abort();
+        pending = null;
+    };
+    return {
+        select(requestID, knownRecord = null) {
+            if (selectedID !== requestID) {
+                const knownIDs = new Set(snapshot?.executions.map(item => item.request_id) || []);
+                if (snapshot?.requestID) knownIDs.add(snapshot.requestID);
+                const knownRoots = new Set((snapshot?.executions || []).map(item => item.original_request_id || item.request_id));
+                const reuse = !!contains(requestID) || !!(snapshot && knownRecord?.request_id === requestID &&
+                    (knownIDs.has(knownRecord.parent_request_id) ||
+                     (knownRecord.original_request_id && knownRoots.has(knownRecord.original_request_id))));
+                cancel();
+                selectedID = requestID;
+                selectedUsesSnapshot = reuse;
+                if (!reuse) snapshot = null;
+            }
+            return snapshot;
+        },
+        snapshot: () => snapshot,
+        forRequest: requestID => contains(requestID) ? snapshot : null,
+        pending: () => !!pending,
+        discover({ force = false } = {}) {
+            if (!selectedID) return Promise.resolve(null);
+            if (pending) return pending.promise;
+            if (!force && contains(selectedID)) return Promise.resolve(snapshot);
+            const requestID = selectedID, version = generation;
+            const controller = new AbortController();
+            const promise = Promise.resolve().then(() => load(requestID, controller.signal)).then(data => {
+                if (version !== generation || selectedID !== requestID) return null;
+                if (!validExecutionLineageResponse(data, requestID)) throw new Error('lineage_unavailable');
+                snapshot = {
+                    requestID, state: 'available', discoveredAt: now(),
+                    executions: data.executions.map(executionLineageSummary),
+                    coverage: {
+                        partial: data.partial, index_incomplete: data.index_incomplete,
+                        reasons: [...(data.reasons || [])],
+                        parent_lookups: (data.parent_lookups || []).map(item => ({ ...item })),
+                    },
+                };
+                return snapshot;
+            }).catch(() => {
+                if (version !== generation || selectedID !== requestID) return null;
+                snapshot = {
+                    requestID, state: 'unavailable', discoveredAt: snapshot?.discoveredAt || now(),
+                    executions: snapshot?.executions || [], coverage: { ...(snapshot?.coverage || {}), partial: true },
+                };
+                return snapshot;
+            }).finally(() => {
+                if (pending?.promise === promise) pending = null;
+            });
+            pending = { controller, promise };
+            return promise;
+        },
+        destroy() { cancel(); snapshot = null; selectedID = ''; selectedUsesSnapshot = false; },
+    };
+}
+
+/**
  * Remove graph edges whose endpoints are not present in the rendered node set.
  *
  * HITL resume records can legitimately retain implicit data-provenance links to
