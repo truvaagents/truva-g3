@@ -55,7 +55,7 @@ type TieredCapabilityProvider struct {
 	// Mirrors PlanParseRetryEnabled pattern for consistency.
 	retryEnabled     bool // Whether to use bounded selection correction
 	maxRetries       int  // Max additional attempts (2 means up to 3 total)
-	feedbackMaxBytes int  // Existing regeneration-feedback limit, resolved by factory
+	feedbackMaxBytes int  // Shared regeneration-feedback limit; configure before use.
 
 	// customInstructions are domain-specific workflow rules from PromptConfig.
 	// Injected into selection prompts so the LLM selector knows about
@@ -96,6 +96,7 @@ const (
 // NewTieredCapabilityProvider creates a provider with intelligent tiered resolution.
 // Configuration precedence: Explicit config → TRUVAG3_TIERED_* env vars → defaults
 // Both tiers use the AI client's default model for simplicity.
+// Direct callers customize the correction budget with SetRegenerationFeedbackMaxBytes.
 func NewTieredCapabilityProvider(
 	catalog *AgentCatalog,
 	aiClient core.AIClient,
@@ -150,6 +151,23 @@ func NewTieredCapabilityProvider(
 		maxRetries:         maxRetries,
 		feedbackMaxBytes:   defaultRegenerationFeedbackMaxBytes,
 	}
+}
+
+// SetRegenerationFeedbackMaxBytes sets the byte budget for the complete encoded
+// selector-correction section, not the base catalog prompt. Call before use;
+// like the other provider setters, this is not a concurrent runtime update.
+// Zero selects the shared default; negative values are rejected without mutation.
+// This method reads no environment. For environment configuration, pass the
+// IterativePlanning.RegenerationFeedbackMaxBytes value from ResolveOrchestratorConfig.
+func (t *TieredCapabilityProvider) SetRegenerationFeedbackMaxBytes(maxBytes int) error {
+	if maxBytes < 0 {
+		return fmt.Errorf("%w: tiered selection regeneration feedback byte limit must be non-negative", ErrInvalidOrchestratorConfig)
+	}
+	if maxBytes == 0 {
+		maxBytes = defaultRegenerationFeedbackMaxBytes
+	}
+	t.feedbackMaxBytes = maxBytes
+	return nil
 }
 
 // SetLogger sets the logger for observability

@@ -370,7 +370,9 @@ func createOrchestrator(
 			deps.AIClient,
 			&config.TieredResolution,
 		)
-		tieredProvider.feedbackMaxBytes = config.IterativePlanning.RegenerationFeedbackMaxBytes
+		if err := tieredProvider.SetRegenerationFeedbackMaxBytes(config.IterativePlanning.RegenerationFeedbackMaxBytes); err != nil {
+			return nil, err
+		}
 		tieredProvider.SetLogger(deps.Logger)
 		tieredProvider.SetTelemetry(deps.Telemetry)
 		if deps.CircuitBreaker != nil {

@@ -348,6 +348,46 @@ func TestDelegatedViewBoundsMultilingualTextAndLargeSkeleton(t *testing.T) {
 	}
 }
 
+func TestDelegatedChildPreviewBytePolicy(t *testing.T) {
+	for _, tc := range []struct{ name, message, want string }{
+		{"exact bytes", strings.Repeat("é", 100), strings.Repeat("é", 100)},
+		{"split codepoint", strings.Repeat("中", 67), strings.Repeat("中", 66) + "…"},
+		{"first line", "summary\nprivate second line", "summary"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			object := map[string]interface{}{"steps": []interface{}{
+				map[string]interface{}{"agent_name": "a", "capability": "c", "success": true, "response": tc.message},
+			}}
+			facts, shown, omitted, _ := delegatedChildFacts(object, 1000)
+			if facts != "    - a/c [SUCCESS]: "+tc.want+"\n" || shown != 1 || omitted != 0 || !utf8.ValidString(facts) {
+				t.Fatalf("unexpected preview: %q shown=%d omitted=%d", facts, shown, omitted)
+			}
+		})
+	}
+}
+
+func TestDelegatedChildAllocationLeavesRoomForAnswer(t *testing.T) {
+	children := make([]interface{}, 20)
+	for i := range children {
+		children[i] = map[string]interface{}{"agent_name": "a", "capability": fmt.Sprintf("c%d", i), "success": true, "response": "observed"}
+	}
+	step := delegatedViewStep(t, map[string]interface{}{"steps": children})
+	object, ok := frameworkDelegatedEnvelope(step.Response)
+	if !ok {
+		t.Fatal("invalid fixture")
+	}
+	view := renderDelegatedContinuationBody(object, continuationDigestOpts{sampleN: 1, scalarMax: 200, maxKeys: 50}, 1000)
+	// At this allocation the body fits without reducing the initial child share.
+	// Pin one quarter (250 bytes), including the whole-line omission disclosure.
+	facts, shown, omitted, _ := delegatedChildFacts(object, 250)
+	if shown == 0 || omitted == 0 || view.childrenShown != shown || view.childrenOmitted != omitted || !strings.HasSuffix(view.body, facts) {
+		t.Fatalf("child share changed: shown=%d omitted=%d body=%s", view.childrenShown, view.childrenOmitted, view.body)
+	}
+	if len(view.body) > 1000 || !strings.Contains(view.body, "Analysis completed.") || !view.meta.ContentLost {
+		t.Fatalf("answer or budget/omission accounting changed: %+v", view)
+	}
+}
+
 type delegatedViewPreparer struct {
 	responses []string
 	expand    int

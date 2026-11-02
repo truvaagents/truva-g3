@@ -344,6 +344,11 @@ func validateOrchestratorConstructionConfig(config *OrchestratorConfig) error {
 	if config.executionCleanupTimeout <= 0 {
 		return fmt.Errorf("%w: execution.cleanup_timeout must be greater than zero", ErrInvalidOrchestratorConfig)
 	}
+	// Legacy partial configs keep zero-as-unset for the selector. Reject a
+	// negative correction budget before any factory bootstrap or resources.
+	if config.EnableTieredResolution && config.IterativePlanning.RegenerationFeedbackMaxBytes < 0 {
+		return fmt.Errorf("%w: iterative.regeneration_feedback_max_bytes must be non-negative", ErrInvalidOrchestratorConfig)
+	}
 	if _, err := resolveFailedOperationView(config.FailedOperationView); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidOrchestratorConfig, err)
 	}
