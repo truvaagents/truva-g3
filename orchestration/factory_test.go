@@ -1471,12 +1471,12 @@ func TestWithSynthesisMaxTokens(t *testing.T) {
 
 // TestDefaultConfig_TieredSelectionMaxTokens_Default tests default value for SelectionMaxTokens
 func TestDefaultConfig_TieredSelectionMaxTokens_Default(t *testing.T) {
-	_ = os.Unsetenv("TRUVAG3_TIERED_SELECTION_MAX_TOKENS")
+	t.Setenv("TRUVAG3_TIERED_SELECTION_MAX_TOKENS", "")
 
 	config := DefaultConfig()
 
-	if config.TieredResolution.SelectionMaxTokens != 2000 {
-		t.Errorf("Expected SelectionMaxTokens default 2000, got %d", config.TieredResolution.SelectionMaxTokens)
+	if config.TieredResolution.SelectionMaxTokens != 20000 {
+		t.Errorf("Expected SelectionMaxTokens default 20000, got %d", config.TieredResolution.SelectionMaxTokens)
 	}
 }
 
@@ -1506,8 +1506,8 @@ func TestDefaultConfig_TieredSelectionMaxTokens_EnvironmentConfiguration(t *test
 
 		config := DefaultConfig()
 
-		if config.TieredResolution.SelectionMaxTokens != 2000 {
-			t.Errorf("Expected SelectionMaxTokens 2000 (default), got %d", config.TieredResolution.SelectionMaxTokens)
+		if config.TieredResolution.SelectionMaxTokens != 20000 {
+			t.Errorf("Expected SelectionMaxTokens 20000 (default), got %d", config.TieredResolution.SelectionMaxTokens)
 		}
 	})
 
@@ -1516,8 +1516,8 @@ func TestDefaultConfig_TieredSelectionMaxTokens_EnvironmentConfiguration(t *test
 
 		config := DefaultConfig()
 
-		if config.TieredResolution.SelectionMaxTokens != 2000 {
-			t.Errorf("Expected SelectionMaxTokens 2000 (default), got %d", config.TieredResolution.SelectionMaxTokens)
+		if config.TieredResolution.SelectionMaxTokens != 20000 {
+			t.Errorf("Expected SelectionMaxTokens 20000 (default), got %d", config.TieredResolution.SelectionMaxTokens)
 		}
 	})
 
@@ -1526,8 +1526,8 @@ func TestDefaultConfig_TieredSelectionMaxTokens_EnvironmentConfiguration(t *test
 
 		config := DefaultConfig()
 
-		if config.TieredResolution.SelectionMaxTokens != 2000 {
-			t.Errorf("Expected SelectionMaxTokens 2000 (default), got %d", config.TieredResolution.SelectionMaxTokens)
+		if config.TieredResolution.SelectionMaxTokens != 20000 {
+			t.Errorf("Expected SelectionMaxTokens 20000 (default), got %d", config.TieredResolution.SelectionMaxTokens)
 		}
 	})
 }
@@ -1549,8 +1549,8 @@ func TestWithTieredSelectionMaxTokens(t *testing.T) {
 		opt := WithTieredSelectionMaxTokens(0)
 		opt(config)
 
-		if config.TieredResolution.SelectionMaxTokens != 2000 {
-			t.Errorf("Expected SelectionMaxTokens to remain 2000, got %d", config.TieredResolution.SelectionMaxTokens)
+		if config.TieredResolution.SelectionMaxTokens != 20000 {
+			t.Errorf("Expected SelectionMaxTokens to remain 20000, got %d", config.TieredResolution.SelectionMaxTokens)
 		}
 	})
 
@@ -1559,8 +1559,8 @@ func TestWithTieredSelectionMaxTokens(t *testing.T) {
 		opt := WithTieredSelectionMaxTokens(-1)
 		opt(config)
 
-		if config.TieredResolution.SelectionMaxTokens != 2000 {
-			t.Errorf("Expected SelectionMaxTokens to remain 2000, got %d", config.TieredResolution.SelectionMaxTokens)
+		if config.TieredResolution.SelectionMaxTokens != 20000 {
+			t.Errorf("Expected SelectionMaxTokens to remain 20000, got %d", config.TieredResolution.SelectionMaxTokens)
 		}
 	})
 }

@@ -15,6 +15,10 @@ type LLMCallRecord struct {
 	SourceComponent string `json:"source_component,omitempty"` // e.g., "research-assistant", "orchestrator"
 	Description     string `json:"description,omitempty"`      // Human-readable: "Tool selection for research"
 	StepID          string `json:"step_id,omitempty"`          // Orchestration step ID
+	// TraceID identifies this call's trace, which can differ from other calls in
+	// the same request (for example, linked background work). Built-in recorders
+	// fill an omitted value from the recording context; supplied values stay intact.
+	TraceID string `json:"trace_id,omitempty"`
 
 	// Phase context (multi-phase iterative planning)
 	// 0 = single-phase execution or Phase 1 (omitted in JSON).

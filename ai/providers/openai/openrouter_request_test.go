@@ -85,7 +85,7 @@ func TestOpenRouterPortableExplicitOmitOverridesLegacyValues(t *testing.T) {
 
 func TestOpenRouterVerifiedJSONModelsPreserveExpandedBudgets(t *testing.T) {
 	client := NewClient("key", "", openRouterProviderAlias, &core.NoOpLogger{})
-	for _, model := range []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash"} {
+	for _, model := range []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash", "z-ai/glm-5.3"} {
 		for _, budget := range []int{1024, 10000, 30000} {
 			request := core.NewAIRequestFromLegacy("Return a JSON object", "planning", &core.AIOptions{Model: model, MaxTokens: budget})
 			request.Generation.ResponseFormat = core.SetAIParameter("json")
@@ -351,10 +351,16 @@ func TestOpenRouterPostPolicyInvariantsAndSessionID(t *testing.T) {
 
 func TestOpenRouterFingerprintAndFreeCostBoundary(t *testing.T) {
 	client := NewClient("key", "", openRouterProviderAlias, &core.NoOpLogger{})
-	for _, model := range []string{"default", "smart", "code", "openrouter/free", "~anthropic/claude-opus-latest"} {
+	for _, model := range []string{"openrouter/auto", "openrouter/auto:nitro", "code", "openrouter/free", "~anthropic/claude-opus-latest"} {
 		request := core.NewAIRequestFromLegacy("hello", "", &core.AIOptions{Model: model})
 		if fingerprint, stable := client.RequestFingerprint(t.Context(), request); stable || fingerprint != "" {
 			t.Fatalf("model=%q fingerprint=%q stable=%t", model, fingerprint, stable)
+		}
+	}
+	for _, model := range []string{"default", "smart"} {
+		request := core.NewAIRequestFromLegacy("hello", "", &core.AIOptions{Model: model})
+		if fingerprint, stable := client.RequestFingerprint(t.Context(), request); !stable || len(fingerprint) != 64 {
+			t.Fatalf("concrete alias=%q fingerprint=%q stable=%t", model, fingerprint, stable)
 		}
 	}
 	fast := core.NewAIRequestFromLegacy("hello", "", &core.AIOptions{Model: "fast"})

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/truvaagents/truva-g3/telemetry"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // MemoryLLMDebugStore is an in-memory implementation for testing and development.
@@ -26,27 +27,27 @@ func NewMemoryLLMDebugStore() *MemoryLLMDebugStore {
 
 // RecordInteraction appends an LLM interaction to the debug record.
 func (s *MemoryLLMDebugStore) RecordInteraction(ctx context.Context, requestID string, interaction LLMInteraction) error {
+	if interaction.TraceID == "" {
+		interaction.TraceID = getTraceIDFromContext(ctx)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	record, exists := s.records[requestID]
 	if !exists {
-		// Capture original_request_id from baggage for HITL correlation.
+		// Capture request-family correlation, retaining the exact managed root
+		// when it could not fit into bounded baggage.
 		// For initial requests: original_request_id == requestID
 		// For resume requests: original_request_id is the conversation's first requestID
-		originalRequestID := requestID
+		originalRequestID := llmDebugOriginalRequestIDFromContext(ctx, requestID)
 		originatingAgent := ""
 		if bag := telemetry.GetBaggage(ctx); bag != nil {
-			if origID := bag["original_request_id"]; origID != "" {
-				originalRequestID = origID
-			}
 			originatingAgent = bag["agent_name"]
 		}
 
 		record = &LLMDebugRecord{
 			RequestID:         requestID,
 			OriginalRequestID: originalRequestID,
-			TraceID:           getTraceIDFromContext(ctx),
 			CreatedAt:         time.Now(),
 			Interactions:      []LLMInteraction{},
 			OriginatingAgent:  originatingAgent,
@@ -81,6 +82,14 @@ func (s *MemoryLLMDebugStore) RecordInteraction(ctx context.Context, requestID s
 		}
 	}
 
+	// Mirror the Redis writers: backfill only an absent/invalid aggregate trace.
+	// First arrival is not necessarily the main execution; retain every call's
+	// own trace rather than guessing one from the record-level fallback.
+	if _, err := trace.TraceIDFromHex(record.TraceID); err != nil {
+		if _, err := trace.TraceIDFromHex(interaction.TraceID); err == nil {
+			record.TraceID = interaction.TraceID
+		}
+	}
 	record.Interactions = append(record.Interactions, interaction)
 	record.UpdatedAt = time.Now()
 	return nil

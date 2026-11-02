@@ -239,7 +239,7 @@ func (r *ContextualReResolver) ReResolve(
 	if parseErr != nil {
 		telemetry.AddSpanEvent(ctx, "contextual_re_resolution.parse_error",
 			attribute.String("error", parseErr.Error()),
-			attribute.String("response", truncateString(response.Content, 200)),
+			attribute.String("response", truncateTelemetryPreview(response.Content, 200)),
 		)
 		r.logWarn("Failed to parse re-resolution response", map[string]interface{}{
 			"error":    parseErr.Error(),
@@ -251,7 +251,7 @@ func (r *ContextualReResolver) ReResolve(
 	// Telemetry: Track result
 	telemetry.AddSpanEvent(ctx, "contextual_re_resolution.complete",
 		attribute.Bool("should_retry", result.ShouldRetry),
-		attribute.String("analysis", truncateString(result.Analysis, 200)),
+		attribute.String("analysis", truncateTelemetryPreview(result.Analysis, 200)),
 		attribute.Int("corrected_params_count", len(result.CorrectedParameters)),
 		attribute.Int64("duration_ms", duration.Milliseconds()),
 	)

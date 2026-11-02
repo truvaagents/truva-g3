@@ -415,21 +415,23 @@ func TestBuildContinuationPrompt_FailedAlwaysKeptUnderEviction(t *testing.T) {
 func TestBuildContinuationPrompt_ChildSummaryNote(t *testing.T) {
 	orch := newDigestTestOrchestrator(32768)
 	orch.logger = &TestLogger{} // exercise the o.logger != nil branch of the child-summary block
+	orch.catalog = delegatedViewCatalog("orchestrator")
+	step := delegatedViewStep(t, map[string]interface{}{"steps": []interface{}{
+		map[string]interface{}{"agent_name": "sub", "capability": "do_thing", "success": true, "response": "done"},
+	}})
+	step.StepID = "step-1"
 	completed := map[string]*StepResult{
-		"step-1": {
-			StepID: "step-1", AgentName: "orchestrator-agent", Success: true,
-			Response: `{"steps":[{"agent_name":"sub","capability":"do_thing","success":true,"response":"done"}]}`,
-		},
+		"step-1": step,
 	}
 	res, err := orch.buildContinuationPrompt(context.Background(), "next", completed, []string{"step-1"}, "continue", 2)
 	if err != nil {
 		t.Fatalf("buildContinuationPrompt: %v", err)
 	}
-	if !strings.Contains(res.Prompt, "internally executed these sub-steps") {
-		t.Errorf("an orchestrator-delegation step must emit the child-steps NOTE; prompt:\n%s", res.Prompt)
+	if !strings.Contains(res.Prompt, "Observed child outcomes") || !strings.Contains(res.Prompt, "sub/do_thing [SUCCESS]") {
+		t.Errorf("a registered framework envelope must show observed child outcomes; prompt:\n%s", res.Prompt)
 	}
-	if !strings.Contains(res.Prompt, "Do NOT duplicate") {
-		t.Error("child-steps NOTE must carry the de-dup directive")
+	if strings.Contains(res.Prompt, "Do NOT duplicate") {
+		t.Error("child facts must not impose a blanket action policy on the planner")
 	}
 }
 

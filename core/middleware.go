@@ -1,9 +1,86 @@
 package core
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// IncomingCallMiddleware captures the existing X-TruvaG3 request, step and
+// original-request headers as one IncomingCall envelope. It clears inherited
+// incoming-call facts on every request. Invalid optional correlation omits the
+// link and emits a bounded warning; it does not reject application work or
+// change current execution identity. It neither authenticates callers nor
+// wraps response writers, so streaming interfaces remain available.
+func IncomingCallMiddleware(logger Logger) func(http.Handler) http.Handler {
+	logger = coreComponentLogger(logger)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := WithoutIncomingCall(r.Context())
+			call, present, err := incomingCallFromHeaders(r.Header)
+			if err == nil && present {
+				ctx, err = WithIncomingCall(ctx, call)
+			}
+			if err != nil && logger != nil {
+				field, reason := "envelope", "invalid"
+				var validationErr *incomingCallValidationError
+				if errors.As(err, &validationErr) {
+					field, reason = validationErr.field, validationErr.reason
+				}
+				logger.WarnWithContext(ctx, "Incoming call correlation omitted", map[string]interface{}{
+					"operation":  "incoming_call_context",
+					"request_id": GetRequestID(ctx),
+					"status":     "omitted",
+					"error_type": "invalid_correlation",
+					"error":      "invalid incoming call correlation envelope",
+					"field":      field,
+					"reason":     reason,
+				})
+			}
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func incomingCallFromHeaders(header http.Header) (IncomingCall, bool, error) {
+	var call IncomingCall
+	present := false
+	for _, identifier := range []struct {
+		header string
+		field  string
+		value  *string
+	}{
+		{"X-TruvaG3-Request-ID", "request_id", &call.RequestID},
+		{"X-TruvaG3-Step-ID", "step_id", &call.StepID},
+		{"X-TruvaG3-Original-Request-ID", "original_request_id", &call.OriginalRequestID},
+	} {
+		seen := false
+		for name, values := range header {
+			if !strings.EqualFold(name, identifier.header) {
+				continue
+			}
+			present = true
+			if len(values) == 0 {
+				return IncomingCall{}, true, &incomingCallValidationError{field: identifier.field, reason: "empty"}
+			}
+			for _, value := range values {
+				if reason := validateIncomingCallID(value); reason != "" {
+					return IncomingCall{}, true, &incomingCallValidationError{field: identifier.field, reason: reason}
+				}
+				if seen && *identifier.value != value {
+					return IncomingCall{}, true, &incomingCallValidationError{field: identifier.field, reason: "conflicting_values"}
+				}
+				*identifier.value = value
+				seen = true
+			}
+		}
+	}
+	if present && call.RequestID == "" {
+		return IncomingCall{}, true, &incomingCallValidationError{field: "request_id", reason: "missing"}
+	}
+	return call, present, nil
+}
 
 // responseWriter wraps http.ResponseWriter to capture status code
 type responseWriter struct {

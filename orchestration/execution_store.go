@@ -105,7 +105,11 @@ type StoredExecution struct {
 	// Correlation identifiers
 	RequestID         string `json:"request_id"`
 	OriginalRequestID string `json:"original_request_id,omitempty"` // For HITL resume correlation
-	TraceID           string `json:"trace_id"`                      // For distributed tracing
+	// ParentRequestID and ParentStepID identify the immediate invoking execution
+	// and its local step. They are optional correlation, not authorization.
+	ParentRequestID string `json:"parent_request_id,omitempty"`
+	ParentStepID    string `json:"parent_step_id,omitempty"`
+	TraceID         string `json:"trace_id"` // For distributed tracing
 
 	// AgentName identifies the orchestrator that created this execution.
 	// Populated from OrchestratorConfig.Name or RequestIDPrefix or "orchestrator".
@@ -251,6 +255,8 @@ type ExecutionSummary struct {
 	RecordRevision    uint64                         `json:"record_revision,omitempty"`
 	RequestID         string                         `json:"request_id"`
 	OriginalRequestID string                         `json:"original_request_id,omitempty"`
+	ParentRequestID   string                         `json:"parent_request_id,omitempty"`
+	ParentStepID      string                         `json:"parent_step_id,omitempty"`
 	TraceID           string                         `json:"trace_id"`
 	AgentName         string                         `json:"agent_name,omitempty"`
 	OriginalRequest   string                         `json:"original_request"`
@@ -672,6 +678,8 @@ func executionSummaryFromStored(execution *StoredExecution) ExecutionSummary {
 		RecordRevision:    execution.RecordRevision,
 		RequestID:         execution.RequestID,
 		OriginalRequestID: execution.OriginalRequestID,
+		ParentRequestID:   execution.ParentRequestID,
+		ParentStepID:      execution.ParentStepID,
 		TraceID:           execution.TraceID,
 		AgentName:         execution.AgentName,
 		OriginalRequest:   execution.OriginalRequest,

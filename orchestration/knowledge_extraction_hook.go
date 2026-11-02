@@ -138,6 +138,11 @@ func (h *KnowledgeExtractionHook) AfterSynthesis(ctx context.Context, pctx *core
 	// hook-owned shutdown context and start a linked root span in the goroutine.
 	backgroundCtx := telemetry.CopyBaggage(h.shutdownCtx, ctx)
 	backgroundCtx = core.WithRequestID(backgroundCtx, requestID)
+	// Exact managed roots survive baggage capacity limits without carrying the
+	// request's cancellation, parent span, or another request's typed identity.
+	if requestID != "" && core.GetRequestID(ctx) == requestID {
+		backgroundCtx = core.WithOriginalRequestID(backgroundCtx, core.GetOriginalRequestID(ctx))
+	}
 	if reporter, ok := core.PipelineHookEffectReporterFromContext(ctx); ok {
 		backgroundCtx = core.WithPipelineHookEffectReporter(backgroundCtx, reporter)
 	}

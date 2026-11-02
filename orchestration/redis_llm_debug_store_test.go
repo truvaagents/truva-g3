@@ -3,7 +3,9 @@ package orchestration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,7 +13,302 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
 	"github.com/truvaagents/truva-g3/telemetry"
+	"go.opentelemetry.io/otel/trace"
 )
+
+func debugTraceTestContext(t *testing.T, traceID string) context.Context {
+	t.Helper()
+	id, err := trace.TraceIDFromHex(traceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: id, SpanID: trace.SpanID{1}, TraceFlags: trace.FlagsSampled,
+	}))
+}
+
+func TestLLMDebugStore_OriginalRootContextOwnership(t *testing.T) {
+	for _, backend := range []string{"memory", "redis"} {
+		t.Run(backend, func(t *testing.T) {
+			var store LLMDebugStore = NewMemoryLLMDebugStore()
+			if backend == "redis" {
+				_, store = setupRedisLLMDebugTestStore(t)
+			}
+			for index, test := range []struct {
+				name, owner, typedRoot, baggageRoot, wantRoot string
+			}{
+				{name: "owned typed fallback", owner: "record", typedRoot: "typed-root", wantRoot: "typed-root"},
+				{name: "legacy baggage precedence", owner: "record", typedRoot: "typed-root", baggageRoot: "legacy-root", wantRoot: "legacy-root"},
+				{name: "legacy baggage without typed owner", baggageRoot: "legacy-root", wantRoot: "legacy-root"},
+				{name: "unrelated typed owner", owner: "other-request", typedRoot: "typed-root", wantRoot: "record"},
+				{name: "missing typed owner", typedRoot: "typed-root", wantRoot: "record"},
+				{name: "empty typed root", owner: "record", wantRoot: "record"},
+				{name: "invalid typed root", owner: "record", typedRoot: "invalid root", wantRoot: "record"},
+				{name: "too long typed root", owner: "record", typedRoot: strings.Repeat("x", core.MaxIncomingCallIDLength+1), wantRoot: "record"},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					requestID := fmt.Sprintf("root-owner-%d", index)
+					owner := test.owner
+					if owner == "record" {
+						owner = requestID
+					}
+					ctx := core.WithOriginalRequestID(core.WithRequestID(context.Background(), owner), test.typedRoot)
+					if test.baggageRoot != "" {
+						ctx = telemetry.WithBaggage(ctx, "original_request_id", test.baggageRoot)
+					}
+					if err := store.RecordInteraction(ctx, requestID, LLMInteraction{Type: "plan_generation", Success: true}); err != nil {
+						t.Fatal(err)
+					}
+					record, err := store.GetRecord(t.Context(), requestID)
+					wantRoot := test.wantRoot
+					if wantRoot == "record" {
+						wantRoot = requestID
+					}
+					if err != nil || record.OriginalRequestID != wantRoot {
+						t.Fatalf("root = %+v, %v; want %q", record, err, wantRoot)
+					}
+				})
+			}
+		})
+	}
+	if got := llmDebugOriginalRequestIDFromContext(nil, "record"); got != "record" {
+		t.Fatalf("nil context root = %q", got)
+	}
+	ctx := core.WithOriginalRequestID(context.Background(), "unowned-root")
+	if got := llmDebugOriginalRequestIDFromContext(ctx, ""); got != "" {
+		t.Fatalf("empty request claimed typed root %q", got)
+	}
+}
+
+func TestLLMDebugStore_TraceProvenanceBackendParity(t *testing.T) {
+	const first = "11111111111111111111111111111111"
+	const background = "22222222222222222222222222222222"
+	const explicit = "33333333333333333333333333333333"
+	const payload = "exact *payload* 界\n{\"note\":\"a<b\"}"
+	for _, backend := range []string{"memory", "redis"} {
+		t.Run(backend, func(t *testing.T) {
+			var store LLMDebugStore = NewMemoryLLMDebugStore()
+			if backend == "redis" {
+				_, store = setupRedisLLMDebugTestStore(t)
+			}
+			const requestID = "trace-provenance-parity"
+			steps := []struct {
+				ctx     context.Context
+				traceID string
+				want    string
+			}{
+				{context.Background(), "", ""},
+				{debugTraceTestContext(t, first), "", first},
+				{debugTraceTestContext(t, background), "", background},
+				{debugTraceTestContext(t, first), explicit, explicit},
+				{debugTraceTestContext(t, first), "invalid supplied trace", "invalid supplied trace"},
+			}
+			for index, step := range steps {
+				interaction := LLMInteraction{Type: "plan_generation", TraceID: step.traceID,
+					Prompt: payload, Response: payload, ReasoningContent: payload, Success: true}
+				if err := store.RecordInteraction(step.ctx, requestID, interaction); err != nil {
+					t.Fatal(err)
+				}
+				if interaction.TraceID != step.traceID {
+					t.Fatal("store mutated the caller's interaction")
+				}
+				record, err := store.GetRecord(context.Background(), requestID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantAggregate := ""
+				if index > 0 {
+					wantAggregate = first
+				}
+				if record.TraceID != wantAggregate || len(record.Interactions) != index+1 {
+					t.Fatalf("write %d record trace/count = %q/%d, want %q/%d", index, record.TraceID, len(record.Interactions), wantAggregate, index+1)
+				}
+				stored := record.Interactions[index]
+				if stored.TraceID != step.want || stored.Prompt != payload || stored.Response != payload || stored.ReasoningContent != payload {
+					t.Fatalf("write %d changed provenance or payload: %+v", index, stored)
+				}
+				if index == 0 {
+					encoded, err := json.Marshal(stored)
+					if err != nil || strings.Contains(string(encoded), `"trace_id"`) {
+						t.Fatalf("unknown call trace should be omitted: %s, %v", encoded, err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestLLMDebugStore_TraceAggregateInvalidValuesBackendParity(t *testing.T) {
+	const valid = "abcdef0123456789abcdef0123456789"
+	const other = "11111111111111111111111111111111"
+	invalid := []string{"", strings.Repeat("0", 32), "invalid", strings.Repeat("a", 31), strings.ToUpper(valid)}
+	for _, backend := range []string{"memory", "redis"} {
+		t.Run(backend, func(t *testing.T) {
+			var store LLMDebugStore
+			var seed func(string, string)
+			if backend == "memory" {
+				memory := NewMemoryLLMDebugStore()
+				store = memory
+				seed = func(id, traceID string) {
+					memory.mu.Lock()
+					defer memory.mu.Unlock()
+					memory.records[id].TraceID = traceID
+				}
+			} else {
+				_, redisStore := setupRedisLLMDebugTestStore(t)
+				store = redisStore
+				seed = func(id, traceID string) {
+					if err := redisStore.client.HSet(context.Background(), redisStore.metaKey(id), "trace_id", traceID).Err(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			for index, value := range append(append([]string{}, invalid...), other) {
+				id := fmt.Sprintf("seeded-trace-%d", index)
+				if err := store.RecordInteraction(context.Background(), id, LLMInteraction{Success: true}); err != nil {
+					t.Fatal(err)
+				}
+				seed(id, value)
+				if err := store.RecordInteraction(debugTraceTestContext(t, valid), id, LLMInteraction{Success: true}); err != nil {
+					t.Fatal(err)
+				}
+				record, err := store.GetRecord(context.Background(), id)
+				want := valid
+				if value == other {
+					want = other
+				}
+				if err != nil || record.TraceID != want {
+					t.Fatalf("seed %q aggregate = %+v, error = %v, want %q", value, record, err, want)
+				}
+			}
+			for index, value := range invalid[1:] {
+				id := fmt.Sprintf("invalid-candidate-%d", index)
+				if err := store.RecordInteraction(debugTraceTestContext(t, valid), id, LLMInteraction{TraceID: value, Success: true}); err != nil {
+					t.Fatal(err)
+				}
+				record, err := store.GetRecord(context.Background(), id)
+				if err != nil || record.TraceID != "" || record.Interactions[0].TraceID != value {
+					t.Fatalf("invalid explicit trace changed or pinned aggregate: %+v, %v", record, err)
+				}
+			}
+			const explicitID = "valid-explicit-candidate"
+			if err := store.RecordInteraction(debugTraceTestContext(t, other), explicitID, LLMInteraction{TraceID: valid, Success: true}); err != nil {
+				t.Fatal(err)
+			}
+			record, err := store.GetRecord(context.Background(), explicitID)
+			if err != nil || record.TraceID != valid || record.Interactions[0].TraceID != valid {
+				t.Fatalf("explicit trace did not override context as candidate: %+v, %v", record, err)
+			}
+		})
+	}
+}
+
+func TestRedisLLMDebugStore_MixedWritersKeepTraceAndRetention(t *testing.T) {
+	const first = "11111111111111111111111111111111"
+	const second = "22222222222222222222222222222222"
+	for _, order := range [][]string{{"typed", "telemetry"}, {"telemetry", "typed"}} {
+		t.Run(strings.Join(order, "-then-"), func(t *testing.T) {
+			mr, store := setupRedisLLMDebugTestStore(t)
+			recorder, err := telemetry.NewRedisLLMCallRecorderWithClient(store.client, defaultRedisKeyspace(), telemetry.WithRecorderTTL(time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			const requestID = "mixed-writer-resume-segment"
+			if err := store.PreserveRetention(context.Background(), requestID, 14*24*time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			for index, writer := range order {
+				traceID := first
+				if index > 0 {
+					traceID = second
+				}
+				ctx := debugTraceTestContext(t, traceID)
+				ctx = telemetry.WithBaggage(ctx, "original_request_id", "original-root-request")
+				ctx = telemetry.WithBaggage(ctx, "conversation_id", "stable-conversation")
+				ctx = telemetry.WithBaggage(ctx, "agent_name", "originating-agent")
+				const payload = "verbatim **payload** 界\nnull"
+				if writer == "typed" {
+					err = store.RecordInteraction(ctx, requestID, LLMInteraction{Type: "plan_generation", Prompt: payload, Response: payload, Success: true})
+				} else {
+					err = recorder.RecordLLMCall(ctx, requestID, telemetry.LLMCallRecord{CallType: "agent_llm_call", Prompt: payload, Response: payload, Success: true})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				record, err := store.GetRecord(context.Background(), requestID)
+				if err != nil || record.TraceID != first || len(record.Interactions) != index+1 {
+					t.Fatalf("mixed write %d trace/count: %+v, %v", index, record, err)
+				}
+				if record.Interactions[index].TraceID != traceID || record.Interactions[index].Prompt != payload || record.Interactions[index].Response != payload {
+					t.Fatalf("mixed write %d changed call trace/payload: %+v", index, record.Interactions[index])
+				}
+				if record.RequestID != requestID || record.OriginalRequestID != "original-root-request" || record.OriginatingAgent != "originating-agent" || LLMDebugConversationID(record) != "stable-conversation" {
+					t.Fatalf("trace writes changed request/agent/conversation identity: %+v", record)
+				}
+			}
+			for _, key := range []string{store.metaKey(requestID), store.interactionsKey(requestID), store.retentionFloorKey(requestID)} {
+				if got := mr.TTL(key); got != 14*24*time.Hour {
+					t.Fatalf("mixed writers shortened %s TTL to %v", key, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRedisLLMDebugStore_ConcurrentMixedWritersKeepEveryCallTrace(t *testing.T) {
+	mr, store := setupRedisLLMDebugTestStore(t)
+	recorder, err := telemetry.NewRedisLLMCallRecorderWithClient(store.client, defaultRedisKeyspace(), telemetry.WithRecorderTTL(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const requestID = "concurrent-mixed-traces"
+	const count = 24
+	contexts := make([]context.Context, count)
+	for index := range contexts {
+		contexts[index] = debugTraceTestContext(t, fmt.Sprintf("%032x", index+1))
+	}
+	var wg sync.WaitGroup
+	for index, ctx := range contexts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			prompt := fmt.Sprintf("call-%d", index)
+			var writeErr error
+			if index%2 == 0 {
+				writeErr = store.RecordInteraction(ctx, requestID, LLMInteraction{Type: "plan_generation", Prompt: prompt, Success: true})
+			} else {
+				writeErr = recorder.RecordLLMCall(ctx, requestID, telemetry.LLMCallRecord{CallType: "agent_llm_call", Prompt: prompt, Success: true})
+			}
+			if writeErr != nil {
+				t.Errorf("concurrent write: %v", writeErr)
+			}
+		}()
+	}
+	wg.Wait()
+	record, err := store.GetRecord(context.Background(), requestID)
+	if err != nil || len(record.Interactions) != count {
+		t.Fatalf("concurrent record = %+v, error = %v", record, err)
+	}
+	if record.TraceID != record.Interactions[0].TraceID {
+		t.Fatalf("aggregate %q is not first atomically appended trace %q", record.TraceID, record.Interactions[0].TraceID)
+	}
+	seen := make(map[string]bool)
+	for _, interaction := range record.Interactions {
+		var index int
+		if _, err := fmt.Sscanf(interaction.Prompt, "call-%d", &index); err != nil {
+			t.Fatal(err)
+		}
+		if interaction.TraceID != fmt.Sprintf("%032x", index+1) || seen[interaction.TraceID] {
+			t.Fatalf("lost or duplicate call trace: %+v", interaction)
+		}
+		seen[interaction.TraceID] = true
+	}
+	for _, key := range []string{store.metaKey(requestID), store.interactionsKey(requestID)} {
+		if got := mr.TTL(key); got != store.ttl {
+			t.Fatalf("concurrent writer shortened %s TTL to %v", key, got)
+		}
+	}
+}
 
 func TestRedisLLMDebugStore_PreservesApplicationPayloads(t *testing.T) {
 	_, store := setupRedisLLMDebugTestStore(t)

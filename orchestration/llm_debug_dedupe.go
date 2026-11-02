@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // DedupeLLMInteractions joins shadow agent_llm_call rows written by
@@ -17,6 +19,8 @@ import (
 // client with the same latency, so the tuple is a deterministic surrogate
 // for "same physical call". Retries produce distinct rows (different
 // response/duration), so they correctly survive as separate calls.
+// Distinct valid trace IDs disprove a pairing even when that tuple matches.
+// If either trace is unknown/legacy, the existing surrogate remains the fallback.
 //
 // The typed row is retained. SourceComponent is NOT lifted onto the
 // retained row (would violate the "Recording Sites" invariant in
@@ -32,16 +36,19 @@ func DedupeLLMInteractions(interactions []LLMInteraction) []LLMInteraction {
 		return interactions
 	}
 
-	// Pass 1: build a set of join keys present on typed (non-agent_llm_call)
-	// rows. Those rows are retained; agent_llm_call rows whose key matches
-	// a typed row are dropped as duplicates.
-	typedKeys := make(map[string]struct{}, len(interactions))
+	// Keep the existing join key, with the observed traces for each typed group.
+	// The empty trace bucket retains compatibility with older recorders.
+	typedKeys := make(map[string]map[string]struct{}, len(interactions))
 	for i := range interactions {
 		in := &interactions[i]
 		if in.Type == "agent_llm_call" {
 			continue
 		}
-		typedKeys[llmInteractionJoinKey(in)] = struct{}{}
+		key := llmInteractionJoinKey(in)
+		if typedKeys[key] == nil {
+			typedKeys[key] = make(map[string]struct{})
+		}
+		typedKeys[key][llmInteractionTraceKey(in.TraceID)] = struct{}{}
 	}
 
 	// Pass 2: retain every typed row; drop agent_llm_call rows whose join
@@ -50,13 +57,27 @@ func DedupeLLMInteractions(interactions []LLMInteraction) []LLMInteraction {
 	for i := range interactions {
 		in := interactions[i]
 		if in.Type == "agent_llm_call" {
-			if _, paired := typedKeys[llmInteractionJoinKey(&in)]; paired {
-				continue
+			if traces, paired := typedKeys[llmInteractionJoinKey(&in)]; paired {
+				callTrace := llmInteractionTraceKey(in.TraceID)
+				_, legacy := traces[""]
+				_, sameTrace := traces[callTrace]
+				if callTrace == "" || legacy || sameTrace {
+					continue
+				}
 			}
 		}
 		out = append(out, in)
 	}
 	return out
+}
+
+// Only a valid recorded identity can disprove the existing surrogate pairing.
+// This comparison helper does not modify the stored interaction or its payloads.
+func llmInteractionTraceKey(value string) string {
+	if _, err := trace.TraceIDFromHex(value); err != nil {
+		return ""
+	}
+	return value
 }
 
 // llmInteractionJoinKey renders the canonical dedupe tuple as a single

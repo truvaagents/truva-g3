@@ -1215,6 +1215,12 @@ func buildNonSuccessResult(
 	// Metadata["phase_number"] stamped by the accumulator.
 	merged := make([]StepResult, 0, len(allStepsList)+len(currentPhaseSteps))
 	merged = append(merged, allStepsList...)
+	seen := make(map[string]bool, len(merged)+len(currentPhaseSteps))
+	for _, step := range merged {
+		if step.StepID != "" {
+			seen[step.StepID] = true
+		}
+	}
 
 	// currentPhaseSteps have NOT been annotated with phase_number — the
 	// accumulator never ran for them (they come from a checkpoint or an
@@ -1229,6 +1235,14 @@ func buildNonSuccessResult(
 	// allocate a fresh Metadata map whenever we need to add phase_number.
 	for i := range currentPhaseSteps {
 		step := currentPhaseSteps[i] // struct value-copy; Metadata pointer still shared
+		// Resumed current-plan steps may already be present in the accumulator.
+		// Preserve that earlier record, including its original phase attribution.
+		if step.StepID != "" && seen[step.StepID] {
+			continue
+		}
+		if step.StepID != "" {
+			seen[step.StepID] = true
+		}
 		if _, hasPhase := step.Metadata["phase_number"]; !hasPhase {
 			// Allocate a fresh map that owns the phase_number annotation,
 			// leaving the caller's map untouched.
@@ -1471,6 +1485,11 @@ func (o *AIOrchestrator) storeExecutionSnapshotAsync(
 		CreatedAt:           createdAt,
 		FinalResponse:       finalResponse,
 		FinalResponseSource: finalResponseSource,
+	}
+	if correlation, managed := requestCorrelationFromContext(ctx); managed && correlation.RequestID == requestID {
+		stored.OriginalRequestID = correlation.OriginalRequestID
+		stored.ParentRequestID = correlation.Parent.RequestID
+		stored.ParentStepID = correlation.Parent.StepID
 	}
 	if holder, ok := skillExecutionHolderFromContext(ctx); ok {
 		skillState, _ := holder.Snapshot()
@@ -2448,7 +2467,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 			phaseSpan.SetAttribute("request_id", requestID)
 			phaseSpan.SetAttribute("phase_number", phaseCount)
 			phaseSpan.SetAttribute("clarification_short_circuit", true)
-			phaseSpan.SetAttribute("clarification_question", truncateString(plan.NeedsUserInput.Question, 200))
+			phaseSpan.SetAttribute("clarification_question", truncateTelemetryPreview(plan.NeedsUserInput.Question, 200))
 			if len(plan.NeedsUserInput.MissingFields) > 0 {
 				phaseSpan.SetAttribute("clarification_missing_fields", strings.Join(plan.NeedsUserInput.MissingFields, ","))
 				phaseSpan.SetAttribute("clarification_missing_field_count", len(plan.NeedsUserInput.MissingFields))
@@ -2461,7 +2480,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 			telemetry.AddSpanEvent(ctx, "orchestrator.clarification_short_circuit",
 				attribute.String("request_id", requestID),
 				attribute.Int("phase_number", phaseCount),
-				attribute.String("question", truncateString(plan.NeedsUserInput.Question, 200)),
+				attribute.String("question", truncateTelemetryPreview(plan.NeedsUserInput.Question, 200)),
 				attribute.Int("missing_field_count", len(plan.NeedsUserInput.MissingFields)),
 				attribute.Int("prior_completed_steps", len(allStepResults)),
 			)
@@ -2640,8 +2659,16 @@ func (o *AIOrchestrator) executePhaseLoop(
 			if phaseResult != nil {
 				errorCurrentPhaseSteps = phaseResult.Steps
 			}
+			failed := failedPhaseResult(errorCurrentPhaseSteps)
+			if phaseResult != nil {
+				for _, key := range []string{"termination_reason", "execution_error", "context_cause"} {
+					if value, observed := phaseResult.Metadata[key]; observed {
+						failed.CombinedResult.Metadata[key] = value
+					}
+				}
+			}
 			o.storeTerminalExecutionAsync(ctx, request, requestID, plan,
-				buildNonSuccessResult(errorCurrentPhaseSteps, phasePlans, phaseCount, forcedTerminal, allStepsList, plan.PlanID, false),
+				failed.CombinedResult,
 				nil,
 			)
 			phaseSpan.RecordError(err)
@@ -2649,7 +2676,7 @@ func (o *AIOrchestrator) executePhaseLoop(
 			if phaseCancel != nil {
 				phaseCancel()
 			}
-			return nil, fmt.Errorf("execution failed (phase %d): %w", phaseCount, err)
+			return failed, fmt.Errorf("execution failed (phase %d): %w", phaseCount, err)
 		}
 
 		// --- Accumulate results ---
@@ -3206,7 +3233,7 @@ func (o *AIOrchestrator) synthesizeNativeStreaming(state *executionRunState) (*S
 		)
 		telemetry.AddSpanEvent(synthesisCtx, "orchestrator.synthesis.clarification_mode",
 			attribute.String("request_id", requestID),
-			attribute.String("question", truncateString(cr.Question, 200)),
+			attribute.String("question", truncateTelemetryPreview(cr.Question, 200)),
 			attribute.Int("missing_field_count", len(cr.MissingFields)),
 			attribute.Bool("has_partial_progress", cr.PartialProgress != ""),
 		)
@@ -3689,18 +3716,11 @@ func (o *AIOrchestrator) buildPreparedSynthesisPrompt(
 	// Only present when the planner emitted needs_user_input and the phase
 	// loop short-circuited. Consistent with the surrounding code's assumption
 	// that `result` is non-nil (see result.Steps iteration above).
-	if result.ClarificationNeeded != nil {
-		cr := result.ClarificationNeeded
-		sb.WriteString("<clarification_needed>\n")
-		fmt.Fprintf(&sb, "Question to ask the user: %s\n", cr.Question)
-		if len(cr.MissingFields) > 0 {
-			fmt.Fprintf(&sb, "Missing fields: %s\n", strings.Join(cr.MissingFields, ", "))
-		}
-		if cr.PartialProgress != "" {
-			fmt.Fprintf(&sb, "Partial progress to mention: %s\n", cr.PartialProgress)
-		}
-		sb.WriteString("</clarification_needed>\n\n")
+	clarificationSection, err := renderClarificationPromptSection(result.ClarificationNeeded)
+	if err != nil {
+		return "", err
 	}
+	sb.WriteString(clarificationSection)
 
 	sb.WriteString("Synthesize the above into a helpful answer.")
 
@@ -3823,7 +3843,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 		// Telemetry: Record LLM prompt for visibility in distributed traces
 		planEventAttrs := []attribute.KeyValue{
 			attribute.String("request_id", requestID),
-			attribute.String("prompt", truncateString(promptResult.Prompt, 2000)),
+			attribute.String("prompt", truncateTelemetryPreview(promptResult.Prompt, 2000)),
 			attribute.Int("prompt_length", len(promptResult.Prompt)),
 			attribute.Float64("temperature", 0.3),
 			attribute.Int("max_tokens", planOpts.MaxTokens),
@@ -3910,7 +3930,7 @@ func (o *AIOrchestrator) generateExecutionPlan(ctx context.Context, request stri
 		// Telemetry: Record LLM response for visibility in distributed traces
 		telemetry.AddSpanEvent(ctx, "llm.plan_generation.response",
 			attribute.String("request_id", requestID),
-			attribute.String("response", truncateString(aiResponse.Content, 2000)),
+			attribute.String("response", truncateTelemetryPreview(aiResponse.Content, 2000)),
 			attribute.Int("response_length", len(aiResponse.Content)),
 			attribute.Int("prompt_tokens", aiResponse.Usage.PromptTokens),
 			attribute.Int("completion_tokens", aiResponse.Usage.CompletionTokens),
@@ -4550,7 +4570,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 		// Span event: pre-LLM call
 		contPlanEventAttrs := []attribute.KeyValue{
 			attribute.String("request_id", requestID),
-			attribute.String("prompt", truncateString(promptResult.Prompt, 2000)),
+			attribute.String("prompt", truncateTelemetryPreview(promptResult.Prompt, 2000)),
 			attribute.Int("prompt_length", len(promptResult.Prompt)),
 			attribute.Float64("temperature", 0.2),
 			attribute.Int("max_tokens", planOpts.MaxTokens),
@@ -4650,7 +4670,7 @@ func (o *AIOrchestrator) generateContinuationPlan(
 		}
 		telemetry.AddSpanEvent(ctx, "llm.continuation_plan_generation.response",
 			attribute.String("request_id", requestID),
-			attribute.String("response", truncateString(responseContent, 2000)),
+			attribute.String("response", truncateTelemetryPreview(responseContent, 2000)),
 			attribute.Int("response_length", len(responseContent)),
 			attribute.Int("prompt_tokens", aiResponse.Usage.PromptTokens),
 			attribute.Int("completion_tokens", aiResponse.Usage.CompletionTokens),
@@ -4920,7 +4940,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 		attribute.Int("prompt_length", len(prompt)),
 		attribute.Int("phase_number", phaseNumber),
 		attribute.Bool("selection_reused", selectionReused),
-		attribute.String("validation_error", truncateString(validationErr.Error(), 200)),
+		attribute.String("validation_error", truncateTelemetryPreview(validationErr.Error(), 200)),
 	}
 	regenOpts := o.planAIOptions(0.2, promptResult.SystemPrompt)
 	if regenOpts.Model != "" {
@@ -5014,7 +5034,7 @@ func (o *AIOrchestrator) regenerateContinuationPlan(
 	}
 	telemetry.AddSpanEvent(ctx, "llm.continuation_plan_regeneration.response",
 		attribute.String("request_id", requestID),
-		attribute.String("response", truncateString(responseContent, 2000)),
+		attribute.String("response", truncateTelemetryPreview(responseContent, 2000)),
 		attribute.Int("response_length", len(responseContent)),
 		attribute.Int("prompt_tokens", aiResponse.Usage.PromptTokens),
 		attribute.Int("completion_tokens", aiResponse.Usage.CompletionTokens),
@@ -5619,6 +5639,29 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 			bodies[i] = boundedFailureProjection(steps[i].ToolError, failureBudget, digestOpts)
 		}
 	}
+	// Only registered framework envelopes receive the delegated view. Prepare
+	// the complete body and framing before retention so child facts and custom
+	// prompt encoding participate in the same budget as the answer.
+	delegatedViews := make(map[int]*delegatedContinuationView)
+	for i := range steps {
+		view, viewErr := prepareDelegatedContinuationView(ctx, &steps[i], o.catalog, digestOpts, min(digestOpts.floorChars, totalBudget))
+		if viewErr != nil {
+			return nil, fmt.Errorf("prepare continuation delegated result: %w", viewErr)
+		}
+		if view != nil {
+			view.meta.BudgetAllocated = min(digestOpts.floorChars, totalBudget)
+			delegatedViews[i] = view
+			bodies[i] = view.body
+			digestMeta[i] = &view.meta
+		}
+	}
+	renderCost := func(i int) int {
+		if view := delegatedViews[i]; view != nil {
+			return len(view.rendered)
+		}
+		_, projected := failureViews[steps[i].StepID]
+		return stepRenderCost(&steps[i], bodies[i], projected)
+	}
 
 	// A: greedy recency-fill. Failed steps are always kept (high-signal, small); successful steps fill
 	// newest-first until the aggregate budget is spent (recency = eviction order). The newest successful
@@ -5628,8 +5671,7 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	for i := range steps {
 		if !steps[i].Success {
 			keep[i] = true
-			_, projected := failureViews[steps[i].StepID]
-			spent += stepRenderCost(&steps[i], bodies[i], projected)
+			spent += renderCost(i)
 		}
 	}
 	keptSuccess := false
@@ -5637,7 +5679,7 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 		if !steps[i].Success {
 			continue
 		}
-		cost := stepRenderCost(&steps[i], bodies[i])
+		cost := renderCost(i)
 		if keptSuccess && spent+cost > totalBudget {
 			break // budget spent; older successful steps are evicted (see N-of-M note)
 		}
@@ -5680,6 +5722,40 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 		}
 		result := &steps[i]
 		body := bodies[i]
+		if view := delegatedViews[i]; view != nil {
+			resultsSb.WriteString(view.rendered)
+			telemetry.AddSpanEvent(ctx, "result_trim.completed",
+				attribute.String("request_id", requestID),
+				attribute.String("step_id", result.StepID),
+				attribute.String("method", view.meta.Method),
+				attribute.Bool("content_lost", view.meta.ContentLost),
+				attribute.Int("original_bytes", view.meta.OriginalBytes),
+				attribute.Int("trimmed_bytes", view.meta.TrimmedBytes),
+				attribute.Int("budget_allocated", view.meta.BudgetAllocated),
+			)
+			if view.childrenShown > 0 || view.childrenOmitted > 0 {
+				childCapabilities := truncateTelemetryPreview(strings.Join(view.childCapabilities, ","), digestOpts.scalarMax)
+				telemetry.AddSpanEvent(ctx, "orchestrator.child_steps_extracted",
+					attribute.String("request_id", requestID),
+					attribute.Bool("child_steps_found", true),
+					attribute.Int("child_steps_count", view.childrenShown),
+					attribute.Int("child_steps_omitted", view.childrenOmitted),
+					attribute.String("child_capabilities", childCapabilities),
+					attribute.String("step_id", result.StepID),
+					attribute.String("agent_name", result.AgentName),
+				)
+				if o.logger != nil {
+					o.logger.InfoWithContext(ctx, "Orchestrator child outcomes included in continuation prompt", map[string]interface{}{
+						"operation": "continuation_child_extraction", "request_id": requestID,
+						"step_id": result.StepID, "agent_name": result.AgentName,
+						"child_steps_count": view.childrenShown, "child_steps_omitted": view.childrenOmitted,
+						"child_capabilities": childCapabilities,
+					})
+				}
+			}
+			shown++
+			continue
+		}
 
 		// C — escalate the steps selected above (newest-first, capped). Fail-open: an empty distiller
 		// result leaves the structural-floor body untouched.
@@ -5703,8 +5779,6 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 			}
 		}
 
-		// Surface orchestrator delegation sub-steps so the planner does not reissue them.
-		childSummary := extractOrchestratorChildSummary(result)
 		preparedStepID, err := preparePromptValue(
 			ctx, promptContinuationPlan, promptValuePriorResult,
 			promptFieldPriorResultStepID, result.StepID,
@@ -5752,60 +5826,11 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 		if err != nil {
 			return nil, fmt.Errorf("prepare continuation result: %w", err)
 		}
-		if childSummary != "" {
-			childSummary, err = preparePromptValue(
-				ctx, promptContinuationPlan, promptValuePriorResult,
-				promptFieldPriorResultResponse, childSummary,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("prepare continuation child summary: %w", err)
-			}
-		}
 
 		fmt.Fprintf(&resultsSb, "Step %s (%s):\n  Task: %s\n  Result: %s\n",
 			preparedStepID, preparedAgentName, preparedInstruction,
 			renderContinuationStepResult(&preparedResult, preparedBody, projected))
 
-		if childSummary != "" {
-			fmt.Fprintf(&resultsSb,
-				"  NOTE: This orchestrator step internally executed these sub-steps:\n%s"+
-					"  Do NOT duplicate any of these actions in the next phase.\n",
-				childSummary)
-
-			childStepCount := strings.Count(childSummary, "\n")
-			// Extract capability names from summary lines (format: "    - agent/capability [STATUS]: ...")
-			var caps []string
-			for _, line := range strings.Split(childSummary, "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "- ") {
-					parts := strings.SplitN(line[2:], " ", 2) // split "agent/cap [STATUS]: ..." at first space
-					if len(parts) > 0 {
-						caps = append(caps, parts[0]) // "agent/cap"
-					}
-				}
-			}
-			childCapabilities := strings.Join(caps, ",")
-
-			if o.logger != nil {
-				o.logger.InfoWithContext(ctx, "Orchestrator child steps extracted for continuation prompt", map[string]interface{}{
-					"operation":          "continuation_child_extraction",
-					"request_id":         requestID,
-					"step_id":            result.StepID,
-					"child_steps_count":  childStepCount,
-					"child_capabilities": childCapabilities,
-					"agent_name":         result.AgentName,
-				})
-			}
-
-			telemetry.AddSpanEvent(ctx, "orchestrator.child_steps_extracted",
-				attribute.String("request_id", requestID),
-				attribute.Bool("child_steps_found", true),
-				attribute.Int("child_steps_count", childStepCount),
-				attribute.String("child_capabilities", childCapabilities),
-				attribute.String("step_id", result.StepID),
-				attribute.String("agent_name", result.AgentName),
-			)
-		}
 		resultsSb.WriteString("\n")
 		shown++
 	}
@@ -5821,6 +5846,9 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 		attribute.Int("steps_shown", shown),
 		attribute.Int("c_escalations", escalated),
 		attribute.Int("budget_chars", totalBudget),
+		attribute.Int("delegated_views", len(delegatedViews)),
+		attribute.Int("retained_cost_bytes", spent),
+		attribute.Bool("protected_budget_overflow", spent > totalBudget),
 	)
 	emitContinuationBudgetMetrics(len(steps), shown, escalated, resultsSb.Len())
 
@@ -5937,7 +5965,11 @@ func (o *AIOrchestrator) buildContinuationPrompt(
 	sb.WriteString("<planning_instructions>\n")
 	sb.WriteString("Plan the NEXT phase to fulfill remaining parts of the user's request.\n")
 	sb.WriteString("- Reference completed step outputs using \"{{step-N.response.data.field}}\" syntax (always quoted)\n")
-	sb.WriteString("- Each Result above is a structure-preserving digest (object keys, array sizes, sample values); sample values are illustrative — reference any field shown with the same {{step-N...}} syntax and the full value resolves at execution\n")
+	if len(delegatedViews) > 0 {
+		sb.WriteString("- Results retain field paths and array samples; delegated answers/questions are readable previews, followed by observed child outcomes. Samples/previews are partial; reference shown fields with {{step-N...}} and the full original value resolves at execution\n")
+	} else {
+		sb.WriteString("- Each Result above is a structure-preserving digest (object keys, array sizes, sample values); sample values are illustrative — reference any field shown with the same {{step-N...}} syntax and the full value resolves at execution\n")
+	}
 	sb.WriteString("- \"depends_on\" may ONLY reference step IDs within THIS phase's steps array\n")
 	sb.WriteString("- The framework derives \"implicit_deps\" for PRIOR-phase parameter references; you may omit it. If supplied, list exactly those prior-phase references. Earlier planning context is not a dependency.\n")
 	// Terminal decisions use the shared iterative instructions in FormatRules.

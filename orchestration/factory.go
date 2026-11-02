@@ -370,6 +370,7 @@ func createOrchestrator(
 			deps.AIClient,
 			&config.TieredResolution,
 		)
+		tieredProvider.feedbackMaxBytes = config.IterativePlanning.RegenerationFeedbackMaxBytes
 		tieredProvider.SetLogger(deps.Logger)
 		tieredProvider.SetTelemetry(deps.Telemetry)
 		if deps.CircuitBreaker != nil {
@@ -1222,7 +1223,7 @@ func WithTieredResolution(enabled bool) OrchestratorOption {
 }
 
 // WithTieredSelectionMaxTokens configures the maximum output tokens for tiered
-// selection LLM calls. Default: 2000.
+// selection LLM calls. Default: 20000.
 func WithTieredSelectionMaxTokens(maxTokens int) OrchestratorOption {
 	return func(c *OrchestratorConfig) {
 		if maxTokens > 0 {

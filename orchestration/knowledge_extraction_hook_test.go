@@ -130,6 +130,35 @@ func TestKnowledgeExtractionHook_AsyncWorkUsesLinkedSpanAndCorrelationBaggage(t 
 	}
 }
 
+func TestKnowledgeExtractionHook_DoesNotCopyAnotherRequestsTypedRoot(t *testing.T) {
+	observed := make(chan string, 1)
+	client := &mockAIClient{generateFunc: func(ctx context.Context, _ string, _ *core.AIOptions) (*core.AIResponse, error) {
+		observed <- core.GetOriginalRequestID(ctx)
+		return &core.AIResponse{Content: `[]`}, nil
+	}}
+	hook, err := NewKnowledgeExtractionHook(&core.MockSharedKnowledge{}, &core.MockEmbeddingClient{}, client, "agent", "domain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(hook.Close)
+	ctx := WithRequestID(t.Context(), "scheduled-request")
+	ctx = core.WithRequestID(ctx, "other-request")
+	ctx = core.WithOriginalRequestID(ctx, "other-requests-root")
+	response, err := hook.AfterSynthesis(ctx, &core.PipelineContext{Request: "request"}, "exact response")
+	if err != nil || response != "exact response" {
+		t.Fatalf("AfterSynthesis() = %q, %v", response, err)
+	}
+	select {
+	case root := <-observed:
+		if root != "" {
+			t.Fatalf("detached work copied an unrelated request's typed root: %q", root)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("detached extraction did not run")
+	}
+	hook.Close()
+}
+
 func TestKnowledgeExtractionHook_NeverMutatesResponse(t *testing.T) {
 	knowledge := &core.MockSharedKnowledge{}
 	embedder := &core.MockEmbeddingClient{}

@@ -1,6 +1,83 @@
 package orchestration
 
-import "testing"
+import (
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestDedupeLLMInteractions_KnownTraceConflictPreservesCalls(t *testing.T) {
+	const traceA = "11111111111111111111111111111111"
+	const traceB = "22222222222222222222222222222222"
+	const traceC = "abcdef0123456789abcdef0123456789"
+	makeCall := func(kind, traceID string) LLMInteraction {
+		return LLMInteraction{Type: kind, TraceID: traceID, Prompt: "exact *same payload* 界",
+			Response: "exact **same response** <unchanged>", ReasoningContent: "reasoning unchanged",
+			DurationMs: 123, StepID: "step-1", PhaseNumber: 2, TotalTokens: 42}
+	}
+	tests := []struct {
+		name     string
+		input    []LLMInteraction
+		retained []int
+	}{
+		{"different-known-traces", []LLMInteraction{makeCall("plan_generation", traceA), makeCall("agent_llm_call", traceB)}, []int{0, 1}},
+		{"different-known-traces-shadow-first", []LLMInteraction{makeCall("agent_llm_call", traceB), makeCall("plan_generation", traceA)}, []int{0, 1}},
+		{"same-known-traces", []LLMInteraction{makeCall("agent_llm_call", traceA), makeCall("plan_generation", traceA)}, []int{1}},
+		{"legacy-typed-trace", []LLMInteraction{makeCall("plan_generation", ""), makeCall("agent_llm_call", traceB)}, []int{0}},
+		{"legacy-shadow-trace", []LLMInteraction{makeCall("agent_llm_call", ""), makeCall("plan_generation", traceA)}, []int{1}},
+		{"invalid-typed-trace", []LLMInteraction{makeCall("plan_generation", "invalid caller trace"), makeCall("agent_llm_call", traceB)}, []int{0}},
+		{"zero-shadow-trace", []LLMInteraction{makeCall("plan_generation", traceA), makeCall("agent_llm_call", strings.Repeat("0", 32))}, []int{0}},
+		{"uppercase-shadow-trace-is-unknown", []LLMInteraction{makeCall("plan_generation", traceA), makeCall("agent_llm_call", strings.ToUpper(traceC))}, []int{0}},
+		{"multiple-typed-traces-one-matches", []LLMInteraction{makeCall("plan_generation", traceA), makeCall("agent_llm_call", traceB), makeCall("synthesis", traceB)}, []int{0, 2}},
+		{"multiple-typed-traces-none-match", []LLMInteraction{makeCall("plan_generation", traceA), makeCall("agent_llm_call", traceC), makeCall("synthesis", traceB)}, []int{0, 1, 2}},
+		{"legacy-typed-partner-preserves-fallback", []LLMInteraction{makeCall("plan_generation", traceA), makeCall("agent_llm_call", traceC), makeCall("synthesis", "")}, []int{0, 2}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before, err := json.Marshal(test.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := DedupeLLMInteractions(test.input)
+			want := make([]LLMInteraction, 0, len(test.retained))
+			for _, index := range test.retained {
+				want = append(want, test.input[index])
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("retained calls or order changed:\n got %+v\nwant %+v", got, want)
+			}
+			after, err := json.Marshal(test.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatalf("dedupe mutated source records:\n before %s\n after %s", before, after)
+			}
+		})
+	}
+}
+
+func TestDedupeLLMInteractions_TraceProvenanceDoesNotBreakLegacyJoin(t *testing.T) {
+	for _, shadowTrace := range []string{"", "11111111111111111111111111111111"} {
+		t.Run("shadow-"+shadowTrace, func(t *testing.T) {
+			typed := LLMInteraction{Type: "plan_generation", TraceID: "11111111111111111111111111111111",
+				Prompt: "exact *prompt* 界", Response: "exact response", DurationMs: 123, StepID: "step-1", PhaseNumber: 2}
+			shadow := typed
+			shadow.Type = "agent_llm_call"
+			shadow.TraceID = shadowTrace
+			orphan := LLMInteraction{Type: "agent_llm_call", TraceID: "22222222222222222222222222222222",
+				Prompt: "linked background call", Response: "background response", DurationMs: 456}
+			got := DedupeLLMInteractions([]LLMInteraction{shadow, typed, orphan})
+			if len(got) != 2 || got[0].Type != typed.Type || got[0].TraceID != typed.TraceID || got[0].Prompt != typed.Prompt || got[0].Response != typed.Response {
+				t.Fatalf("typed trace/payload lost or legacy shadow retained: %+v", got)
+			}
+			if got[1].TraceID != orphan.TraceID || got[1].Prompt != orphan.Prompt {
+				t.Fatalf("linked background trace lost: %+v", got[1])
+			}
+		})
+	}
+}
 
 // TestDedupeLLMInteractions_DropsPairedShadow locks in the deduplication
 // contract: an agent_llm_call row with the same prompt/response/duration/

@@ -157,11 +157,9 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 		}
 	}
 
-	// Resolve original_request_id for baggage propagation.
-	originalRequestID := checkpoint.OriginalRequestID
-	if originalRequestID == "" {
-		originalRequestID = checkpoint.RequestID
-	}
+	// Restore checkpoint-owned root/parent before linked-span construction.
+	// Approval transport baggage never replaces the suspended execution's facts.
+	ctx, originalRequestID := restoreCheckpointExecutionCorrelation(ctx, checkpoint)
 
 	spanBaseCtx, conversationID, resumeMetadata := prepareResumeConversationContext(
 		ctx,
@@ -195,9 +193,6 @@ func BuildResumeContext(ctx context.Context, checkpoint *ExecutionCheckpoint) (c
 		attribute.String("original_trace_id", traceID),
 		attribute.String("checkpoint_id", checkpoint.CheckpointID),
 	)
-	// Propagate original_request_id through W3C Baggage so all downstream child spans inherit it.
-	resumeCtx = telemetry.WithBaggage(resumeCtx, "original_request_id", originalRequestID)
-
 	// Build resume context using existing helpers from orchestrator.go
 	resumeCtx = WithResumeMode(resumeCtx, checkpoint.CheckpointID)
 	if checkpoint.ResumeState != nil {

@@ -28,6 +28,7 @@ func (a *LLMCallRecorderAdapter) RecordLLMCall(ctx context.Context, requestID st
 
 	interaction := LLMInteraction{
 		Type:             record.CallType,
+		TraceID:          record.TraceID,
 		SourceComponent:  record.SourceComponent,
 		CallDescription:  record.Description,
 		StepID:           record.StepID,

@@ -50,16 +50,17 @@ type RoutingPlan struct {
 	PhaseNumber      int    `json:"phase_number,omitempty"`      // Set by orchestrator, not LLM (1-indexed)
 
 	// Clarification escape valve. When set, the planner is signaling
-	// that it cannot make further progress without information from the user.
+	// that it cannot make further progress without information from its caller.
 	// The orchestrator terminates the phase loop and routes the question through
 	// the synthesizer instead of starting another phase. When this field is set,
 	// Steps SHOULD be empty for this plan.
 	NeedsUserInput *ClarificationRequest `json:"needs_user_input,omitempty"`
 }
 
-// ClarificationRequest is the planner's structured request for user input.
+// ClarificationRequest is the planner's structured request for caller input.
 // Populated when the next planning step depends on information that no
-// available tool can produce — only the user can.
+// available tool can produce. For a delegated agent, its parent is the caller;
+// this outcome ends the current turn without creating a wait/resume checkpoint.
 type ClarificationRequest struct {
 	// Question is the natural-language question to surface to the user.
 	// Required when ClarificationRequest is non-nil.
@@ -596,21 +597,19 @@ type OrchestratorConfig struct {
 	// Enable via TRUVAG3_HITL_ENABLED=true or config.HITL.Enabled=true.
 	HITL HITLConfig `json:"hitl,omitempty"`
 
-	// ContinuationResultMaxChars caps the chars of a NON-JSON step result shown in a continuation
+	// ContinuationResultMaxChars allocates UTF-8 bytes (legacy name) for a NON-JSON step result in a continuation
 	// planning prompt (Phase 14). JSON results are rendered as a structure-complete digest instead;
 	// this knob is the floor-preview size for non-JSON blobs (logs, markdown, CSV) — the fallback the
 	// planner reads when the continuation distiller (C) does not summarize the step. Orchestrator JSON
-	// delegation responses are digested + child-summary-extracted, so child sub-steps stay visible
-	// regardless of this value.
+	// delegation envelopes share this allocation between readable answer/question previews,
+	// generic output fields and bounded child facts, with omissions disclosed.
 	// Env: TRUVAG3_CONTINUATION_RESULT_MAX_CHARS (default: 10000)
 	ContinuationResultMaxChars int `json:"continuation_result_max_chars,omitempty"`
 
-	// ContinuationResultMaxTotalChars caps the TOTAL characters of all completed-step digests in a
-	// continuation planning prompt (Phase 14). Unlike ContinuationResultMaxChars (the per-step non-JSON
-	// floor preview), this bounds the whole <completed_steps> section: step digests are filled
-	// newest-first until this budget is spent, and older steps that don't fit are evicted (an N-of-M
-	// note is emitted). ~32 KB is a starting ceiling to tune on measurement; a typical run fits well
-	// under it (measured ~268 B/digest -> ~122 steps in 32 KB).
+	// ContinuationResultMaxTotalChars is a soft byte target for completed-step views in a
+	// continuation prompt. Delegated framing/detail count after canonical encoding; ordinary
+	// digest accounting is unchanged. Older successes are evicted newest-first, with an N-of-M
+	// note. Failed steps and the newest success stay protected, so the target can be exceeded.
 	// Env: TRUVAG3_CONTINUATION_RESULT_MAX_TOTAL_CHARS (default: 196608)
 	ContinuationResultMaxTotalChars int `json:"continuation_result_max_total_chars,omitempty"`
 
@@ -811,7 +810,8 @@ type IterativePlanConfig struct {
 	MaxValidationRounds int `json:"max_validation_rounds"`
 
 	// RegenerationFeedbackMaxBytes bounds the encoded correction context added
-	// to one selected phase prompt. Env: TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES.
+	// to one selected phase prompt or tiered-selector correction.
+	// Env: TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES.
 	RegenerationFeedbackMaxBytes int `json:"regeneration_feedback_max_bytes"`
 }
 
@@ -828,10 +828,10 @@ type TieredCapabilityConfig struct {
 
 	// SelectionMaxTokens is the maximum output tokens for tiered selection LLM calls.
 	// Higher values allow complex multi-tool selections but cost more tokens.
-	// Default: 2000 | Env: TRUVAG3_TIERED_SELECTION_MAX_TOKENS
+	// Default: 20000 | Env: TRUVAG3_TIERED_SELECTION_MAX_TOKENS
 	SelectionMaxTokens int `json:"selection_max_tokens,omitempty"`
 
-	// RetryEnabled enables retry on empty LLM responses and parse failures
+	// RetryEnabled enables retry on empty LLM responses, parse failures and invalid tool IDs
 	// during tiered tool selection. Mirrors PlanParseRetryEnabled for consistency.
 	// Default: true | Env: TRUVAG3_TIERED_SELECTION_RETRY_ENABLED
 	RetryEnabled bool `json:"retry_enabled,omitempty"`

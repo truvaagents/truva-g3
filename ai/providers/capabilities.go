@@ -36,6 +36,9 @@ var modelCapabilities = []ModelCapabilities{
 	// does not declare schema support or a model-family reasoning wire format.
 	{ProviderAlias: "openai.openrouter", ModelPrefix: "deepseek/deepseek-v4.1-flash", ExactModel: true, SupportsJSONMode: true, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai.openrouter", ModelPrefix: "z-ai/glm-5.3-flash", ExactModel: true, SupportsJSONMode: true, SupportsHeaderPassthrough: true},
+	// Exact non-Flash GLM 5.3 endpoint metadata reviewed 2026-10-17. JSON-object
+	// routing requires supporting endpoints; schema/reasoning contracts stay unknown.
+	{ProviderAlias: "openai.openrouter", ModelPrefix: "z-ai/glm-5.3", ExactModel: true, SupportsJSONMode: true, SupportsHeaderPassthrough: true},
 	{ProviderAlias: "openai.openrouter", ModelPrefix: "openai/gpt-5.6-luna", ExactModel: true, ReasoningStyle: "openai", SupportsJSONMode: true, SupportsJSONSchema: true, SupportsHeaderPassthrough: true},
 	// OpenRouter endpoint metadata reviewed 2026-09-28. Required-parameter routing
 	// filters endpoints without JSON/schema support; this is not a live inference certification.

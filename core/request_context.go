@@ -16,6 +16,7 @@ const (
 	contextKeyPhaseNumber                       contextKey = "truvag3_phase_number"
 	contextKeyPlanID                            contextKey = "truvag3_plan_id"
 	contextKeyOriginalRequestID                 contextKey = "truvag3_original_request_id"
+	contextKeyIncomingCall                      contextKey = "truvag3_incoming_call"
 	contextKeyConversationID                    contextKey = "truvag3_conversation_id"
 	contextKeyConversationProgrammaticCandidate contextKey = "truvag3_conversation_programmatic_candidate"
 	contextKeyConversationHeaderCandidate       contextKey = "truvag3_conversation_header_candidate"
@@ -32,7 +33,92 @@ const (
 	// MaxConversationIDLength is the maximum byte length of a conversation ID.
 	// It is a protocol invariant aligned with the telemetry baggage value limit.
 	MaxConversationIDLength = 512
+
+	// MaxIncomingCallIDLength bounds each opaque incoming-call identifier in
+	// bytes. It is a wire-correlation invariant, not a deployment capacity limit.
+	MaxIncomingCallIDLength = 512
 )
+
+// IncomingCall contains transport facts about the execution invoking a handler.
+// It is not authenticated caller identity. RequestID is required; StepID and
+// OriginalRequestID are optional. These facts are separate from the receiving
+// execution's current request, step, phase, plan and tracing context.
+type IncomingCall struct {
+	RequestID         string
+	StepID            string
+	OriginalRequestID string
+}
+
+type incomingCallValidationError struct {
+	field  string
+	reason string
+}
+
+func (e *incomingCallValidationError) Error() string {
+	return "invalid incoming call correlation: " + e.field + " " + e.reason
+}
+
+// WithIncomingCall stores a validated value copy without changing current
+// execution identity. Accepted IDs retain their exact bytes and use the same
+// visible-ASCII ranges as ValidateConversationID. On invalid input it returns
+// an error containing only bounded field/reason classifications and a context
+// with any inherited incoming call cleared. A nil context uses Background.
+func WithIncomingCall(ctx context.Context, call IncomingCall) (context.Context, error) {
+	ctx = WithoutIncomingCall(ctx)
+	for _, identifier := range []struct {
+		field string
+		value string
+	}{
+		{"request_id", call.RequestID},
+		{"step_id", call.StepID},
+		{"original_request_id", call.OriginalRequestID},
+	} {
+		if identifier.value == "" && identifier.field != "request_id" {
+			continue
+		}
+		if reason := validateIncomingCallID(identifier.value); reason != "" {
+			return ctx, &incomingCallValidationError{field: identifier.field, reason: reason}
+		}
+	}
+	return context.WithValue(ctx, contextKeyIncomingCall, call), nil
+}
+
+// IncomingCallFromContext returns the validated incoming caller, if present.
+// A nil context, an absent slot or an explicitly cleared slot returns false.
+func IncomingCallFromContext(ctx context.Context) (IncomingCall, bool) {
+	if ctx == nil {
+		return IncomingCall{}, false
+	}
+	call, ok := ctx.Value(contextKeyIncomingCall).(IncomingCall)
+	return call, ok && call.RequestID != ""
+}
+
+// WithoutIncomingCall shadows any inherited incoming call while preserving
+// cancellation, deadlines, current execution identity and unrelated values.
+func WithoutIncomingCall(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, contextKeyIncomingCall, IncomingCall{})
+}
+
+func validateIncomingCallID(id string) string {
+	if id == "" {
+		return "empty"
+	}
+	if len(id) > MaxIncomingCallIDLength {
+		return "too_long"
+	}
+	if !utf8.ValidString(id) {
+		return "invalid_utf8"
+	}
+	for i := 0; i < len(id); i++ {
+		if !isConversationIDByteAllowed(id[i]) {
+			return "invalid_character"
+		}
+	}
+	return ""
+}
 
 // ConversationIDValidationReason is a bounded classification for a rejected
 // conversation ID. It never contains the rejected value.
