@@ -11,6 +11,7 @@ import * as hitl from './views/hitl.js';
 import * as dag from './views/dag.js';
 import * as skills from './views/skills.js';
 import * as memory from './views/memory.js';
+import { executionDeepLinkRequestID } from './utils/dag-graph.js';
 
 // ─── View Registry ──────────────────────────────────────────────────────────
 
@@ -34,6 +35,16 @@ let autoRefreshInterval = null;
  * the new one.
  */
 function switchView(view) {
+    // An execution-targeted URL should not keep promising a DAG after the
+    // operator explicitly switches to another screen. Preserve other params.
+    if (view !== 'dag' && executionDeepLinkRequestID(location.search)) {
+        try {
+            const url = new URL(location.href);
+            url.searchParams.delete('view');
+            url.searchParams.delete('request_id');
+            history.replaceState(history.state, '', url);
+        } catch (_) { /* Embedded history restrictions do not block navigation. */ }
+    }
     // Destroy previous view
     if (activeViewModule && activeViewModule.destroy) {
         activeViewModule.destroy();
@@ -245,11 +256,17 @@ function setupGlobalHandlers() {
 
 // ─── Initialize ─────────────────────────────────────────────────────────────
 
+function initializeInitialView() {
+    const requestID = executionDeepLinkRequestID(location.search);
+    switchView(requestID ? 'dag' : 'registry');
+    if (requestID) void dag.openExecution(requestID);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     setupGlobalHandlers();
     setupAutoRefresh();
     setupResizablePanels();
 
     // Initialize the default view with full setup (nav active class, panel visibility, etc.)
-    switchView('registry');
+    initializeInitialView();
 });

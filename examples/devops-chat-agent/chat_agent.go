@@ -41,19 +41,17 @@ func NewDevOpsChatAgent(connection core.RedisConnectionConfig, keyspace core.Red
 
 	// Create AI client with provider chain for failover.
 	// Auto-detect mode: discovers available providers from API keys and orders by priority.
-	// Timeout: 240s for reasoning models (GPT-5, o1, o3, o4) that need longer for chain-of-thought.
+	// Request timeouts follow TRUVAG3_AI_TIMEOUT (5m in the supplied .env.example).
 	//
 	// To explicitly control the chain order instead of auto-detecting, use WithProviderChain:
 	//   ai.NewChainClient(
 	//       ai.WithProviderChain("openai", "anthropic"),  // explicit order, no auto-detection
 	//       ai.WithChainTelemetry(telemetry.GetTelemetryProvider()),
 	//       ai.WithChainLogger(agent.Logger),
-	//       ai.WithChainTimeout(240*time.Second),
 	//   )
 	chainClient, err := ai.NewChainClient(
 		ai.WithChainTelemetry(telemetry.GetTelemetryProvider()),
 		ai.WithChainLogger(agent.Logger),
-		ai.WithChainTimeout(240*time.Second), // Extended timeout for reasoning models
 	)
 	if err != nil {
 		agent.Logger.Warn("Failed to create AI chain client, trying single provider", map[string]interface{}{
@@ -61,7 +59,6 @@ func NewDevOpsChatAgent(connection core.RedisConnectionConfig, keyspace core.Red
 		})
 		// Fallback to single provider - returns core.AIClient interface
 		singleClient, err := ai.NewClient(
-			ai.WithTimeout(240*time.Second),                    // Extended timeout for reasoning models
 			ai.WithTelemetry(telemetry.GetTelemetryProvider()), // AI span visibility in Jaeger
 		)
 		if err != nil {
@@ -229,9 +226,8 @@ func (t *DevOpsChatAgent) InitializeOrchestrator(
 	}
 	config.SynthesisAIOptions.Temperature = orchestration.Float32Ptr(0.7) // Higher temperature for natural streaming responses
 
-	// Increase timeouts for complex multi-tool orchestration scenarios
-	config.ExecutionOptions.TotalTimeout = 5 * time.Minute  // Overall orchestration timeout
-	config.ExecutionOptions.StepTimeout = 120 * time.Second // Per-step timeout for AI planning
+	// Keep the resolved execution/phase timeouts. The framework sizes delegated
+	// calls from these settings and HITL.DefaultTimeout; operators tune them in .env.
 
 	// Configure prompt builder for DevOps domain
 	config.PromptConfig = orchestration.PromptConfig{
@@ -359,10 +355,15 @@ is always more valuable than giving up early.`,
 	t.orchestrator = orch
 
 	t.Logger.Info("Orchestrator initialized successfully", map[string]interface{}{
-		"routing_mode":       config.RoutingMode,
-		"synthesis_strategy": config.SynthesisStrategy,
-		"hitl_enabled":       hitlConfig.Enabled,
-		"skill_bindings":     len(config.Skills.Bindings),
+		"operation":             "initialize_orchestrator",
+		"routing_mode":          config.RoutingMode,
+		"synthesis_strategy":    config.SynthesisStrategy,
+		"hitl_enabled":          hitlConfig.Enabled,
+		"skill_bindings":        len(config.Skills.Bindings),
+		"outbound_http_timeout": config.ExecutionOptions.TotalTimeout.String(),
+		"step_timeout":          config.ExecutionOptions.StepTimeout.String(),
+		"phase_timeout":         config.IterativePlanning.PhaseTimeout.String(),
+		"hitl_default_timeout":  hitlConfig.DefaultTimeout.String(),
 	})
 
 	return nil
@@ -582,46 +583,72 @@ func (t *DevOpsChatAgent) processWithStreamingExecution(ctx context.Context, ses
 
 	// Send completion
 	callback.SendDone(requestID, agentsInvolved, time.Since(startTime).Milliseconds(), &result.OrchestratorResponse)
+	var completionDeliveryErr error
+	deferred, resumeDelivery := callback.(*terminalResumeCallback)
+	if delivery, ok := callback.(interface{ Err() error }); ok && !resumeDelivery {
+		completionDeliveryErr = delivery.Err()
+	}
 
-	// Store assistant message in session
-	t.sessionStore.AddMessage(sessionID, Message{
-		Role:      "assistant",
-		Content:   response,
-		Timestamp: time.Now(),
-		Metadata: map[string]interface{}{
-			"request_id":  requestID,
-			"tools_used":  agentsInvolved,
-			"confidence":  confidence,
-			"duration_ms": time.Since(startTime).Milliseconds(),
-			"prompt_tokens": func() int {
-				if result.Usage != nil {
-					return result.Usage.PromptTokens
-				}
-				return 0
-			}(),
-			"completion_tokens": func() int {
-				if result.Usage != nil {
-					return result.Usage.CompletionTokens
-				}
-				return 0
-			}(),
-			"total_tokens": func() int {
-				if result.Usage != nil {
-					return result.Usage.TotalTokens
-				}
-				return 0
-			}(),
-		},
-	})
-
-	t.Logger.InfoWithContext(ctx, "Chat request completed", map[string]interface{}{
-		"operation":   "process_chat",
-		"session_id":  sessionID,
+	// Retain generated content even if its final live delivery failed.
+	assistantMetadata := map[string]interface{}{
 		"request_id":  requestID,
-		"tools_used":  len(agentsInvolved),
+		"tools_used":  agentsInvolved,
+		"confidence":  confidence,
 		"duration_ms": time.Since(startTime).Milliseconds(),
-		"status":      "success",
-	})
+		"prompt_tokens": func() int {
+			if result.Usage != nil {
+				return result.Usage.PromptTokens
+			}
+			return 0
+		}(),
+		"completion_tokens": func() int {
+			if result.Usage != nil {
+				return result.Usage.CompletionTokens
+			}
+			return 0
+		}(),
+		"total_tokens": func() int {
+			if result.Usage != nil {
+				return result.Usage.TotalTokens
+			}
+			return 0
+		}(),
+	}
+	if result.Clarification != nil {
+		assistantMetadata["clarification"] = result.Clarification
+	}
+	complete := func(deliveryErr error) {
+		if deliveryErr != nil {
+			assistantMetadata["delivery_status"] = "failed"
+		}
+		t.sessionStore.AddMessage(sessionID, Message{
+			Role:      "assistant",
+			Content:   response,
+			Timestamp: time.Now(),
+			Metadata:  assistantMetadata,
+		})
+		if deliveryErr == nil {
+			t.Logger.InfoWithContext(ctx, "Chat request completed", map[string]interface{}{
+				"operation":   "process_chat",
+				"session_id":  sessionID,
+				"request_id":  requestID,
+				"tools_used":  len(agentsInvolved),
+				"duration_ms": time.Since(startTime).Milliseconds(),
+				"status":      "success",
+			})
+		}
+	}
+	if resumeDelivery {
+		// The coordinator must finalize successful effects before terminal
+		// transport or history can claim delivery. A transport error is never an
+		// executor failure that makes an approved checkpoint resumable again.
+		deferred.deferCompletion(complete)
+		return execution, nil
+	}
+	complete(completionDeliveryErr)
+	if completionDeliveryErr != nil {
+		return execution, &finalSSEDeliveryError{requestID: requestID, cause: completionDeliveryErr}
+	}
 
 	return execution, nil
 }
@@ -798,17 +825,21 @@ func (t *DevOpsChatAgent) ProcessQuery(ctx context.Context, sessionID, query str
 
 	// Store response in session for continuity (only when session was provided)
 	if sessionID != "" {
+		assistantMetadata := map[string]interface{}{
+			"request_id":  result.RequestID,
+			"tools_used":  result.AgentsInvolved,
+			"confidence":  result.Confidence,
+			"duration_ms": time.Since(startTime).Milliseconds(),
+			"source":      "agent_delegation",
+		}
+		if result.Clarification != nil {
+			assistantMetadata["clarification"] = result.Clarification
+		}
 		t.sessionStore.AddMessage(sessionID, Message{
 			Role:      "assistant",
 			Content:   result.Response,
 			Timestamp: time.Now(),
-			Metadata: map[string]interface{}{
-				"request_id":  result.RequestID,
-				"tools_used":  result.AgentsInvolved,
-				"confidence":  result.Confidence,
-				"duration_ms": time.Since(startTime).Milliseconds(),
-				"source":      "agent_delegation",
-			},
+			Metadata:  assistantMetadata,
 		})
 	}
 
@@ -873,6 +904,7 @@ func (t *DevOpsChatAgent) registerCapabilities() {
 			},
 			OptionalFields: []core.FieldHint{
 				{Name: "metadata", Type: "object", Description: "Additional orchestration metadata"},
+				{Name: "clarification", Type: "object", Description: "Missing input requested by this turn, when present."},
 				{Name: "steps", Type: "array", Description: "Structured execution steps: tool name, instruction, response, success, duration, HITL metadata"},
 				{Name: "usage", Type: "object", Description: "Total AI token consumption: prompt_tokens, completion_tokens, total_tokens"},
 				{Name: "usage_by_phase", Type: "object", Description: "Token usage breakdown by orchestration phase: planning, synthesis, error_analysis, etc."},

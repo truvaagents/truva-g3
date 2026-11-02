@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -24,6 +25,33 @@ type StreamCallback interface {
 	SendUsage(promptTokens, completionTokens, totalTokens int)
 	SendFinish(reason string)
 	SendCheckpoint(checkpoint *orchestration.ExecutionCheckpoint)
+}
+
+// finalSSEDeliveryError describes application transport failure after the
+// framework completed. It carries that execution's identity without rerunning
+// work or changing its stored lifecycle.
+type finalSSEDeliveryError struct {
+	requestID string
+	cause     error
+}
+
+func (e *finalSSEDeliveryError) Error() string {
+	return fmt.Sprintf("deliver final SSE event: %v", e.cause)
+}
+func (e *finalSSEDeliveryError) Unwrap() error { return e.cause }
+
+func (t *DevOpsChatAgent) recordFinalSSEDeliveryFailure(ctx context.Context, err *finalSSEDeliveryError, operation, sessionID string, elapsed time.Duration) {
+	telemetry.SetSpanAttributes(ctx,
+		attribute.String("request_id", err.requestID),
+		attribute.String("operation", operation))
+	telemetry.RecordSpanError(ctx, err)
+	t.Logger.ErrorWithContext(ctx, "Final SSE delivery failed", map[string]interface{}{
+		"operation": operation, "request_id": err.requestID, "session_id": sessionID,
+		"status": "failure", "delivery_status": "failed", "error_type": "callback",
+		"error": err.Error(), "duration_ms": elapsed.Milliseconds(),
+	})
+	telemetry.Counter("chat.requests", "status", "failure", "module", "devops-chat-agent")
+	telemetry.RecordRequest("devops-chat-agent", operation, float64(elapsed.Milliseconds()), "failure")
 }
 
 // SSEHandler handles Server-Sent Events for chat streaming.
@@ -99,6 +127,9 @@ func (c *SSECallback) SendDone(requestID string, toolsUsed []string, totalDurati
 	if result.Usage != nil {
 		data["usage"] = result.Usage
 		data["usage_by_phase"] = result.UsageByPhase
+	}
+	if result.Clarification != nil {
+		data["clarification"] = result.Clarification
 	}
 	c.sendEvent("done", data)
 }
@@ -363,7 +394,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Create callback and process
-	callback := NewSSECallback(w, flusher)
+	callback := NewSSECallbackWithLogger(w, flusher, h.agent.Logger, ctx)
 
 	// Check if orchestrator is available
 	if h.agent.GetOrchestrator() == nil {
@@ -387,15 +418,24 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		durationMs := float64(time.Since(startTime).Milliseconds())
-		h.agent.Logger.ErrorWithContext(ctx, "Stream processing failed", map[string]interface{}{
+		var deliveryErr *finalSSEDeliveryError
+		if errors.As(err, &deliveryErr) {
+			h.agent.recordFinalSSEDeliveryFailure(ctx, deliveryErr, "chat_stream", sessionID, time.Since(startTime))
+			return
+		}
+		fields := map[string]interface{}{
 			"operation":   "chat_stream",
+			"status":      "failure",
 			"session_id":  sessionID,
 			"error":       err.Error(),
 			"duration_ms": int64(durationMs),
-		})
+		}
+		h.agent.Logger.ErrorWithContext(ctx, "Stream processing failed", fields)
 		telemetry.Counter("chat.requests", "status", "failure", "module", "devops-chat-agent")
 		telemetry.RecordRequest("devops-chat-agent", "chat_stream", durationMs, "failure")
-		callback.SendError("processing_failed", err.Error(), true)
+		if callback.Err() == nil {
+			callback.SendError("processing_failed", err.Error(), true)
+		}
 		return
 	}
 

@@ -422,6 +422,13 @@ function getInteractionNoteState(interaction) {
     };
 }
 
+function renderInteractionTrace(interaction) {
+    // A request can include linked background work in a different trace. A
+    // missing interaction trace is unknown, not the record's aggregate trace.
+    const trace = interaction.trace_id ? escapeHtml(interaction.trace_id) : 'Not recorded';
+    return `<div class="token-stats"><div class="token-stat">Interaction trace: <span class="token-stat-value mono">${trace}</span></div></div>`;
+}
+
 function renderLLMInteractionsView(record) {
     let html = `<div class="formatted-view">`;
 
@@ -454,16 +461,19 @@ function renderLLMInteractionsView(record) {
     const isResumed = origReqId !== record.request_id;
     // Check whether this root request has linked records.
     const hasLinkedRecords = countLineageRecords(origReqId) > 1;
+    const lineageAttribute = escapeHtml(origReqId).replaceAll('"', '&quot;');
+    const executionURL = `?${new URLSearchParams({ view: 'dag', request_id: record.request_id })}`;
 
     // Record Info
     html += `<div class="info-section"><div class="info-section-title"><span class="section-icon">📊</span> Record Info</div><div class="info-grid">
-        <div class="info-label">Request ID</div><div class="info-value mono">${record.request_id}</div>
+        <div class="info-label">Request ID</div><div class="info-value mono">${escapeHtml(record.request_id)}</div>
         <div class="info-label">Root request ID</div><div class="info-value mono" style="display: flex; align-items: center; gap: 8px;">
             ${isResumed ? '<span title="This is a resumed HITL request">🔗</span>' : ''}
-            <span style="${hasLinkedRecords ? 'cursor: pointer; text-decoration: underline; text-decoration-style: dotted;' : ''}" ${hasLinkedRecords ? `data-lineage-request-id="${origReqId}" title="Click to filter linked records (${countLineageRecords(origReqId)} total)"` : ''}>${origReqId}</span>
+            <span style="${hasLinkedRecords ? 'cursor: pointer; text-decoration: underline; text-decoration-style: dotted;' : ''}" ${hasLinkedRecords ? `data-lineage-request-id="${lineageAttribute}" title="Click to filter linked records (${countLineageRecords(origReqId)} total)"` : ''}>${escapeHtml(origReqId)}</span>
             ${isResumed ? '<span style="font-size: 11px; color: var(--text-muted);">(HITL resume)</span>' : ''}
         </div>
-        ${record.trace_id ? `<div class="info-label">Trace ID</div><div class="info-value mono">${record.trace_id}</div>` : ''}
+        ${record.trace_id ? `<div class="info-label">Debug record trace</div><div class="info-value"><span class="mono">${escapeHtml(record.trace_id)}</span><div class="text-muted">Record-level reference; individual interactions may use other traces.</div></div>` : ''}
+        <div class="info-label">Execution</div><div class="info-value"><a class="dag-open-timeline-btn" href="${escapeHtml(executionURL)}">Open execution DAG</a></div>
         <div class="info-label">Created</div><div class="info-value">${formatDateTime(record.created_at)}</div>
         <div class="info-label">Interactions</div><div class="info-value">${interactionCount}</div>
         ${interactions.length > 0 ? `<div class="info-label">Input Tokens</div><div class="info-value">${formatTokens(totalPromptTokens)}</div>` : ''}
@@ -532,6 +542,7 @@ function renderLLMInteractionsView(record) {
                     </div>
                 </div>
                 <div class="interaction-body">
+                    ${renderInteractionTrace(interaction)}
                     <div class="prompt-section">
                         <div class="prompt-label">ℹ Summary</div>
                         <div class="prompt-content">${escapeHtml(interaction.response || interaction.call_description || '')}</div>
@@ -563,6 +574,7 @@ function renderLLMInteractionsView(record) {
                 </div>
             </div>
             <div class="interaction-body">
+                ${renderInteractionTrace(interaction)}
                 ${interaction.type === 'result_distillation' && interaction.call_description ? `
                 <div style="margin-bottom: 10px; padding: 8px 12px; background: rgba(130,90,220,0.08); border: 1px solid rgba(130,90,220,0.25); border-radius: 8px; font-size: 11px;">
                     <span style="color: rgba(130,90,220,0.9); font-weight: 600;">🔬 Two-Stage Pipeline:</span>

@@ -784,6 +784,237 @@
     color: var(--accent-purple);
 }
 
+/* Relationship evidence is a compact annotation, independent of lifecycle
+   status colors. Native titles and aria-labels retain the full parent facts. */
+.dag-lineage-row-context {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    max-width: 100%;
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+    font-size: 10px;
+    line-height: 1.45;
+    white-space: nowrap;
+}
+
+.dag-lineage-badge {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 5px;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.035);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.dag-lineage-badge > span { color: inherit; }
+.dag-lineage-root { color: var(--text-secondary); }
+.dag-lineage-level-1 { color: var(--accent-teal); }
+.dag-lineage-level-2 { color: var(--accent-purple); }
+.dag-lineage-level-3 { color: var(--accent-orange); }
+.dag-lineage-level-4 { color: var(--accent-green); }
+.dag-lineage-unknown { color: var(--text-muted); border-style: dashed; }
+
+.dag-lineage-owner {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 46%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 650;
+}
+
+.dag-lineage-parent {
+    display: inline-flex;
+    flex: 1 1 0;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-muted);
+    text-overflow: ellipsis;
+}
+
+.dag-lineage-parent .dag-open-timeline-btn {
+    display: inline-block;
+    min-width: 0;
+    margin: 0;
+    padding: 1px 2px;
+    overflow: hidden;
+    border-color: transparent;
+    border-radius: 3px;
+    color: inherit;
+    font: inherit;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dag-lineage-parent .dag-open-timeline-btn:hover {
+    color: var(--accent-teal);
+    text-decoration: underline;
+}
+
+/* The relationship arrow now lives inside the badge, not a separate column. */
+.dag-timeline-related { grid-template-columns: minmax(0, 1fr) auto; }
+.dag-timeline-related > div { min-width: 0; }
+
+.dag-parent-execution {
+    box-sizing: border-box;
+    height: 100%;
+    padding: 16px;
+    overflow: auto;
+    color: var(--text-secondary);
+}
+
+.dag-parent-execution h2 { margin: 0 0 8px; color: var(--text-primary); font-size: 18px; }
+.dag-parent-execution > p { margin: 0 0 16px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.dag-parent-card {
+    min-width: 0;
+    margin-bottom: 12px;
+    padding: 14px;
+    border: 1px solid var(--glass-border-light);
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.025);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.dag-parent-card h3 { margin: 0 0 7px; color: var(--text-primary); font-size: 13px; overflow-wrap: anywhere; }
+.dag-parent-card p { margin: 7px 0; }
+.dag-parent-identity { margin: 4px 0 8px; font: 11px/1.5 'SF Mono', 'Monaco', monospace; overflow-wrap: anywhere; user-select: text; }
+.dag-parent-field-label { margin-top: 8px; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.dag-parent-request {
+    box-sizing: border-box;
+    max-height: 16rem;
+    margin: 6px 0 10px;
+    padding: 9px 11px;
+    overflow: auto;
+    border-radius: var(--radius-md);
+    background: rgba(0, 0, 0, 0.2);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.dag-parent-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 10px 0 6px; }
+.dag-parent-actions .dag-open-timeline-btn { margin: 0; }
+.dag-parent-family { padding: 10px 0; font-size: 12px; }
+.dag-parent-family > summary { color: var(--text-primary); cursor: pointer; }
+.dag-parent-family pre { max-height: 20rem; max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dag-agent-lineage-info { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--glass-border-light); font-size: 11px; line-height: 1.5; }
+.dag-agent-lineage-info .dag-open-timeline-btn { margin: 6px 4px 0 0; padding: 4px 6px; }
+.dag-agent-lineage-info .dag-parent-identity { margin-bottom: 5px; }
+.dag-parent-family > summary:focus-visible { outline: 2px solid var(--accent-teal); outline-offset: 3px; }
+.dag-family-panel {
+    margin-top: 18px;
+    padding: 0;
+    border: 1px solid var(--glass-border-light);
+    border-radius: var(--radius-lg);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018));
+    backdrop-filter: blur(12px) saturate(160%);
+    -webkit-backdrop-filter: blur(12px) saturate(160%);
+    box-shadow: var(--shadow-panel);
+}
+.dag-family-panel > summary {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 9px;
+    padding: 14px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    list-style: none;
+}
+.dag-family-panel > summary::-webkit-details-marker { display: none; }
+.dag-family-panel > summary::after {
+    content: '';
+    width: 6px;
+    height: 6px;
+    margin-left: auto;
+    border-right: 1.5px solid var(--text-muted);
+    border-bottom: 1.5px solid var(--text-muted);
+    transform: rotate(45deg);
+}
+.dag-family-panel[open] > summary::after { transform: rotate(225deg); }
+.dag-family-count {
+    padding: 1px 7px;
+    border: 1px solid var(--glass-border-light);
+    border-radius: var(--radius-pill);
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 500;
+}
+.dag-family-limited { color: var(--accent-orange); font-size: 10px; font-weight: 500; }
+.dag-family-content { padding: 0 12px 12px; border-top: 1px solid var(--glass-border); }
+.dag-family-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 4px; }
+.dag-family-discovery { display: grid; gap: 3px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.dag-family-updated { color: var(--text-muted); font-size: 10px; }
+.dag-family-warning { color: var(--accent-orange); }
+.dag-family-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 9px;
+    border: 1px solid var(--glass-border-light);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+.dag-family-refresh svg { width: 13px; height: 13px; }
+.dag-family-refresh:hover { border-color: rgba(100, 210, 255, 0.4); color: var(--accent-teal); }
+.dag-family-refresh[aria-disabled="true"] { opacity: 0.5; cursor: wait; }
+.dag-family-refresh:focus-visible { outline: 2px solid var(--accent-teal); outline-offset: 3px; }
+.dag-family-list { list-style: none; margin: 0; padding: 0; }
+.dag-family-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    margin-left: calc(var(--family-depth, 0) * 14px);
+    padding: 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+}
+.dag-family-row + .dag-family-row { margin-top: 3px; }
+.dag-family-current { border-color: rgba(100, 210, 255, 0.18); background: rgba(100, 210, 255, 0.045); }
+.dag-family-identity { flex: 1; min-width: 0; }
+.dag-family-name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; color: var(--text-primary); font-size: 12px; overflow-wrap: anywhere; }
+.dag-family-name > span { max-width: 100%; }
+.dag-family-name .dag-open-timeline-btn { margin: 0; padding: 0; background: none; border: 0; color: var(--text-primary); text-align: left; font-size: inherit; overflow-wrap: anywhere; }
+.dag-family-name .dag-open-timeline-btn:hover { color: var(--accent-teal); }
+.dag-family-name .dag-open-timeline-btn:focus-visible { outline: 2px solid var(--accent-teal); outline-offset: 3px; }
+.dag-family-current-label { color: var(--accent-teal); font-size: 10px; }
+.dag-family-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 3px; color: var(--text-muted); font-size: 10px; overflow-wrap: anywhere; }
+.dag-family-status { flex-shrink: 0; color: var(--text-secondary); font-size: 10px; }
+.dag-family-status.success { color: var(--accent-green); }
+.dag-family-status.error { color: var(--accent-red); }
+.dag-family-status.interrupted, .dag-family-status.running { color: var(--accent-orange); }
+@media (max-width: 600px) {
+    .dag-family-row { margin-left: calc(var(--family-depth, 0) * 6px); gap: 6px; padding: 8px 5px; }
+    .dag-family-row .dag-lineage-badge { min-width: 30px; padding: 2px 4px; }
+    .dag-family-toolbar { align-items: flex-start; }
+}
+@supports not (backdrop-filter: blur(12px)) {
+    .dag-family-panel { background: rgba(20, 20, 30, 0.95); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .dag-family-panel {
+        backdrop-filter: blur(4px) saturate(160%);
+        -webkit-backdrop-filter: blur(4px) saturate(160%);
+    }
+}
+.dag-lineage-parent .dag-open-timeline-btn:focus-visible { outline-offset: -1px; }
+.dag-step-card:focus { outline: 2px solid var(--accent-teal); outline-offset: 3px; }
+
 .dag-timeline-orphans {
     margin: 12px 0 0 34px;
     padding: 12px;
@@ -847,12 +1078,20 @@
     }
 
     .dag-timeline-related {
-        grid-template-columns: 16px minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .dag-timeline-related .dag-view-dag-btn {
-        grid-column: 2;
+        grid-column: 1;
         justify-self: start;
+    }
+
+    .dag-lineage-parent .dag-open-timeline-btn {
+        margin: 0;
+    }
+
+    .dag-parent-actions .dag-open-timeline-btn {
+        margin: 0;
     }
 }
 

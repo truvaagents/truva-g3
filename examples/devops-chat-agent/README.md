@@ -17,6 +17,7 @@ A streaming chat agent that demonstrates AI-powered orchestration of Kubernetes 
 - [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
 - [Shared Agent Memory](#shared-agent-memory)
 - [Session Management](#session-management)
+  - [Clarification and delivery outcomes](#clarification-and-delivery-outcomes)
 - [Telemetry](#telemetry)
 - [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
@@ -428,6 +429,36 @@ List available tools discovered by the orchestrator.
 
 *At least one AI provider key is required.
 
+### Delegation timeouts
+
+The agent keeps execution timeouts resolved by the framework from `.env` and
+framework defaults. The supplied `.env.example` sets:
+
+| Setting | Example value | Meaning |
+| --- | --- | --- |
+| `TRUVAG3_AI_TIMEOUT` | `5m` | AI-provider request timeout resolved by both chain and fallback client constructors |
+| `TRUVAG3_ORCHESTRATION_TIMEOUT` | `20m` | Base outbound HTTP timeout, not an overall task deadline |
+| `TRUVAG3_EXECUTION_STEP_TIMEOUT` | `14m` | Execution allowance added to the HITL allowance for delegated orchestrator calls |
+| `TRUVAG3_HITL_DEFAULT_TIMEOUT` | `5m` | Approval allowance; also contributes to the delegated call deadline |
+| `TRUVAG3_ITERATIVE_PHASE_TIMEOUT` | `21m` | Phase budget covering selection/planning and execution |
+| `TRUVAG3_HTTP_WRITE_TIMEOUT` | `23m` | Server response-write budget |
+
+With these settings, a delegated orchestrator call receives up to **19 minutes**
+(`14m + 5m`). A 21-minute phase leaves two minutes of planning headroom before
+that full call allowance; slower planning leaves less time. Ordinary tools use
+the shared HTTP timeout and enclosing context rather than a separate step
+deadline. Earlier caller deadlines still win, and the server write budget
+is shared across the request's phases and response work. Socket write timeouts
+do not provide durable execution or guarantee that remote effects were undone.
+
+After a timeout-only configuration edit, use `./setup.sh rollout`. A code change
+requires `./setup.sh rebuild`. Check the agent's `Orchestrator initialized
+successfully` startup log (`operation=initialize_orchestrator`) for the resolved
+`outbound_http_timeout`, `step_timeout`, `phase_timeout` and
+`hitl_default_timeout` before retrying long work. Size the child agent's limits
+and any ingress/client deadlines alongside these values; a timeout is not proof
+that the downstream service is unhealthy.
+
 ### Agent Skills
 
 The agent code explicitly binds three reusable packages:
@@ -553,8 +584,10 @@ payloads are preserved.
 
 A second interruption saves the parent as `continued` before announcing its
 successor. Final success requires a successful terminal execution **and**
-successful checkpoint finalization. Synthesis, hooks, and delivery errors
-cannot be reported as completion just because tool steps succeeded.
+successful checkpoint finalization. Synthesis or required-hook failure prevents
+successful execution completion even when earlier tool steps succeeded. A late
+SSE delivery failure after durable finalization is an application transport
+failure; it leaves the checkpoint completed and does not authorize replay.
 
 In this example's own `.env`:
 
@@ -624,6 +657,36 @@ Memory hooks inject relevant prior events into the prompt as `<agent_memory>` so
 ---
 
 ## Session Management
+
+### Clarification and delivery outcomes
+
+When the framework ends this turn with an input request, `/query` JSON and the
+streaming `done` event include optional `clarification` with `question`,
+`missing_fields` and `partial_progress`. Assistant history retains the same
+object in metadata; the DevOps Chat UI shows expandable **Input requested**
+details both live and after a reload. The synthesized answer remains readable
+for text-only callers.
+
+This ends the current invocation. A reply starts a new invocation through the
+normal conversation flow; there is no HITL checkpoint or automatic resume. A
+delegated child's question becomes a root question only if the parent planner
+chooses that outcome within its existing planning and budget rules. Existing
+failed-execution acceptance guards remain; this example does not deliver every
+mixed failed-step/clarification outcome as successful HTTP/SSE completion.
+
+If writing or flushing the final SSE event fails, the handler records an
+application delivery failure with the execution request ID and failure metrics.
+The framework's completed record stays completed, and generated assistant
+history is retained with `delivery_status: "failed"`. Reload labels that content
+as generated with failed live delivery. It is not proof that the original
+browser received the response; the handler does not automatically rerun work.
+
+HITL resume retains its durable terminal boundary: usage, finish and done frames
+are buffered until the resume coordinator finalizes the checkpoint. Delivery
+failure after that point is reported by the HTTP adapter and leaves the
+checkpoint completed, so a second resume cannot repeat the approved work.
+
+### Session storage
 
 Sessions are stored in the versioned sessions subspace of Redis/Valkey DB 0 with the following characteristics:
 

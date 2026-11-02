@@ -562,6 +562,9 @@ func (t *DevOpsChatAgent) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if len(result.Steps) > 0 {
 		response["steps"] = result.Steps
 	}
+	if result.Clarification != nil {
+		response["clarification"] = result.Clarification
+	}
 	if result.Usage != nil {
 		response["usage"] = result.Usage
 		response["usage_by_phase"] = result.UsageByPhase

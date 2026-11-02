@@ -106,8 +106,13 @@ type executionReadCache struct {
 	records       map[string]*StoredExecution
 	missing       map[string]struct{}
 	unreadable    map[string]struct{}
+	failedReads   map[string]struct{}
 	hydrated      int
 	exactHydrated int
+	// projectLoaded is an optional read-side retention policy used only by the
+	// lineage reader after it has preserved the complete summary. Other readers
+	// keep full records; exact-owner loads always keep their newly read records.
+	projectLoaded func(string, *StoredExecution) *StoredExecution
 }
 
 type llmDebugEnrichment struct {
@@ -133,6 +138,8 @@ func summarizeExecution(execution *StoredExecution) ExecutionSummary {
 		RecordRevision:    execution.RecordRevision,
 		RequestID:         execution.RequestID,
 		OriginalRequestID: execution.OriginalRequestID,
+		ParentRequestID:   execution.ParentRequestID,
+		ParentStepID:      execution.ParentStepID,
 		ConversationID:    execution.Metadata[orchestration.MetadataConversationID],
 		TraceID:           execution.TraceID,
 		AgentName:         execution.AgentName,
@@ -180,9 +187,10 @@ func viewerConversationIndexKey(conversationID string) string {
 
 func newExecutionReadCache() *executionReadCache {
 	return &executionReadCache{
-		records:    make(map[string]*StoredExecution),
-		missing:    make(map[string]struct{}),
-		unreadable: make(map[string]struct{}),
+		records:     make(map[string]*StoredExecution),
+		missing:     make(map[string]struct{}),
+		unreadable:  make(map[string]struct{}),
+		failedReads: make(map[string]struct{}),
 	}
 }
 
@@ -192,7 +200,7 @@ func (c *executionReadCache) load(
 	requestIDs []string,
 ) (bool, error) {
 	remaining := viewerExecutionHydrationLimit - c.hydrated
-	loaded, partial, err := c.loadWithBudget(ctx, client, requestIDs, remaining)
+	loaded, partial, err := c.loadWithBudget(ctx, client, requestIDs, remaining, c.projectLoaded)
 	c.hydrated += loaded
 	return partial, err
 }
@@ -203,7 +211,7 @@ func (c *executionReadCache) loadExactOwners(
 	requestIDs []string,
 ) (bool, error) {
 	remaining := viewerExactOwnerHydrationLimit - c.exactHydrated
-	loaded, partial, err := c.loadWithBudget(ctx, client, requestIDs, remaining)
+	loaded, partial, err := c.loadWithBudget(ctx, client, requestIDs, remaining, nil)
 	c.exactHydrated += loaded
 	return partial, err
 }
@@ -213,6 +221,7 @@ func (c *executionReadCache) loadWithBudget(
 	client redis.UniversalClient,
 	requestIDs []string,
 	remaining int,
+	project func(string, *StoredExecution) *StoredExecution,
 ) (int, bool, error) {
 	unknown := make([]string, 0, len(requestIDs))
 	seen := make(map[string]struct{}, len(requestIDs))
@@ -233,6 +242,9 @@ func (c *executionReadCache) loadWithBudget(
 		if _, ok := c.unreadable[requestID]; ok {
 			continue
 		}
+		if _, ok := c.failedReads[requestID]; ok {
+			continue
+		}
 		unknown = append(unknown, requestID)
 	}
 
@@ -249,10 +261,22 @@ func (c *executionReadCache) loadWithBudget(
 
 	commands, err := pipelineExecutionGets(ctx, client, unknown)
 	if err != nil {
-		return 0, truncated, fmt.Errorf("failed to hydrate executions: %w", err)
+		// A failed pipeline may already have dispatched its GETs. Charge the
+		// attempted reads and remember unknown outcomes rather than retrying
+		// them through the other budget in this same lookup.
+		for _, requestID := range unknown {
+			c.failedReads[requestID] = struct{}{}
+		}
+		return len(unknown), truncated, fmt.Errorf("failed to hydrate executions: %w", err)
 	}
 	partial := truncated
 	for i, command := range commands {
+		if err := ctx.Err(); err != nil {
+			for _, requestID := range unknown[i:] {
+				c.failedReads[requestID] = struct{}{}
+			}
+			return len(unknown), true, err
+		}
 		requestID := unknown[i]
 		data, commandErr := command.Bytes()
 		if commandErr == redis.Nil {
@@ -260,13 +284,19 @@ func (c *executionReadCache) loadWithBudget(
 			continue
 		}
 		if commandErr != nil {
-			return i, partial, fmt.Errorf("read execution %d: %w", i, commandErr)
+			for _, requestID := range unknown[i:] {
+				c.failedReads[requestID] = struct{}{}
+			}
+			return len(unknown), partial, fmt.Errorf("read execution %d: %w", i, commandErr)
 		}
 		execution, decodeErr := deserializeExecution(data)
 		if decodeErr != nil {
 			c.unreadable[requestID] = struct{}{}
 			partial = true
 			continue
+		}
+		if project != nil {
+			execution = project(requestID, execution)
 		}
 		c.records[requestID] = execution
 	}
@@ -403,20 +433,59 @@ func unresolvedExecutionOwnerIDs(
 	ownerIDs := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, summary := range summaries {
-		if isTopLevelExecution(summary) {
-			continue
+		for _, ownerID := range []string{summary.OriginalRequestID, summary.ParentRequestID} {
+			if ownerID == "" || ownerID == summary.RequestID {
+				continue
+			}
+			if _, exists := summaries[ownerID]; exists {
+				continue
+			}
+			if _, duplicate := seen[ownerID]; duplicate {
+				continue
+			}
+			seen[ownerID] = struct{}{}
+			ownerIDs = append(ownerIDs, ownerID)
 		}
-		ownerID := summary.OriginalRequestID
-		if _, exists := summaries[ownerID]; exists {
-			continue
-		}
-		if _, duplicate := seen[ownerID]; duplicate {
-			continue
-		}
-		seen[ownerID] = struct{}{}
-		ownerIDs = append(ownerIDs, ownerID)
 	}
+	sort.Strings(ownerIDs)
 	return ownerIDs
+}
+
+// hydrateExecutionAncestors shares the caller's exact-owner allowance across
+// every depth. It reads navigation targets without changing their conversation.
+func hydrateExecutionAncestors(
+	ctx context.Context,
+	client redis.UniversalClient,
+	cache *executionReadCache,
+	summaries map[string]ExecutionSummary,
+) (bool, error) {
+	visited := make(map[string]struct{})
+	partial := false
+	for {
+		if err := ctx.Err(); err != nil {
+			return true, err
+		}
+		var next []string
+		for _, id := range unresolvedExecutionOwnerIDs(summaries) {
+			if _, done := visited[id]; !done {
+				visited[id] = struct{}{}
+				next = append(next, id)
+			}
+		}
+		if len(next) == 0 {
+			return partial, nil
+		}
+		limited, err := cache.loadExactOwners(ctx, client, next)
+		partial = partial || limited
+		if err != nil {
+			return partial, err
+		}
+		for _, id := range next {
+			if execution := cache.records[id]; execution != nil {
+				summaries[id] = summarizeExecution(execution)
+			}
+		}
+	}
 }
 
 func hydrateAndClassifyGroupedExecutionOwners(
@@ -425,15 +494,9 @@ func hydrateAndClassifyGroupedExecutionOwners(
 	cache *executionReadCache,
 	summaries map[string]ExecutionSummary,
 ) (bool, error) {
-	ownerIDs := unresolvedExecutionOwnerIDs(summaries)
-	partial, err := cache.loadExactOwners(ctx, client, ownerIDs)
+	partial, err := hydrateExecutionAncestors(ctx, client, cache, summaries)
 	if err != nil {
 		return partial, err
-	}
-	for _, ownerID := range ownerIDs {
-		if execution := cache.records[ownerID]; execution != nil {
-			summaries[ownerID] = summarizeExecution(execution)
-		}
 	}
 	for requestID, summary := range summaries {
 		if isTopLevelExecution(summary) {
@@ -590,12 +653,17 @@ func loadConversationTimeline(
 		}
 		verified[requestID] = summarizeExecution(execution)
 	}
-	ownerIDs := unresolvedExecutionOwnerIDs(verified)
-	ownerHydrationPartial, err := cache.loadExactOwners(ctx, client, ownerIDs)
+	// Read ancestors through one shared allowance, but retain membership only
+	// from each record's own conversation_id.
+	ancestors := make(map[string]ExecutionSummary, len(verified))
+	for id, summary := range verified {
+		ancestors[id] = summary
+	}
+	ownerHydrationPartial, err := hydrateExecutionAncestors(ctx, client, cache, ancestors)
 	if err != nil {
 		return nil, err
 	}
-	for _, ownerID := range ownerIDs {
+	for ownerID := range ancestors {
 		execution := cache.records[ownerID]
 		if execution == nil ||
 			execution.Metadata[orchestration.MetadataConversationID] != conversationID {

@@ -1934,6 +1934,12 @@ tr.expandable td:nth-child(2)::before {
     align-items: center;
     gap: 10px;
 }
+.dag-llm-card-header { flex-wrap: wrap; gap: 10px; }
+.dag-llm-card-header .dag-step-title { flex: 1 1 300px; min-width: 0; flex-wrap: wrap; gap: 8px; }
+.dag-llm-card-header .dag-step-id { overflow-wrap: anywhere; }
+.dag-llm-card-header .dag-step-title > span { max-width: 100%; overflow-wrap: anywhere; }
+.dag-llm-card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; margin-left: auto; }
+.dag-llm-card-actions .dag-call-trace-link { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .dag-step-number {
     background: rgba(255, 255, 255, 0.1);
     padding: 4px 10px;
@@ -2555,6 +2561,7 @@ tr.expandable td:nth-child(2)::before {
     border-color: rgba(142, 220, 255, 0.8);
     color: #ffffff;
 }
+.dag-viz-meta-item.dag-viz-trace-link:focus-visible { outline: 2px solid var(--accent-teal); outline-offset: 3px; }
 .dag-viz-meta-item.success {
     background: rgba(50, 215, 75, 0.15);
     border-color: rgba(50, 215, 75, 0.4);

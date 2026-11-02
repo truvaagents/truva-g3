@@ -152,6 +152,8 @@ type HITLCheckpoint struct {
 	CheckpointID       string                 `json:"checkpoint_id"`
 	RequestID          string                 `json:"request_id"`
 	OriginalRequestID  string                 `json:"original_request_id,omitempty"`
+	ParentRequestID    string                 `json:"parent_request_id,omitempty"`
+	ParentStepID       string                 `json:"parent_step_id,omitempty"`
 	OriginalTraceID    string                 `json:"original_trace_id,omitempty"`
 	OriginalSpanID     string                 `json:"original_span_id,omitempty"`
 	InterruptPoint     string                 `json:"interrupt_point"`
@@ -185,17 +187,18 @@ type InterruptDecision struct {
 
 // RoutingPlan represents an LLM-generated execution plan
 type RoutingPlan struct {
-	PlanID            string        `json:"plan_id,omitempty"`
-	RequestID         string        `json:"request_id,omitempty"`
-	OriginalRequest   string        `json:"original_request,omitempty"`
-	Mode              string        `json:"mode,omitempty"`
-	Steps             []RoutingStep `json:"steps"`
-	SynthesisStrategy string        `json:"synthesis_strategy,omitempty"`
-	Rationale         string        `json:"rationale,omitempty"`
-	CreatedAt         *time.Time    `json:"created_at,omitempty"`
-	Terminal          *bool         `json:"terminal,omitempty"`
-	ContinuationNote  string        `json:"continuation_note,omitempty"`
-	PhaseNumber       int           `json:"phase_number,omitempty"`
+	PlanID            string                              `json:"plan_id,omitempty"`
+	RequestID         string                              `json:"request_id,omitempty"`
+	OriginalRequest   string                              `json:"original_request,omitempty"`
+	Mode              string                              `json:"mode,omitempty"`
+	Steps             []RoutingStep                       `json:"steps"`
+	SynthesisStrategy string                              `json:"synthesis_strategy,omitempty"`
+	Rationale         string                              `json:"rationale,omitempty"`
+	CreatedAt         *time.Time                          `json:"created_at,omitempty"`
+	Terminal          *bool                               `json:"terminal,omitempty"`
+	ContinuationNote  string                              `json:"continuation_note,omitempty"`
+	PhaseNumber       int                                 `json:"phase_number,omitempty"`
+	NeedsUserInput    *orchestration.ClarificationRequest `json:"needs_user_input,omitempty"`
 }
 
 // RoutingStep represents a single step in an execution plan
@@ -297,6 +300,8 @@ type StoredExecution struct {
 	RecordRevision      uint64                                       `json:"record_revision,omitempty"`
 	RequestID           string                                       `json:"request_id"`
 	OriginalRequestID   string                                       `json:"original_request_id,omitempty"`
+	ParentRequestID     string                                       `json:"parent_request_id,omitempty"`
+	ParentStepID        string                                       `json:"parent_step_id,omitempty"`
 	TraceID             string                                       `json:"trace_id"`
 	AgentName           string                                       `json:"agent_name,omitempty"`
 	OriginalRequest     string                                       `json:"original_request"`
@@ -319,11 +324,12 @@ type StoredExecution struct {
 
 // ExecutionResult represents the outcome of plan execution
 type ExecutionResult struct {
-	PlanID        string                 `json:"plan_id"`
-	Steps         []StepResult           `json:"steps"`
-	Success       bool                   `json:"success"`
-	TotalDuration int64                  `json:"total_duration"` // nanoseconds
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	PlanID              string                              `json:"plan_id"`
+	Steps               []StepResult                        `json:"steps"`
+	Success             bool                                `json:"success"`
+	TotalDuration       int64                               `json:"total_duration"` // nanoseconds
+	Metadata            map[string]interface{}              `json:"metadata,omitempty"`
+	ClarificationNeeded *orchestration.ClarificationRequest `json:"clarification_needed,omitempty"`
 }
 
 // ExecutionSummary is a lightweight version for listing
@@ -332,6 +338,8 @@ type ExecutionSummary struct {
 	RecordRevision      uint64                                       `json:"record_revision,omitempty"`
 	RequestID           string                                       `json:"request_id"`
 	OriginalRequestID   string                                       `json:"original_request_id,omitempty"`
+	ParentRequestID     string                                       `json:"parent_request_id,omitempty"`
+	ParentStepID        string                                       `json:"parent_step_id,omitempty"`
 	ConversationID      string                                       `json:"conversation_id,omitempty"`
 	TraceID             string                                       `json:"trace_id"`
 	AgentName           string                                       `json:"agent_name,omitempty"`
@@ -444,6 +452,8 @@ type UnifiedExecutionView struct {
 	// Core execution data
 	RequestID           string                                `json:"request_id"`
 	OriginalRequestID   string                                `json:"original_request_id,omitempty"`
+	ParentRequestID     string                                `json:"parent_request_id,omitempty"`
+	ParentStepID        string                                `json:"parent_step_id,omitempty"`
 	ConversationID      string                                `json:"conversation_id,omitempty"`
 	TraceID             string                                `json:"trace_id,omitempty"`
 	PipelineHooks       []orchestration.PipelineHookExecution `json:"pipeline_hooks,omitempty"`
@@ -2135,6 +2145,10 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestID := parts[0]
+	if len(parts) == 2 && parts[1] == "lineage" {
+		handleExecutionLineage(w, r, requestID)
+		return
+	}
 	isDAGRequest := len(parts) > 1 && parts[1] == "dag"
 	isUnifiedRequest := len(parts) > 1 && parts[1] == "unified"
 
@@ -2998,6 +3012,8 @@ func buildUnifiedViewWithContext(ctx context.Context, execution *StoredExecution
 		RecordRevision:      execution.RecordRevision,
 		RequestID:           execution.RequestID,
 		OriginalRequestID:   execution.OriginalRequestID,
+		ParentRequestID:     execution.ParentRequestID,
+		ParentStepID:        execution.ParentStepID,
 		ConversationID:      execution.Metadata[orchestration.MetadataConversationID],
 		TraceID:             execution.TraceID,
 		AgentName:           execution.AgentName,
