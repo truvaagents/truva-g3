@@ -144,7 +144,7 @@ func TestLookupModelCapabilities_OpenRouterVerifiedConcreteModel(t *testing.T) {
 }
 
 func TestLookupModelCapabilities_OpenRouterVerifiedJSONModels(t *testing.T) {
-	for _, model := range []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash"} {
+	for _, model := range []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash", "z-ai/glm-5.3"} {
 		caps := LookupModelCapabilities("openai.openrouter", model)
 		if !caps.ExactModel || !caps.SupportsJSONMode || caps.SupportsJSONSchema || caps.ReasoningStyle != "" {
 			t.Fatalf("incorrect capability scope for %s: %+v", model, caps)

@@ -17,8 +17,8 @@ var defaultAliases = map[string]map[string]string{
 		"code": "deepseek-chat", "default": "deepseek-chat",
 	},
 	"openai.openrouter": {
-		"fast": "openai/gpt-6-luna", "smart": "openrouter/auto",
-		"code": "openrouter/pareto-code", "default": "openrouter/auto",
+		"fast": "openai/gpt-6-luna", "smart": "z-ai/glm-5.3",
+		"code": "openrouter/pareto-code", "default": "deepseek/deepseek-v4.1-flash",
 	},
 	"openai.groq": {
 		"fast": "llama-3.1-8b-instant", "smart": "openai/gpt-oss-120b",

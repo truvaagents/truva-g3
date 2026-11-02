@@ -37,10 +37,10 @@ func TestResolveUsesBuiltInAliasesOverridesAndPassThrough(t *testing.T) {
 	if got := modelcatalog.Resolve("openai.together", "code"); got != "moonshotai/Kimi-K3" {
 		t.Fatalf("Together code = %q", got)
 	}
-	if got := modelcatalog.Resolve("openai.openrouter", "default"); got != "openrouter/auto" {
+	if got := modelcatalog.Resolve("openai.openrouter", "default"); got != "deepseek/deepseek-v4.1-flash" {
 		t.Fatalf("OpenRouter default = %q", got)
 	}
-	if got := modelcatalog.Resolve("openai.openrouter", "smart"); got != "openrouter/auto" {
+	if got := modelcatalog.Resolve("openai.openrouter", "smart"); got != "z-ai/glm-5.3" {
 		t.Fatalf("OpenRouter smart = %q", got)
 	}
 	if got := modelcatalog.Resolve("openai.openrouter", "fast"); got != "openai/gpt-6-luna" {
@@ -65,6 +65,29 @@ func TestResolveUsesBuiltInAliasesOverridesAndPassThrough(t *testing.T) {
 	t.Setenv("TRUVAG3_OPENAI_MODEL_SMART", "semantic-override")
 	if got := modelcatalog.Resolve("openai", "smart"); got != "semantic-override" {
 		t.Fatalf("environment override = %q", got)
+	}
+}
+
+func TestOpenRouterAliasesRemainOverridable(t *testing.T) {
+	for _, tc := range []struct {
+		alias, builtin, env string
+	}{
+		{"default", "deepseek/deepseek-v4.1-flash", "TRUVAG3_OPENROUTER_MODEL_DEFAULT"},
+		{"smart", "z-ai/glm-5.3", "TRUVAG3_OPENROUTER_MODEL_SMART"},
+	} {
+		t.Run(tc.alias, func(t *testing.T) {
+			t.Setenv(tc.env, "openrouter/auto")
+			if got := modelcatalog.Resolve("openai.openrouter", tc.alias); got != "openrouter/auto" {
+				t.Fatalf("environment override = %q", got)
+			}
+			if got := modelcatalog.Resolve("openai.openrouter", tc.builtin); got != tc.builtin {
+				t.Fatalf("override changed concrete model = %q", got)
+			}
+			t.Setenv(tc.env, "")
+			if got := modelcatalog.Resolve("openai.openrouter", tc.alias); got != tc.builtin {
+				t.Fatalf("empty override replaced built-in = %q", got)
+			}
+		})
 	}
 }
 

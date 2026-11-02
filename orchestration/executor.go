@@ -606,7 +606,7 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 				// Wait briefly, respecting context cancellation to avoid goroutine leaks.
 				select {
 				case <-ctx.Done():
-					return nil, ctx.Err()
+					return canceledExecutionSnapshot(ctx, result, startTime), ctx.Err()
 				case <-time.After(50 * time.Millisecond):
 				}
 				continue
@@ -972,7 +972,7 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 		// Check for context cancellation
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return canceledExecutionSnapshot(ctx, result, startTime), ctx.Err()
 		default:
 		}
 	}
@@ -1008,6 +1008,72 @@ func (e *SmartExecutor) Execute(ctx context.Context, plan *RoutingPlan) (*Execut
 	}
 
 	return result, nil
+}
+
+// canceledExecutionSnapshot preserves facts already observed at an existing
+// cancellation boundary. Execute calls it only between joined batches, so no
+// executor worker can still append or mutate a step while the snapshot is made.
+// Application-owned opaque metadata values retain their existing ownership;
+// framework-owned mutable containers are copied without re-encoding payloads.
+func canceledExecutionSnapshot(ctx context.Context, observed *ExecutionResult, startedAt time.Time) *ExecutionResult {
+	snapshot := *observed
+	snapshot.Success = false
+	snapshot.TotalDuration = time.Since(startedAt)
+	snapshot.Metadata = cloneInterfaceMap(observed.Metadata)
+	if snapshot.Metadata == nil {
+		snapshot.Metadata = make(map[string]interface{})
+	}
+	if err := ctx.Err(); err != nil {
+		reason := "cancelled"
+		if err == context.DeadlineExceeded {
+			reason = "deadline"
+		}
+		snapshot.Metadata["termination_reason"] = reason
+		snapshot.Metadata["execution_error"] = err.Error()
+		if cause := context.Cause(ctx); cause != nil {
+			snapshot.Metadata["context_cause"] = cause.Error()
+		}
+	}
+	snapshot.Steps = make([]StepResult, len(observed.Steps))
+	for index := range observed.Steps {
+		snapshot.Steps[index] = cloneExecutionStepResult(observed.Steps[index])
+	}
+	return &snapshot
+}
+
+func cloneExecutionStepResult(source StepResult) StepResult {
+	snapshot := source
+	snapshot.Parameters = cloneInterfaceMap(source.Parameters)
+	snapshot.Metadata = cloneInterfaceMap(source.Metadata)
+	// These typed values are produced and owned by the executor, rather than
+	// opaque application extensions. Their mutable containers need the same
+	// isolation as the JSON-shaped maps copied above.
+	if resolution, ok := source.Metadata["resolution"].(*ResolutionMetadata); ok && resolution != nil {
+		copied := *resolution
+		if resolution.Parameters != nil {
+			copied.Parameters = make([]ParameterResolution, len(resolution.Parameters))
+			for index, parameter := range resolution.Parameters {
+				copied.Parameters[index] = parameter
+				copied.Parameters[index].Value = cloneInterfaceValue(parameter.Value)
+			}
+		}
+		if resolution.DependencyStepIDs != nil {
+			copied.DependencyStepIDs = append(make([]string, 0, len(resolution.DependencyStepIDs)), resolution.DependencyStepIDs...)
+		}
+		snapshot.Metadata["resolution"] = &copied
+	}
+	if includes, ok := source.Metadata["template_auto_includes"].([]templateAutoInclude); ok && includes != nil {
+		snapshot.Metadata["template_auto_includes"] = append(make([]templateAutoInclude, 0, len(includes)), includes...)
+	}
+	snapshot.ToolError = append(json.RawMessage(nil), source.ToolError...)
+	if source.Dispatches != nil {
+		snapshot.Dispatches = make([]StepDispatch, len(source.Dispatches))
+		for index, dispatch := range source.Dispatches {
+			snapshot.Dispatches[index] = dispatch
+			snapshot.Dispatches[index].Parameters = cloneInterfaceMap(dispatch.Parameters)
+		}
+	}
+	return snapshot
 }
 
 // skipStepsWithFailedDeps marks any pending step whose dependencies have
@@ -3454,7 +3520,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 					attribute.Int("http_status", httpStatus),
 					attribute.String("reason", analysisResult.Reason),
 					attribute.String("error_message", err.Error()),
-					attribute.String("error_response", truncateString(responseBody, 500)),
+					attribute.String("error_response", truncateTelemetryPreview(responseBody, 500)),
 					attribute.String("suggested_changes", string(suggestedChangesJSON)),
 					attribute.Int("suggested_changes_count", len(analysisResult.SuggestedChanges)),
 				)
@@ -3703,7 +3769,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 				attribute.Int("validation_retry", validationRetries),
 				attribute.String("error_type", "type_mismatch"),
 				attribute.String("error_message", err.Error()),
-				attribute.String("error_response", truncateString(responseBody, 500)),
+				attribute.String("error_response", truncateTelemetryPreview(responseBody, 500)),
 			)
 
 			// Telemetry: Record metric for monitoring dashboards
@@ -3737,7 +3803,7 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 					telemetry.AddSpanEvent(ctx, "validation_feedback_success",
 						attribute.String("step_id", step.StepID),
 						attribute.Int("retries_used", validationRetries),
-						attribute.String("corrected_params", truncateString(string(correctedParamsJSON), 500)),
+						attribute.String("corrected_params", truncateTelemetryPreview(string(correctedParamsJSON), 500)),
 					)
 					telemetry.Counter("orchestration.validation_feedback.success",
 						"capability", capability,
@@ -4471,10 +4537,14 @@ func (e *SmartExecutor) callComponentWithBody(ctx context.Context, url string, b
 	// Propagate orchestration context as explicit framework headers. The traced
 	// HTTP client also propagates W3C baggage; these headers are the
 	// telemetry-independent fallback for framework receivers.
-	if baggage := telemetry.GetBaggage(ctx); baggage != nil {
-		if reqID := baggage["request_id"]; reqID != "" {
-			req.Header.Set("X-TruvaG3-Request-ID", reqID)
-		}
+	bag := telemetry.GetBaggage(ctx)
+	requestID, originalRequestID := bag["request_id"], bag["original_request_id"]
+	if correlation, managed := requestCorrelationFromContext(ctx); managed &&
+		correlation.RequestID != "" && correlation.RequestID == GetRequestID(ctx) {
+		requestID, originalRequestID = correlation.RequestID, correlation.OriginalRequestID
+	}
+	if requestID != "" {
+		req.Header.Set("X-TruvaG3-Request-ID", requestID)
 	}
 	if conversationID := conversationIDForOutboundHeader(ctx); conversationID != "" {
 		req.Header.Set("X-TruvaG3-Conversation-ID", conversationID)
@@ -4504,9 +4574,9 @@ func (e *SmartExecutor) callComponentWithBody(ctx context.Context, url string, b
 		if planID := baggage["plan_id"]; planID != "" {
 			req.Header.Set("X-TruvaG3-Plan-ID", planID)
 		}
-		if origID := baggage["original_request_id"]; origID != "" {
-			req.Header.Set("X-TruvaG3-Original-Request-ID", origID)
-		}
+	}
+	if originalRequestID != "" {
+		req.Header.Set("X-TruvaG3-Original-Request-ID", originalRequestID)
 	}
 	// Propagate investigation owner for nested agent delegation.
 	// When a parent orchestrator delegates to a child orchestrator agent,

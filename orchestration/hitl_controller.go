@@ -843,6 +843,11 @@ func (c *DefaultInterruptController) createCheckpoint(
 		StepResults:       make(map[string]*StepResult),
 		UserContext:       userContext,
 	}
+	if correlation, managed := requestCorrelationFromContext(ctx); managed && correlation.RequestID == requestID {
+		checkpoint.OriginalRequestID = correlation.OriginalRequestID
+		checkpoint.ParentRequestID = correlation.Parent.RequestID
+		checkpoint.ParentStepID = correlation.Parent.StepID
+	}
 	if checkpointEnrichmentRequired(ctx) {
 		checkpoint.Status = CheckpointStatusPreparing
 	}

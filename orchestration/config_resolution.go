@@ -144,7 +144,7 @@ func NewDefaultOrchestratorConfig() *OrchestratorConfig {
 		EnableTieredResolution:         true,
 		TieredResolution: TieredCapabilityConfig{
 			MinToolsForTiering: 20,
-			SelectionMaxTokens: 2000,
+			SelectionMaxTokens: defaultTieredSelectionMaxTokens,
 			RetryEnabled:       true,
 			MaxRetries:         2,
 		},

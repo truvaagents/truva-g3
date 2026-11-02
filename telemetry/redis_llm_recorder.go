@@ -65,7 +65,12 @@ local floor_ttl = redis.call("PTTL", KEYS[3])
 redis.call("RPUSH", KEYS[2], ARGV[1])
 redis.call("HSETNX", KEYS[1], "created_at", ARGV[2])
 redis.call("HSET", KEYS[1], "updated_at", ARGV[2])
-redis.call("HSET", KEYS[1], "trace_id", ARGV[3])
+local function valid_trace_id(value)
+	return value and #value == 32 and value ~= string.rep("0", 32) and not string.find(value, "[^0-9a-f]")
+end
+if valid_trace_id(ARGV[3]) and not valid_trace_id(redis.call("HGET", KEYS[1], "trace_id")) then
+	redis.call("HSET", KEYS[1], "trace_id", ARGV[3])
+end
 redis.call("HSET", KEYS[1], "request_id", ARGV[4])
 redis.call("HSET", KEYS[1], "original_request_id", ARGV[5])
 if ARGV[6] ~= "" then
@@ -301,6 +306,7 @@ func normalizeRecorderConfig(cfg *recorderConfig) {
 // (which uses orchestration.RedisLLMDebugStore.GetRecord) reads it.
 type llmInteractionJSON struct {
 	Type             string               `json:"type"`
+	TraceID          string               `json:"trace_id,omitempty"`
 	SourceComponent  string               `json:"source_component,omitempty"`
 	CallDescription  string               `json:"call_description,omitempty"`
 	StepID           string               `json:"step_id,omitempty"`
@@ -332,8 +338,14 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 	if requestID == "" {
 		return nil // Not called from orchestration — skip silently
 	}
+	// Resolve ownership before adding a current ID merely for recorder logging.
+	// That logging fallback must not authorize an otherwise unowned typed root.
+	originalRequestID := recorderOriginalRequestIDFromContext(ctx, requestID)
 	if core.GetRequestID(ctx) == "" {
 		ctx = core.WithRequestID(ctx, requestID)
+	}
+	if record.TraceID == "" {
+		record.TraceID = GetTraceContext(ctx).TraceID
 	}
 
 	var indexScore int64
@@ -341,6 +353,7 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 		// Convert telemetry.LLMCallRecord → orchestration.LLMInteraction JSON format
 		interaction := llmInteractionJSON{
 			Type:             record.CallType,
+			TraceID:          record.TraceID,
 			SourceComponent:  record.SourceComponent,
 			CallDescription:  record.Description,
 			StepID:           record.StepID,
@@ -369,9 +382,9 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 			return fmt.Errorf("serialization failed: %w", err)
 		}
 
-		// Extract trace context from baggage (matches orchestration store pattern)
-		traceID := GetTraceContext(ctx).TraceID
-		originalRequestID := requestID
+		// Preserve a stable first-valid record trace and this call's own trace.
+		// Linked background work can share a request ID without sharing a trace.
+		traceID := interaction.TraceID
 		conversationID := recorderConversationIDFromContext(ctx)
 		// originatingAgent mirrors the orchestration store's field (see
 		// orchestration/redis_llm_debug_store.go). Sourced from the same
@@ -381,9 +394,6 @@ func (r *RedisLLMCallRecorder) RecordLLMCall(ctx context.Context, requestID stri
 		// See orchestration/ARCHITECTURE.md "LLM Debug Payload Store" — Alternative Writer.
 		originatingAgent := ""
 		if bag := GetBaggage(ctx); bag != nil {
-			if origID := bag["original_request_id"]; origID != "" {
-				originalRequestID = origID
-			}
 			originatingAgent = bag["agent_name"]
 		}
 
@@ -518,6 +528,21 @@ func recorderConversationIDFromContext(ctx context.Context) string {
 		return ""
 	}
 	return conversationID
+}
+
+// Preserve the legacy baggage source, with a validated exact core fallback
+// only when the typed current request owns the record being appended.
+func recorderOriginalRequestIDFromContext(ctx context.Context, requestID string) string {
+	if root := GetBaggage(ctx)["original_request_id"]; root != "" {
+		return root
+	}
+	if ctx != nil && requestID != "" && core.GetRequestID(ctx) == requestID {
+		root := core.GetOriginalRequestID(ctx)
+		if _, err := core.WithIncomingCall(context.Background(), core.IncomingCall{RequestID: root}); err == nil {
+			return root
+		}
+	}
+	return requestID
 }
 
 // Close closes the Redis connection.

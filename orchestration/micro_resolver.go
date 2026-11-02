@@ -403,7 +403,7 @@ Example: {"latitude": 48.85, "longitude": 2.35}`,
 	// Telemetry: Record LLM prompt for micro-resolution
 	microEventAttrs := []attribute.KeyValue{
 		attribute.String("capability", targetCapability.Name),
-		attribute.String("prompt", truncateString(prompt, 1500)),
+		attribute.String("prompt", truncateTelemetryPreview(prompt, 1500)),
 		attribute.Int("prompt_length", len(prompt)),
 		attribute.String("hint", hint),
 	}
@@ -463,7 +463,7 @@ Example: {"latitude": 48.85, "longitude": 2.35}`,
 	// Telemetry: Record LLM response for micro-resolution
 	telemetry.AddSpanEvent(ctx, "llm.micro_resolution.response",
 		attribute.String("capability", targetCapability.Name),
-		attribute.String("response", truncateString(resp.Content, 1000)),
+		attribute.String("response", truncateTelemetryPreview(resp.Content, 1000)),
 		attribute.Int("response_length", len(resp.Content)),
 		attribute.Int64("duration_ms", llmDuration.Milliseconds()),
 	)
@@ -685,7 +685,7 @@ Respond with valid JSON only. Output raw JSON — no markdown, no code blocks. S
 	// Telemetry: Record schema mapping response
 	telemetry.AddSpanEvent(ctx, "llm.schema_mapping.response",
 		attribute.String("capability", targetCapability.Name),
-		attribute.String("response", truncateString(resp.Content, 1000)),
+		attribute.String("response", truncateTelemetryPreview(resp.Content, 1000)),
 		attribute.Int64("duration_ms", llmDuration.Milliseconds()),
 	)
 	m.recordDebugInteraction(ctx, requestID, withEffectiveAIRequest(LLMInteraction{

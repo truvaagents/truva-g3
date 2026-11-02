@@ -7,6 +7,73 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+func TestOpenRouterDefaultAndSmartAliasesPreserveWireContract(t *testing.T) {
+	for _, tc := range []struct {
+		alias, model, env string
+	}{
+		{"default", "deepseek/deepseek-v4.1-flash", "TRUVAG3_OPENROUTER_MODEL_DEFAULT"},
+		{"smart", "z-ai/glm-5.3", "TRUVAG3_OPENROUTER_MODEL_SMART"},
+	} {
+		t.Run(tc.alias, func(t *testing.T) {
+			t.Setenv(tc.env, "")
+			client := NewClient("synthetic", "", openRouterProviderAlias, &core.NoOpLogger{})
+			client.DefaultModel = tc.alias
+			for _, stream := range []bool{false, true} {
+				request := core.NewAIRequestFromLegacy("Return JSON", "alias-contract", &core.AIOptions{
+					MaxTokens: 512, Temperature: 0.1,
+				})
+				request.Generation.ResponseFormat = core.SetAIParameter("json")
+				alias, err := client.prepareInvocation(t.Context(), request, stream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				report := alias.Request.Report
+				if report.RequestedModel != tc.alias || report.ResolvedModel != tc.model || !report.Stable {
+					t.Fatalf("incorrect alias report: %#v", report)
+				}
+				body := decodePreparedOpenRouterBody(t, alias.Request.Body)
+				provider := requireOpenRouterProviderObject(t, body)
+				if body["model"] != tc.model || body["max_completion_tokens"] != float64(512) ||
+					body["temperature"] != 0.1 || body["reasoning"] != nil ||
+					provider["zdr"] != true || provider["data_collection"] != "deny" || provider["require_parameters"] != true {
+					t.Fatalf("model/budget/sampling/privacy contract changed: %#v", body)
+				}
+				request.Generation.Model = tc.model
+				concrete, err := client.prepareInvocation(t.Context(), request, stream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(alias.Request.Body, concrete.Request.Body) || len(report.Fingerprint) != 64 ||
+					!concrete.Request.Report.Stable || concrete.Request.Report.ResolvedModel != tc.model {
+					t.Fatal("alias and concrete preparation differ")
+				}
+			}
+			request := core.NewAIRequest("hello", "alias-override")
+			before, err := client.prepareInvocation(t.Context(), request, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(tc.env, "openrouter/auto")
+			after, err := client.prepareInvocation(t.Context(), request, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.Request.Report.ResolvedModel != "openrouter/auto" || after.Request.Report.Stable ||
+				before.Request.Report.Fingerprint == after.Request.Report.Fingerprint {
+				t.Fatal("router override or cache boundary lost")
+			}
+			request.Generation.Model = tc.model
+			concrete, err := client.prepareInvocation(t.Context(), request, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if concrete.Request.Report.ResolvedModel != tc.model || !concrete.Request.Report.Stable {
+				t.Fatal("environment override changed concrete model")
+			}
+		})
+	}
+}
+
 func TestFastAliasesUseLunaContractAndPreserveOverrides(t *testing.T) {
 	for _, tc := range []struct {
 		provider, model, previous, env string

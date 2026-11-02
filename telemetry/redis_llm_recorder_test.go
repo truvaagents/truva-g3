@@ -15,9 +15,21 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/truvaagents/truva-g3/core"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var recorderTestKeys = NewRedisLLMDebugKeys(telemetryDefaultRedisKeyspace())
+
+func recorderTraceContext(t *testing.T, traceID string) context.Context {
+	t.Helper()
+	id, err := trace.TraceIDFromHex(traceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: id, SpanID: trace.SpanID{1}, TraceFlags: trace.FlagsSampled,
+	}))
+}
 
 type recorderIndexFailureHook struct {
 	mu       sync.Mutex
@@ -839,6 +851,160 @@ func TestRecordLLMCall_PreservesCompletionFactsAtPersistence(t *testing.T) {
 		if stored.Response != record.Response || stored.ReasoningContent != record.ReasoningContent || stored.FinishReason != record.FinishReason || stored.ContentSource != record.ContentSource {
 			t.Fatalf("real writer dropped completion facts: got=%+v want=%+v", stored, record)
 		}
+	}
+}
+
+func TestRecordLLMCall_TraceBackfillAndPerCallProvenance(t *testing.T) {
+	mr, recorder := setupRedisLLMRecorderTest(t)
+	const first = "11111111111111111111111111111111"
+	const background = "22222222222222222222222222222222"
+	const explicit = "33333333333333333333333333333333"
+	const payload = "exact *bytes* 界\n{\"note\":\"a<b\"}"
+	const requestID = "request-trace-provenance"
+	steps := []struct {
+		ctx     context.Context
+		traceID string
+		want    string
+	}{
+		{context.Background(), "", ""},
+		{recorderTraceContext(t, first), "", first},
+		{recorderTraceContext(t, background), "", background},
+		{recorderTraceContext(t, first), explicit, explicit},
+		{recorderTraceContext(t, first), "invalid supplied trace", "invalid supplied trace"},
+	}
+	for index, step := range steps {
+		record := LLMCallRecord{CallType: "agent_llm_call", TraceID: step.traceID,
+			Prompt: payload, Response: payload, ReasoningContent: payload, Success: index != 0}
+		if err := recorder.RecordLLMCall(step.ctx, requestID, record); err != nil {
+			t.Fatal(err)
+		}
+		if record.TraceID != step.traceID {
+			t.Fatal("recording mutated the caller's record")
+		}
+		wantAggregate := ""
+		if index > 0 {
+			wantAggregate = first
+		}
+		if got := mr.HGet(recorder.keys.Meta(requestID), "trace_id"); got != wantAggregate {
+			t.Fatalf("write %d aggregate trace = %q, want %q", index, got, wantAggregate)
+		}
+	}
+	values, err := recorder.client.LRange(context.Background(), recorder.keys.Interactions(requestID), 0, -1).Result()
+	if err != nil || len(values) != len(steps) {
+		t.Fatalf("interactions = %d, error = %v", len(values), err)
+	}
+	for index, value := range values {
+		var stored llmInteractionJSON
+		if err := json.Unmarshal([]byte(value), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored.TraceID != steps[index].want || stored.Prompt != payload || stored.Response != payload || stored.ReasoningContent != payload {
+			t.Fatalf("write %d changed call provenance or payload: %+v", index, stored)
+		}
+		if index == 0 && strings.Contains(value, `"trace_id"`) {
+			t.Fatal("unknown call trace should be omitted, not a zero or empty trace")
+		}
+	}
+	for _, key := range []string{recorder.keys.Meta(requestID), recorder.keys.Interactions(requestID)} {
+		if got := mr.TTL(key); got != recorderErrorTTL {
+			t.Fatalf("trace writes changed retention: %s TTL %v", key, got)
+		}
+	}
+}
+
+func TestRecordLLMCall_OriginalRootContextOwnership(t *testing.T) {
+	mr, recorder := setupRedisLLMRecorderTest(t)
+	for index, test := range []struct {
+		name, owner, typedRoot, baggageRoot, wantRoot string
+	}{
+		{name: "owned typed fallback", owner: "record", typedRoot: "typed-root", wantRoot: "typed-root"},
+		{name: "legacy baggage precedence", owner: "record", typedRoot: "typed-root", baggageRoot: "legacy-root", wantRoot: "legacy-root"},
+		{name: "legacy baggage without typed owner", baggageRoot: "legacy-root", wantRoot: "legacy-root"},
+		{name: "unrelated typed owner", owner: "other-request", typedRoot: "typed-root", wantRoot: "record"},
+		{name: "missing typed owner", typedRoot: "typed-root", wantRoot: "record"},
+		{name: "empty typed root", owner: "record", wantRoot: "record"},
+		{name: "invalid typed root", owner: "record", typedRoot: "invalid root", wantRoot: "record"},
+		{name: "too long typed root", owner: "record", typedRoot: strings.Repeat("x", core.MaxIncomingCallIDLength+1), wantRoot: "record"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requestID := fmt.Sprintf("root-owner-%d", index)
+			owner := test.owner
+			if owner == "record" {
+				owner = requestID
+			}
+			ctx := core.WithOriginalRequestID(core.WithRequestID(context.Background(), owner), test.typedRoot)
+			if test.baggageRoot != "" {
+				ctx = WithBaggage(ctx, "original_request_id", test.baggageRoot)
+			}
+			if err := recorder.RecordLLMCall(ctx, requestID, LLMCallRecord{Success: true}); err != nil {
+				t.Fatal(err)
+			}
+			wantRoot := test.wantRoot
+			if wantRoot == "record" {
+				wantRoot = requestID
+			}
+			if got := mr.HGet(recorder.keys.Meta(requestID), "original_request_id"); got != wantRoot {
+				t.Fatalf("aggregate root = %q, want %q", got, wantRoot)
+			}
+		})
+	}
+	if got := recorderOriginalRequestIDFromContext(nil, "record"); got != "record" {
+		t.Fatalf("nil context root = %q", got)
+	}
+	ctx := core.WithOriginalRequestID(context.Background(), "unowned-root")
+	if got := recorderOriginalRequestIDFromContext(ctx, ""); got != "" {
+		t.Fatalf("empty request claimed typed root %q", got)
+	}
+}
+
+func TestRecordLLMCall_TraceAggregateRejectsInvalidPins(t *testing.T) {
+	const valid = "abcdef0123456789abcdef0123456789"
+	t.Run("explicit-valid-candidate-over-context", func(t *testing.T) {
+		mr, recorder := setupRedisLLMRecorderTest(t)
+		const requestID = "request-explicit-valid-trace"
+		ctx := recorderTraceContext(t, "11111111111111111111111111111111")
+		if err := recorder.RecordLLMCall(ctx, requestID, LLMCallRecord{TraceID: valid, Success: true}); err != nil {
+			t.Fatal(err)
+		}
+		if got := mr.HGet(recorder.keys.Meta(requestID), "trace_id"); got != valid {
+			t.Fatalf("explicit valid trace did not seed aggregate: %q", got)
+		}
+	})
+	for _, seed := range []string{"", strings.Repeat("0", 32), "bad-trace", strings.Repeat("a", 31), strings.ToUpper(valid), valid} {
+		t.Run("stored-"+seed, func(t *testing.T) {
+			mr, recorder := setupRedisLLMRecorderTest(t)
+			const requestID = "request-seeded-trace"
+			if err := recorder.RecordLLMCall(context.Background(), requestID, LLMCallRecord{Success: true}); err != nil {
+				t.Fatal(err)
+			}
+			mr.HSet(recorder.keys.Meta(requestID), "trace_id", seed)
+			if err := recorder.RecordLLMCall(recorderTraceContext(t, valid), requestID, LLMCallRecord{Success: true}); err != nil {
+				t.Fatal(err)
+			}
+			if got := mr.HGet(recorder.keys.Meta(requestID), "trace_id"); got != valid {
+				t.Fatalf("aggregate after seed %q = %q, want %q", seed, got, valid)
+			}
+		})
+	}
+	for _, candidate := range []string{strings.Repeat("0", 32), "invalid explicit trace", strings.ToUpper(valid), strings.Repeat("a", 31)} {
+		t.Run("candidate-"+candidate, func(t *testing.T) {
+			mr, recorder := setupRedisLLMRecorderTest(t)
+			const requestID = "request-invalid-trace-candidate"
+			if err := recorder.RecordLLMCall(recorderTraceContext(t, valid), requestID, LLMCallRecord{TraceID: candidate, Success: true}); err != nil {
+				t.Fatal(err)
+			}
+			if got := mr.HGet(recorder.keys.Meta(requestID), "trace_id"); got != "" {
+				t.Fatalf("invalid explicit trace seeded aggregate: %q", got)
+			}
+			values, err := recorder.client.LRange(context.Background(), recorder.keys.Interactions(requestID), 0, -1).Result()
+			if err != nil || len(values) != 1 {
+				t.Fatalf("interactions = %v, error = %v", values, err)
+			}
+			var stored llmInteractionJSON
+			if err := json.Unmarshal([]byte(values[0]), &stored); err != nil || stored.TraceID != candidate {
+				t.Fatalf("explicit call trace not preserved: %q, %v", stored.TraceID, err)
+			}
+		})
 	}
 }
 

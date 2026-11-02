@@ -97,6 +97,7 @@ func TestLLMCallRecorderAdapter_RecordLLMCall(t *testing.T) {
 		now := time.Now()
 		record := telemetry.LLMCallRecord{
 			CallType:         "agent_llm_call",
+			TraceID:          "explicit caller trace preserved verbatim",
 			SourceComponent:  "research-assistant",
 			Description:      "Tool selection",
 			StepID:           "step-1",
@@ -129,6 +130,9 @@ func TestLLMCallRecorderAdapter_RecordLLMCall(t *testing.T) {
 		}
 
 		i := store.interactions[0]
+		if i.TraceID != record.TraceID {
+			t.Errorf("TraceID: got %q, want exact caller trace %q", i.TraceID, record.TraceID)
+		}
 		if i.Type != "agent_llm_call" {
 			t.Errorf("Type: expected 'agent_llm_call', got %q", i.Type)
 		}

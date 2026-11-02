@@ -37,7 +37,12 @@ local floor_ttl = redis.call("PTTL", KEYS[3])
 redis.call("RPUSH", KEYS[2], ARGV[1])
 redis.call("HSETNX", KEYS[1], "created_at", ARGV[2])
 redis.call("HSET", KEYS[1], "updated_at", ARGV[2])
-redis.call("HSET", KEYS[1], "trace_id", ARGV[3])
+local function valid_trace_id(value)
+	return value and #value == 32 and value ~= string.rep("0", 32) and not string.find(value, "[^0-9a-f]")
+end
+if valid_trace_id(ARGV[3]) and not valid_trace_id(redis.call("HGET", KEYS[1], "trace_id")) then
+	redis.call("HSET", KEYS[1], "trace_id", ARGV[3])
+end
 redis.call("HSET", KEYS[1], "request_id", ARGV[4])
 redis.call("HSET", KEYS[1], "original_request_id", ARGV[5])
 if ARGV[6] ~= "" then
@@ -284,6 +289,9 @@ func newRedisLLMDebugStore(client redis.UniversalClient, ownsClient bool, cfg *r
 // It is safe for concurrent writes from multiple processes (orchestrator + agents).
 // Uses Layer 2 circuit breaker if injected, otherwise falls back to Layer 1 simple retry.
 func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID string, interaction LLMInteraction) error {
+	if interaction.TraceID == "" {
+		interaction.TraceID = telemetry.GetTraceContext(ctx).TraceID
+	}
 	var indexScore int64
 	operation := func() error {
 		// Serialize the single interaction as JSON
@@ -292,9 +300,9 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 			return fmt.Errorf("serialization failed: %w", err)
 		}
 
-		// Extract trace context from baggage
-		traceID := telemetry.GetTraceContext(ctx).TraceID
-		originalRequestID := requestID
+		// An interaction may be in a linked background trace of the same request.
+		traceID := interaction.TraceID
+		originalRequestID := llmDebugOriginalRequestIDFromContext(ctx, requestID)
 		conversationID := llmDebugConversationIDFromContext(ctx)
 		// originatingAgent is the agent whose orchestrator (or background job) initiated
 		// this request. The orchestrator stamps this into baggage as "agent_name" from
@@ -304,9 +312,6 @@ func (s *RedisLLMDebugStore) RecordInteraction(ctx context.Context, requestID st
 		// table a stable, semantically correct Source column.
 		originatingAgent := ""
 		if bag := telemetry.GetBaggage(ctx); bag != nil {
-			if origID := bag["original_request_id"]; origID != "" {
-				originalRequestID = origID
-			}
 			originatingAgent = bag["agent_name"]
 		}
 

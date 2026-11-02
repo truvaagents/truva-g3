@@ -76,7 +76,7 @@ agents into a single coherent answer for the user.
 const clarificationModeAddendum = `
 
 <clarification_mode>
-The execution paused because the planner needs information from the user to continue.
+The current turn ended because additional input is needed.
 Produce a conversational response that:
 1. Summarizes any partial progress from <agent_responses> in one or two sentences.
 2. Asks the user the question from <clarification_needed> naturally, woven into the same reply.
@@ -161,7 +161,7 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 		// Span event — Pattern 6: request_id as FIRST attribute
 		telemetry.AddSpanEvent(ctx, "orchestrator.synthesis.clarification_mode",
 			attribute.String("request_id", requestID),
-			attribute.String("question", truncateString(results.ClarificationNeeded.Question, 200)),
+			attribute.String("question", truncateTelemetryPreview(results.ClarificationNeeded.Question, 200)),
 			attribute.Int("missing_field_count", len(results.ClarificationNeeded.MissingFields)),
 			attribute.Bool("has_partial_progress", results.ClarificationNeeded.PartialProgress != ""),
 		)
@@ -209,8 +209,8 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 
 	synthesisEventAttrs := []attribute.KeyValue{
 		attribute.String("request_id", requestID),
-		attribute.String("original_request", truncateString(request, 500)),
-		attribute.String("prompt", truncateString(prompt, 2000)),
+		attribute.String("original_request", truncateTelemetryPreview(request, 500)),
+		attribute.String("prompt", truncateTelemetryPreview(prompt, 2000)),
 		attribute.Int("prompt_length", len(prompt)),
 		attribute.Int("step_count", len(results.Steps)),
 		attribute.Float64("temperature", float64(synthesisOpts.Temperature)),
@@ -269,7 +269,7 @@ func (s *AISynthesizer) synthesizeWithLLM(ctx context.Context, request string, r
 
 	// Telemetry: Record LLM response for synthesis
 	telemetry.AddSpanEvent(ctx, "llm.synthesis.response",
-		attribute.String("response", truncateString(aiResponse.Content, 2000)),
+		attribute.String("response", truncateTelemetryPreview(aiResponse.Content, 2000)),
 		attribute.Int("response_length", len(aiResponse.Content)),
 		attribute.Int("prompt_tokens", aiResponse.Usage.PromptTokens),
 		attribute.Int("completion_tokens", aiResponse.Usage.CompletionTokens),
@@ -559,18 +559,11 @@ func (s *AISynthesizer) buildPreparedSynthesisPrompt(
 	// emitted needs_user_input and the phase loop short-circuited. The
 	// synthesisSystemPromptFor() helper has already added <clarification_mode>
 	// to the system prompt, so this section just supplies the structured data.
-	if results.ClarificationNeeded != nil {
-		cr := results.ClarificationNeeded
-		builder.WriteString("<clarification_needed>\n")
-		fmt.Fprintf(&builder, "Question to ask the user: %s\n", cr.Question)
-		if len(cr.MissingFields) > 0 {
-			fmt.Fprintf(&builder, "Missing fields: %s\n", strings.Join(cr.MissingFields, ", "))
-		}
-		if cr.PartialProgress != "" {
-			fmt.Fprintf(&builder, "Partial progress to mention: %s\n", cr.PartialProgress)
-		}
-		builder.WriteString("</clarification_needed>\n\n")
+	clarificationSection, err := renderClarificationPromptSection(results.ClarificationNeeded)
+	if err != nil {
+		return "", err
 	}
+	builder.WriteString(clarificationSection)
 
 	builder.WriteString("Synthesize the above into a helpful answer.")
 

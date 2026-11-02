@@ -2,7 +2,9 @@ package orchestration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -141,6 +143,20 @@ func prepareKnownPromptEnrichments(
 		}
 	}
 	return prepared, nil
+}
+
+// renderClarificationPromptSection encodes the derived synthesis context once,
+// preserving the typed clarification while keeping its text inside this section.
+// Default JSON HTML escaping prevents literal framework tags in authored data.
+func renderClarificationPromptSection(clarification *ClarificationRequest) (string, error) {
+	if clarification == nil {
+		return "", nil
+	}
+	encoded, err := json.Marshal(clarification)
+	if err != nil {
+		return "", fmt.Errorf("encode clarification prompt: %w", err)
+	}
+	return "<clarification_needed>\n" + string(encoded) + "\n</clarification_needed>\n\n", nil
 }
 
 func prepareSynthesisStepValues(

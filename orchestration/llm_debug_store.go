@@ -71,7 +71,10 @@ type LLMDebugRecord struct {
 	// This enables finding all LLM calls in a HITL conversation.
 	OriginalRequestID string `json:"original_request_id,omitempty"`
 
-	// TraceID links to distributed tracing backends (e.g., via OTLP)
+	// TraceID is the first valid trace observed by a built-in store, not a promise
+	// that every interaction belongs to it. The execution record owns its main
+	// trace; individual interactions retain their own TraceID. Legacy stores may
+	// have retained the last writer's trace instead.
 	TraceID string `json:"trace_id"`
 
 	// CreatedAt is when the first interaction was recorded
@@ -122,6 +125,21 @@ func llmDebugConversationIDFromContext(ctx context.Context) string {
 	return conversationID
 }
 
+// Keep legacy baggage precedence. A managed execution also carries its exact
+// root in core context when bounded baggage cannot fit it; only use that value
+// for the request that owns the context, never for another record's append.
+func llmDebugOriginalRequestIDFromContext(ctx context.Context, requestID string) string {
+	if root := telemetry.GetBaggage(ctx)["original_request_id"]; root != "" {
+		return root
+	}
+	if ctx != nil && requestID != "" && core.GetRequestID(ctx) == requestID {
+		if root := core.GetOriginalRequestID(ctx); validExecutionCorrelationID(root) {
+			return root
+		}
+	}
+	return requestID
+}
+
 // Hook execution phases used in LLMInteraction.HookPhase.
 // Empty HookPhase means the interaction is an orchestration-level LLM call
 // (plan generation, synthesis, tiered selection, etc.) — not part of a
@@ -145,6 +163,10 @@ const (
 // LLMInteraction captures a single LLM call (request + response).
 // This includes the complete prompt and response without truncation.
 type LLMInteraction struct {
+	// TraceID identifies this interaction's trace. Built-in stores fill an
+	// omitted value from context; absence on older records remains unknown.
+	TraceID string `json:"trace_id,omitempty"`
+
 	// Type identifies the interaction purpose.
 	// Orchestration: "plan_generation", "continuation_plan_generation", "continuation_plan_regeneration", "synthesis", "synthesis_streaming", "correction"
 	// Resolution: "micro_resolution", "schema_mapping", "semantic_retry"

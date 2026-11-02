@@ -13,6 +13,8 @@ type CheckpointResponse struct {
 	CheckpointID          string                 `json:"checkpoint_id"`
 	RequestID             string                 `json:"request_id"`
 	OriginalRequestID     string                 `json:"original_request_id,omitempty"`
+	ParentRequestID       string                 `json:"parent_request_id,omitempty"`
+	ParentStepID          string                 `json:"parent_step_id,omitempty"`
 	OriginalTraceID       string                 `json:"original_trace_id,omitempty"`
 	OriginalSpanID        string                 `json:"original_span_id,omitempty"`
 	AgentName             string                 `json:"agent_name,omitempty"`
@@ -50,6 +52,7 @@ func CheckpointResponseFrom(cp *ExecutionCheckpoint) *CheckpointResponse {
 	response := &CheckpointResponse{
 		CheckpointID: cp.CheckpointID, RequestID: cp.RequestID,
 		OriginalRequestID: cp.OriginalRequestID, OriginalTraceID: cp.OriginalTraceID, OriginalSpanID: cp.OriginalSpanID,
+		ParentRequestID: cp.ParentRequestID, ParentStepID: cp.ParentStepID,
 		AgentName: cp.AgentName, AgentAddress: cp.AgentAddress,
 		InterruptPoint: cp.InterruptPoint, Decision: cp.Decision, Plan: cp.Plan,
 		CompletedSteps: cp.CompletedSteps, CurrentStep: cp.CurrentStep, CurrentStepResult: cp.CurrentStepResult, StepResults: cp.StepResults,

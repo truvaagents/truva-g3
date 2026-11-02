@@ -632,7 +632,7 @@ func (t *BaseTool) Start(ctx context.Context, port int) error {
 	}
 
 	// Create handler with middleware stack
-	// Order (innermost to outermost): Handler -> Recovery -> Logging -> CORS -> Custom Middleware
+	// Order (innermost to outermost): Handler -> Recovery -> Logging -> Incoming Call -> CORS -> Custom Middleware
 	var handler http.Handler = t.mux
 
 	// Always wrap with panic recovery middleware (innermost - catches panics from handler)
@@ -640,6 +640,7 @@ func (t *BaseTool) Start(ctx context.Context, port int) error {
 
 	// Add request/response logging middleware
 	handler = LoggingMiddleware(t.Logger, t.Config.Development.Enabled)(handler)
+	handler = IncomingCallMiddleware(t.Logger)(handler)
 
 	// Add CORS middleware if enabled
 	if t.Config.HTTP.CORS.Enabled {

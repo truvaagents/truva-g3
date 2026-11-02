@@ -43,11 +43,12 @@ func TestResolveModel(t *testing.T) {
 		{"together code", "openai.together", "code", "moonshotai/Kimi-K3"},
 		{"together default", "openai.together", "default", "deepseek-ai/DeepSeek-V4-Flash-0731"},
 
-		// OpenRouter - router-backed semantic defaults and concrete pass-through
-		{"openrouter default", "openai.openrouter", "default", "openrouter/auto"},
-		{"openrouter smart", "openai.openrouter", "smart", "openrouter/auto"},
+		// OpenRouter - concrete default/smart aliases and router pass-through
+		{"openrouter default", "openai.openrouter", "default", "deepseek/deepseek-v4.1-flash"},
+		{"openrouter smart", "openai.openrouter", "smart", "z-ai/glm-5.3"},
 		{"openrouter fast", "openai.openrouter", "fast", "openai/gpt-6-luna"},
 		{"openrouter code", "openai.openrouter", "code", "openrouter/pareto-code"},
+		{"openrouter auto pass-through", "openai.openrouter", "openrouter/auto", "openrouter/auto"},
 		{"openrouter concrete pass-through", "openai.openrouter", "openai/gpt-5.6-sol", "openai/gpt-5.6-sol"},
 		{"openrouter free variant pass-through", "openai.openrouter", "liquid/lfm-2.5-2.6b:free", "liquid/lfm-2.5-2.6b:free"},
 

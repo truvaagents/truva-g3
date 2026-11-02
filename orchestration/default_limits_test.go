@@ -14,6 +14,7 @@ import (
 func TestGenerousDefaultsAcrossConstructionPaths(t *testing.T) {
 	cfg := NewDefaultOrchestratorConfig()
 	require.Equal(t, 20000, cfg.PlanMaxTokens)
+	require.Equal(t, 20000, cfg.TieredResolution.SelectionMaxTokens)
 	require.Equal(t, 30000, cfg.SynthesisMaxTokens)
 	require.Equal(t, 20, cfg.IterativePlanning.MaxPhases)
 	require.Equal(t, 25*time.Minute, cfg.IterativePlanning.PhaseTimeout)

@@ -48,6 +48,7 @@ type requestCorrelation struct {
 	RequestID         string
 	OriginalRequestID string
 	ConversationID    string
+	Parent            executionParent
 }
 
 type phaseRunState struct {
@@ -373,8 +374,11 @@ func (s *executionRunState) skillState() (SkillExecutionState, bool) {
 }
 
 func (s *executionRunState) Snapshot() executionRunSnapshot {
-	if s == nil || s.Phase.Result == nil || s.Phase.Result.CombinedResult == nil {
+	if s == nil {
 		return executionRunSnapshot{}
+	}
+	if s.Phase.Result == nil || s.Phase.Result.CombinedResult == nil {
+		return executionRunSnapshot{Correlation: s.Correlation}
 	}
 	results := make(map[string]*StepResult, len(s.Phase.Result.CombinedResult.Steps))
 	ids := make([]string, 0, len(s.Phase.Result.CombinedResult.Steps))
@@ -384,7 +388,9 @@ func (s *executionRunState) Snapshot() executionRunSnapshot {
 		results[step.StepID] = &stepCopy
 		ids = append(ids, step.StepID)
 	}
-	return newExecutionRunSnapshot(s.Phase.Result.CombinedResult.PhaseCount, results, ids, "")
+	snapshot := newExecutionRunSnapshot(s.Phase.Result.CombinedResult.PhaseCount, results, ids, "")
+	snapshot.Correlation = s.Correlation
+	return snapshot
 }
 
 // supportsNativeStreaming preserves dynamic capability checks exposed by
@@ -725,7 +731,8 @@ func (o *AIOrchestrator) finishRequestExecution(state *executionRunState, result
 	if !state.postExecutionStarted && (state.completionReason == "execution_failed" || state.completionReason == "interrupted") {
 		if holder, ok := pipelineHookExecutionHolderFromContext(state.Context); ok && holder.HasTerminalPublisher() {
 			// The phase boundary already published its failed/interrupted result.
-			// Preserve that publisher and its admitted-work evidence.
+			// Return that same observed duration with its admitted-work evidence.
+			terminal.TotalDuration = base.TotalDuration
 			return result
 		}
 	}
@@ -818,7 +825,7 @@ func (o *AIOrchestrator) beginRequestRun(ctx context.Context, input requestRunIn
 	startedAt := time.Now()
 	requestID := o.newRequestID()
 	reportResumeRequestID(ctx, requestID)
-	ctx = telemetry.WithBaggage(ctx, "request_id", requestID)
+	ctx, correlation := o.beginExecutionCorrelation(ctx, requestID)
 
 	if _, resumed := IsResumeMode(ctx); resumed {
 		// BuildResumeContext restores checkpoint metadata into context. Hooks
@@ -827,14 +834,12 @@ func (o *AIOrchestrator) beginRequestRun(ctx context.Context, input requestRunIn
 		input.Metadata = mergeMetadata(cloneMetadata(GetMetadata(ctx)), input.Metadata)
 	}
 	ctx, conversationID, metadata := o.resolveConversationContext(ctx, input.Metadata)
+	correlation.ConversationID = conversationID
+	ctx = withRequestCorrelation(ctx, correlation)
 	input.Metadata = metadata
 	if o.config.Name != "" {
 		ctx = telemetry.WithBaggage(ctx, "agent_name", o.config.Name)
 	}
-	if bag := telemetry.GetBaggage(ctx); bag == nil || bag["original_request_id"] == "" {
-		ctx = telemetry.WithBaggage(ctx, "original_request_id", requestID)
-	}
-	ctx = WithRequestID(ctx, requestID)
 	ctx = withCheckpointMetadata(ctx, metadata, conversationID)
 
 	parentAttrs := []attribute.KeyValue{attribute.String("request_id", requestID)}
@@ -842,11 +847,8 @@ func (o *AIOrchestrator) beginRequestRun(ctx context.Context, input requestRunIn
 		parentAttrs = append(parentAttrs, attribute.String(MetadataConversationID, conversationID))
 	}
 	telemetry.SetSpanAttributes(ctx, parentAttrs...)
-	originalRequestID := requestID
-	if bag := telemetry.GetBaggage(ctx); bag != nil && bag["original_request_id"] != "" {
-		originalRequestID = bag["original_request_id"]
-		telemetry.SetSpanAttributes(ctx, attribute.String("original_request_id", originalRequestID))
-	}
+	originalRequestID := correlation.OriginalRequestID
+	telemetry.SetSpanAttributes(ctx, attribute.String("original_request_id", originalRequestID))
 
 	spanName := "orchestrator.process_request"
 	if input.Delivery != deliverBuffered {
@@ -863,15 +865,28 @@ func (o *AIOrchestrator) beginRequestRun(ctx context.Context, input requestRunIn
 		span.SetAttribute(MetadataConversationID, conversationID)
 	}
 	span.SetAttribute("original_request_id", originalRequestID)
+	if correlation.Parent.RequestID != "" {
+		span.SetAttribute("parent_request_id", correlation.Parent.RequestID)
+		if correlation.Parent.StepID != "" {
+			span.SetAttribute("parent_step_id", correlation.Parent.StepID)
+		}
+	}
 
 	if o.logger != nil {
-		o.logger.InfoWithContext(ctx, "Starting request processing", map[string]interface{}{
+		fields := map[string]interface{}{
 			"operation":      "process_request",
 			"request_id":     requestID,
 			"request_length": len(input.Request),
 			"metadata_keys":  getMapKeys(metadata),
 			"delivery":       input.Delivery.String(),
-		})
+		}
+		if correlation.Parent.RequestID != "" {
+			fields["parent_request_id"] = correlation.Parent.RequestID
+			if correlation.Parent.StepID != "" {
+				fields["parent_step_id"] = correlation.Parent.StepID
+			}
+		}
+		o.logger.InfoWithContext(ctx, "Starting request processing", fields)
 	}
 	if o.telemetry != nil {
 		o.telemetry.RecordMetric("orchestrator.requests.total", 1, map[string]string{
@@ -901,16 +916,14 @@ func (o *AIOrchestrator) beginRequestRun(ctx context.Context, input requestRunIn
 	prepareKnownEnrichments(ctx, metadata, pctx.Enrichments, o.conversationHistoryPreparer)
 
 	return &executionRunState{
-		Input:     input,
-		Context:   ctx,
-		StartedAt: startedAt,
-		Correlation: requestCorrelation{
-			RequestID: requestID, OriginalRequestID: originalRequestID, ConversationID: conversationID,
-		},
-		Pipeline: pctx,
-		Usage:    usageState{Accumulator: accumulator},
-		Recorder: o.executionRecorderFor(requestID),
-		Span:     span,
+		Input:       input,
+		Context:     ctx,
+		StartedAt:   startedAt,
+		Correlation: correlation,
+		Pipeline:    pctx,
+		Usage:       usageState{Accumulator: accumulator},
+		Recorder:    o.executionRecorderFor(requestID),
+		Span:        span,
 	}, nil
 }
 

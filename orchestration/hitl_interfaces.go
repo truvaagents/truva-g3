@@ -347,6 +347,9 @@ type ExecutionCheckpoint struct {
 	// Use this field to correlate all checkpoints in a conversation and to search
 	// distributed traces using the original_request_id tag.
 	OriginalRequestID string `json:"original_request_id,omitempty"`
+	// Immediate delegation parent, distinct from checkpoint/resume lineage.
+	ParentRequestID string `json:"parent_request_id,omitempty"`
+	ParentStepID    string `json:"parent_step_id,omitempty"`
 
 	// OriginalTraceID is the W3C trace ID from the span active when this checkpoint
 	// was created. Populated by createCheckpoint for use in BuildResumeContext.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/truvaagents/truva-g3/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +30,7 @@ func checkpointEnrichmentRequired(ctx context.Context) bool {
 // suspension boundary. It deliberately contains no provider clients or prompt
 // and resource bodies.
 type executionRunSnapshot struct {
+	Correlation        requestCorrelation
 	PhaseNumber        int
 	AccumulatedResults map[string]*StepResult
 	ExecutedStepIDs    []string
@@ -102,6 +104,11 @@ func (c checkpointCoordinator) saveAuthoritative(
 }
 
 func applyRunSnapshot(checkpoint *ExecutionCheckpoint, snapshot executionRunSnapshot) {
+	if c := snapshot.Correlation; c.RequestID != "" && c.RequestID == checkpoint.RequestID {
+		checkpoint.OriginalRequestID = c.OriginalRequestID
+		checkpoint.ParentRequestID = c.Parent.RequestID
+		checkpoint.ParentStepID = c.Parent.StepID
+	}
 	checkpoint.PhaseNumber = snapshot.PhaseNumber
 	checkpoint.AccumulatedResults = make(map[string]*StepResult, len(snapshot.AccumulatedResults))
 	if checkpoint.StepResults == nil {
@@ -141,6 +148,12 @@ func (o *AIOrchestrator) saveAuthoritativeCheckpoint(
 	snapshot executionRunSnapshot,
 	site string,
 ) error {
+	snapshot.Correlation = requestCorrelation{}
+	if correlation, managed := requestCorrelationFromContext(ctx); managed && checkpoint != nil &&
+		correlation.RequestID != "" && correlation.RequestID == GetRequestID(ctx) &&
+		correlation.RequestID == checkpoint.RequestID {
+		snapshot.Correlation = correlation
+	}
 	if holder, ok := skillExecutionHolderFromContext(ctx); ok {
 		skillState, cacheContext := holder.Snapshot()
 		snapshot.SkillState = &skillState
@@ -226,7 +239,7 @@ func cloneInterfaceValue(value interface{}) interface{} {
 	case map[string]interface{}:
 		return cloneInterfaceMap(typed)
 	case []interface{}:
-		cloned := make([]interface{}, len(typed))
+		cloned := slices.Clone(typed)
 		for index, item := range typed {
 			cloned[index] = cloneInterfaceValue(item)
 		}
@@ -234,13 +247,13 @@ func cloneInterfaceValue(value interface{}) interface{} {
 	case map[string]string:
 		return cloneStringMap(typed)
 	case []string:
-		return append([]string(nil), typed...)
+		return slices.Clone(typed)
 	case []int:
-		return append([]int(nil), typed...)
+		return slices.Clone(typed)
 	case []float64:
-		return append([]float64(nil), typed...)
+		return slices.Clone(typed)
 	case []bool:
-		return append([]bool(nil), typed...)
+		return slices.Clone(typed)
 	default:
 		// Structs and opaque leaves are treated as immutable values. Framework
 		// lifecycle snapshots never mutate values supplied by feature extensions.
