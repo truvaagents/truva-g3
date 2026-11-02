@@ -9,6 +9,14 @@ import (
 	"github.com/truvaagents/truva-g3/core"
 )
 
+const (
+	// Child lines are a compact outcome index. Longer answers/questions use the
+	// enclosing configurable readable-view allocation; raw records stay intact.
+	delegatedChildPreviewMaxBytes = 200 // UTF-8-safe prefix, plus an ellipsis if shortened.
+	// Reserve most of the view for the delegated answer and structured fields.
+	delegatedChildBudgetDivisor = 4
+)
+
 // delegatedContinuationView is a derived prompt view only. In particular, it
 // must never replace the response that parameter binding or recorders consume.
 type delegatedContinuationView struct {
@@ -144,7 +152,7 @@ func delegatedChildFacts(object map[string]interface{}, maxBytes int) (string, i
 				}
 			}
 		}
-		line := fmt.Sprintf("    - %s/%s [%s]: %s\n", agent, capability, state, truncateRunes(firstLine(message), 200))
+		line := fmt.Sprintf("    - %s/%s [%s]: %s\n", agent, capability, state, truncateRunes(firstLine(message), delegatedChildPreviewMaxBytes))
 		if used+len(line) <= maxBytes {
 			lines = append(lines, line)
 			capabilities = append(capabilities, agent+"/"+capability)
@@ -227,7 +235,7 @@ func delegatedOutputFields(object map[string]interface{}) (map[string]interface{
 // No application field names or receipt semantics are built into the framework.
 func renderDelegatedContinuationBody(object map[string]interface{}, opts continuationDigestOpts, maxBytes int) delegatedContinuationView {
 	previewBytes := maxBytes
-	childBytes := maxBytes / 4
+	childBytes := maxBytes / delegatedChildBudgetDivisor
 	fields, bookkeepingOmitted := delegatedOutputFields(object)
 	for {
 		lost := bookkeepingOmitted

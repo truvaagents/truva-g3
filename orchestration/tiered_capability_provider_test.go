@@ -2177,11 +2177,15 @@ func TestTieredSelection_CorrectionFeedbackEncodingAndBudget(t *testing.T) {
 				t.Fatalf("feedback framing or canonical encoding changed: %s", prompt)
 			}
 			sectionBytes := len(prompt) - len("original prompt")
-			provider.feedbackMaxBytes = sectionBytes
+			if err := provider.SetRegenerationFeedbackMaxBytes(sectionBytes); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := provider.buildSelectionCorrectionPrompt(ctx, "original prompt", []string{"test-agent/capability_0"}, []string{rejected}); err != nil {
 				t.Fatalf("exact byte budget rejected: %v", err)
 			}
-			provider.feedbackMaxBytes--
+			if err := provider.SetRegenerationFeedbackMaxBytes(sectionBytes - 1); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := provider.buildSelectionCorrectionPrompt(ctx, "original prompt", []string{"test-agent/capability_0"}, []string{rejected}); err == nil {
 				t.Fatal("feedback exceeded the enclosing configured byte budget")
 			}
@@ -2193,7 +2197,9 @@ func TestTieredSelection_OversizedCorrectionKeepsValidatedSubset(t *testing.T) {
 	catalog := setupTestCatalog(30)
 	client := newSequentialAIClient([]string{`["test-agent/capability_0","wrong-service/capability_1"]`}, nil)
 	provider := NewTieredCapabilityProvider(catalog, client, &TieredCapabilityConfig{RetryEnabled: true, MaxRetries: 2})
-	provider.feedbackMaxBytes = 1
+	if err := provider.SetRegenerationFeedbackMaxBytes(1); err != nil {
+		t.Fatal(err)
+	}
 	got, err := provider.selectRelevantTools(t.Context(), "select capabilities", catalog.GetCapabilitySummaries(), nil)
 	if err != nil || !slices.Equal(got, []string{"test-agent/capability_0"}) || len(client.calls) != 1 {
 		t.Fatalf("tools=%q err=%v calls=%d", got, err, len(client.calls))
@@ -2203,7 +2209,9 @@ func TestTieredSelection_OversizedCorrectionKeepsValidatedSubset(t *testing.T) {
 func TestTieredSelection_OversizedInvalidCorrectionUsesExistingCatalogFallback(t *testing.T) {
 	client := newSequentialAIClient([]string{`["wrong-service/capability_1"]`}, nil)
 	provider := NewTieredCapabilityProvider(setupTestCatalog(30), client, &TieredCapabilityConfig{RetryEnabled: true, MaxRetries: 2})
-	provider.feedbackMaxBytes = 1
+	if err := provider.SetRegenerationFeedbackMaxBytes(1); err != nil {
+		t.Fatal(err)
+	}
 	got, err := provider.GetCapabilities(t.Context(), "select capabilities", nil)
 	if err != nil || got == nil || !strings.Contains(got.FormattedInfo, "capability_29") || len(client.calls) != 1 {
 		t.Fatalf("result=%+v err=%v calls=%d", got, err, len(client.calls))
@@ -2233,7 +2241,75 @@ func TestTieredSelection_CorrectionFeedbackUsesResolvedConfig(t *testing.T) {
 			if !ok || provider.feedbackMaxBytes != want {
 				t.Fatalf("provider=%+v, want resolved feedback limit %d", provider, want)
 			}
+			direct := NewTieredCapabilityProvider(setupTestCatalog(30), NewTieredTestAIClient(), &config.TieredResolution)
+			if err := direct.SetRegenerationFeedbackMaxBytes(config.IterativePlanning.RegenerationFeedbackMaxBytes); err != nil || direct.feedbackMaxBytes != want {
+				t.Fatalf("direct provider did not honor the same resolved config: budget=%d err=%v", direct.feedbackMaxBytes, err)
+			}
 		})
+	}
+}
+
+func TestTieredSelection_DirectFeedbackBudget(t *testing.T) {
+	provider := NewTieredCapabilityProvider(setupTestCatalog(30), NewTieredTestAIClient(), nil)
+	rejected := []string{strings.Repeat("x", 18000)}
+	if _, err := provider.buildSelectionCorrectionPrompt(t.Context(), "catalog", nil, rejected); err == nil {
+		t.Fatal("default budget accepted an oversized correction")
+	}
+	if err := provider.SetRegenerationFeedbackMaxBytes(32768); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.buildSelectionCorrectionPrompt(t.Context(), "catalog", nil, rejected); err != nil {
+		t.Fatalf("direct override was not applied: %v", err)
+	}
+	if err := provider.SetRegenerationFeedbackMaxBytes(-1); !errors.Is(err, ErrInvalidOrchestratorConfig) {
+		t.Fatalf("negative limit did not fail as configuration: %v", err)
+	}
+	if provider.feedbackMaxBytes != 32768 {
+		t.Fatal("invalid override mutated the last valid budget")
+	}
+	if err := provider.SetRegenerationFeedbackMaxBytes(0); err != nil || provider.feedbackMaxBytes != 16384 {
+		t.Fatalf("zero did not restore the shared default: budget=%d err=%v", provider.feedbackMaxBytes, err)
+	}
+}
+
+func TestTieredSelection_DirectFeedbackBudgetEnvironmentModes(t *testing.T) {
+	const key = "TRUVAG3_ITERATIVE_REGENERATION_FEEDBACK_MAX_BYTES"
+	t.Setenv(key, "invalid")
+	for _, mode := range []EnvironmentMode{EnvironmentStrict, EnvironmentCompatible, EnvironmentDisabled} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			resolved, err := ResolveOrchestratorConfig(ConfigResolution{
+				Environment: mode,
+				LookupEnv:   lookupFromMap(map[string]string{key: "invalid"}),
+			})
+			if mode == EnvironmentStrict {
+				var envErr *ConfigEnvironmentError
+				if !errors.As(err, &envErr) || envErr.Variable != key {
+					t.Fatalf("strict resolution ignored invalid environment: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == EnvironmentCompatible && len(resolved.Diagnostics) == 0 {
+				t.Fatal("compatible resolution lost invalid-environment diagnostic")
+			}
+			provider := NewTieredCapabilityProvider(setupTestCatalog(30), NewTieredTestAIClient(), &resolved.Config.TieredResolution)
+			if err := provider.SetRegenerationFeedbackMaxBytes(resolved.Config.IterativePlanning.RegenerationFeedbackMaxBytes); err != nil || provider.feedbackMaxBytes != 16384 {
+				t.Fatalf("direct provider did not preserve resolved default: budget=%d err=%v", provider.feedbackMaxBytes, err)
+			}
+		})
+	}
+}
+
+func TestTieredSelection_NegativeLegacyFeedbackBudgetFailsBeforeBootstrap(t *testing.T) {
+	config := NewDefaultOrchestratorConfig()
+	config.EnableTieredResolution = true
+	config.IterativePlanning.RegenerationFeedbackMaxBytes = -1
+	// No dependencies: configuration rejection must precede component creation.
+	got, err := CreateOrchestrator(config, OrchestratorDependencies{})
+	if got != nil || !errors.Is(err, ErrInvalidOrchestratorConfig) {
+		t.Fatalf("invalid selector budget accepted: orchestrator=%v err=%v", got, err)
 	}
 }
 
