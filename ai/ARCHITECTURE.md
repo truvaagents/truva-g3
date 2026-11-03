@@ -1804,6 +1804,15 @@ Mythos Messages surface, are not classified as Converse models. Resolver
 implementations must preserve semantic equivalence: the semantic model drives
 policy even when the protected wire deployment is an opaque profile or ARN.
 
+Buffered Converse normalization rejects a reused text-block object before
+concatenation. The reviewed SDK can retain the preceding union value for an
+unrecognized or null-valued member; accepting it again would invent text. The
+guard checks object identity, so distinct blocks with identical text retain
+their content. A rejection follows the existing decode-error path: the prepared
+request report remains available, and no successful response is recorded.
+The provider-local `bedrock-converse-v6` identity invalidates earlier Bedrock
+AI-output-cache fingerprints. Streaming retains its event-decoding path.
+
 Provider factories may implement the additive
 `ProviderRequestTimeoutFactory` contract when their documented operation
 headroom differs from the framework's 300-second default. The root constructor
@@ -2159,6 +2168,7 @@ client, _ := ai.NewClient(
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.27 | 2026-11-03 | Reject ambiguous SDK-reused Bedrock text blocks through the existing decode-error/report path; preserve distinct repeated text and advance the provider-local cache identity to v6 |
 | 1.26 | 2026-10-17 | Set only OpenRouter default/smart aliases to DeepSeek v4.1 Flash and GLM 5.3; declare independently reviewed exact GLM 5.3 JSON-object support only; document concrete-alias cache eligibility under existing rules; preserve fast/code, exact router pass-through, environment overrides and budget contracts |
 | 1.25 | 2026-10-14 | Preserve buffered decoder and observed reader cause identity; distinguish clean-EOF JSON decoding from actual read failures; classify credible OpenRouter 408 for bounded recovery while retaining status; deduplicate expired attempt-context causes and document terminal provider-call deadlines and stream no-replay |
 | 1.24 | 2026-10-11 | Classify deterministic local policy failures as caller configuration for breaker health, preserving middleware causes; clarify quota HTTP 429 same-provider stop versus chain failover |
