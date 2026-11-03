@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -1884,6 +1885,159 @@ func TestBedrockStreamIgnoresReasoningDeltasButPreservesText(t *testing.T) {
 	}
 	if len(chunks) != 2 || chunks[0].Content != "answer" || chunks[1].FinishReason != string(types.StopReasonEndTurn) {
 		t.Fatalf("chunks = %#v", chunks)
+	}
+}
+
+type bedrockConverseHTTPFixture struct {
+	content string
+	calls   int
+}
+
+func (fixture *bedrockConverseHTTPFixture) Do(request *http.Request) (*http.Response, error) {
+	fixture.calls++
+	body := `{"output":{"message":{"role":"assistant","content":` + fixture.content +
+		`}},"stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":2,"totalTokens":3},"metrics":{"latencyMs":1}}`
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    request,
+	}, nil
+}
+
+func (fixture *bedrockConverseHTTPFixture) client(logger core.Logger) *Client {
+	credentials := aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+		return aws.Credentials{AccessKeyID: "fixture-access", SecretAccessKey: "fixture-secret"}, nil
+	})
+	client := NewClient(aws.Config{
+		Region: "us-east-1", Credentials: credentials, HTTPClient: fixture,
+	}, "us-east-1", logger)
+	client.DefaultModel = legacyBedrockTestModel
+	client.MaxRetries = 0
+	return client
+}
+
+func TestBedrockConverseSDKContentBlockIntegrity(t *testing.T) {
+	type contentCase struct {
+		name      string
+		content   string
+		want      string
+		ambiguous bool
+	}
+	tests := []contentCase{
+		{name: "identical text has independent blocks", content: `[{"text":"same"},{"text":"same"}]`, want: "samesame"},
+		{name: "null list member", content: `[{"text":"answer"},null]`, want: "answer"},
+		{name: "known reasoning", content: `[{"reasoningContent":{"reasoningText":{"text":"private reasoning","signature":"signature"}}},{"text":"answer"}]`, want: "answer"},
+		{name: "unknown after known reasoning", content: `[{"text":"answer"},{"reasoningContent":{"reasoningText":{"text":"private reasoning"}}},{"futureMember":"future"}]`, want: "answer"},
+		{name: "nonadjacent stale text", content: `[{"text":"answer"},null,{"futureMember":"future"}]`, ambiguous: true},
+		{name: "empty union", content: `[{"text":"answer"},{}]`, ambiguous: true},
+		{name: "null text union member", content: `[{"text":"answer"},{"text":null}]`, ambiguous: true},
+	}
+	for _, unknown := range []struct{ name, value string }{
+		{"null", `null`}, {"object", `{"text":"future"}`}, {"array", `["future"]`},
+		{"string", `"future"`}, {"number", `1`}, {"boolean", `true`},
+	} {
+		block := `{"futureMember":` + unknown.value + `}`
+		tests = append(tests,
+			contentCase{name: "unknown " + unknown.name + " before text", content: `[` + block + `,{"text":"answer"}]`, want: "answer"},
+			contentCase{name: "unknown " + unknown.name + " after text", content: `[{"text":"answer"},` + block + `]`, ambiguous: true},
+		)
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := &bedrockConverseHTTPFixture{content: test.content}
+			logger := &bedrockObservationLogger{}
+			tracing := &bedrockObservationTelemetry{}
+			client := fixture.client(logger)
+			client.SetLogger(logger)
+			client.SetTelemetry(tracing)
+			request := core.NewAIRequest("hello", "sdk-content-integrity")
+			fingerprint, stable := client.RequestFingerprint(t.Context(), request)
+			if !stable || fingerprint == "" {
+				t.Fatalf("request fingerprint = %q, stable=%t", fingerprint, stable)
+			}
+			result, err := client.Generate(t.Context(), request)
+			if fixture.calls != 1 {
+				t.Fatalf("HTTP calls = %d, want 1", fixture.calls)
+			}
+			if result == nil || result.RequestReport == nil || !result.RequestReport.Stable ||
+				result.RequestReport.Fingerprint != fingerprint {
+				t.Fatalf("prepared request report lost: %#v", result)
+			}
+			if !test.ambiguous {
+				if err != nil || result.Response == nil || result.Response.Content != test.want {
+					t.Fatalf("Generate = %#v, %v; want content %q", result, err, test.want)
+				}
+				return
+			}
+			if err == nil || err.Error() != "reused text content block in Bedrock response" {
+				t.Fatalf("ambiguous SDK content error = %v, result=%#v", err, result)
+			}
+			if result.Response != nil {
+				t.Fatalf("ambiguous SDK content became a response: %#v", result.Response)
+			}
+			if len(tracing.spans) != 1 || tracing.spans[0].attributes["ai.error_type"] != "decode" ||
+				len(tracing.spans[0].errors) != 1 || tracing.spans[0].ended != 1 {
+				t.Fatalf("decode error span = %#v", tracing.spans)
+			}
+			for _, attribute := range []string{"ai.response_length", "ai.prompt_tokens", "ai.completion_tokens", "ai.total_tokens", "ai.stop_reason"} {
+				if _, exists := tracing.spans[0].attributes[attribute]; exists {
+					t.Errorf("decode failure recorded successful response attribute %q", attribute)
+				}
+			}
+			decodeLogs := 0
+			for _, fields := range logger.fields {
+				if fields["operation"] == "ai_response" || fields["status"] == "success" {
+					t.Errorf("decode failure emitted success log: %#v", fields)
+				}
+				if fields["operation"] == "ai_request" && fields["status"] == "error" && fields["error_type"] == "decode" {
+					decodeLogs++
+				}
+			}
+			if decodeLogs != 1 {
+				t.Fatalf("decode error log count = %d, want 1; logs=%#v", decodeLogs, logger.fields)
+			}
+		})
+	}
+}
+
+func TestBedrockConverseSDKContentFailurePreservesChainFallback(t *testing.T) {
+	fixture := &bedrockConverseHTTPFixture{content: `[{"text":"answer"},null,{"futureMember":"future"}]`}
+	client := fixture.client(&core.NoOpLogger{})
+	fallback := &bedrockFallbackClient{fingerprint: "fallback-policy-v1"}
+	chain, err := ai.NewChain(ai.ClientEntry("bedrock", client), ai.ClientEntry("fallback", fallback))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := core.NewAIRequest("hello", "sdk-content-fallback")
+	fingerprint, stable := chain.RequestFingerprint(t.Context(), request)
+	if !stable || fingerprint == "" {
+		t.Fatalf("chain fingerprint = %q, stable=%t", fingerprint, stable)
+	}
+	result, err := chain.Generate(t.Context(), request)
+	if err != nil || result == nil || result.Response == nil || result.Response.Content != "fallback" {
+		t.Fatalf("chain Generate = %#v, %v", result, err)
+	}
+	if fixture.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("Bedrock HTTP calls=%d, fallback calls=%d; want 1 each", fixture.calls, fallback.calls)
+	}
+	if result.RequestReport == nil || !result.RequestReport.Stable || result.RequestReport.Fingerprint != fingerprint {
+		t.Fatalf("chain request report = %#v", result.RequestReport)
+	}
+}
+
+func TestBedrockConverseOutputRejectsNilTextBlock(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Errorf("nil text block panicked: %v", recovered)
+		}
+	}()
+	var text *types.ContentBlockMemberText
+	result, err := decodeConverseOutput("model", &bedrockruntime.ConverseOutput{
+		Output: &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{text}}},
+	})
+	if err == nil || result != nil {
+		t.Fatalf("nil text block decode = %#v, %v", result, err)
 	}
 }
 

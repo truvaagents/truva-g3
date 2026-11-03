@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	bedrockConverseAdapterVersion = "bedrock-converse-v5"
+	bedrockConverseAdapterVersion = "bedrock-converse-v6"
 	maxStopSequences              = 2500
 )
 
