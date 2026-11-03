@@ -9,6 +9,11 @@ metadata:
     app.kubernetes.io/part-of: orchestration-backend-portability
 spec:
   replicas: 1
+  # The deterministic target has one discovery identity and a process-local
+  # failure counter. Finish unregistering the old pod before starting its replacement.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app: portable-target-agent
