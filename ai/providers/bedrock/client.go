@@ -501,8 +501,19 @@ func decodeConverseOutput(model string, output *bedrockruntime.ConverseOutput) (
 		return nil, errors.New("unexpected output type from Bedrock")
 	}
 	var content string
+	seenTextBlocks := make(map[*types.ContentBlockMemberText]struct{})
 	for _, block := range message.Value.Content {
 		if text, ok := block.(*types.ContentBlockMemberText); ok {
+			if text == nil {
+				return nil, errors.New("nil text content block in Bedrock response")
+			}
+			// The SDK can retain a preceding union value when decoding an
+			// unknown member. Distinct wire text blocks have distinct objects;
+			// reject reused identity rather than inventing or deduplicating text.
+			if _, seen := seenTextBlocks[text]; seen {
+				return nil, errors.New("reused text content block in Bedrock response")
+			}
+			seenTextBlocks[text] = struct{}{}
 			content += text.Value
 		}
 	}
