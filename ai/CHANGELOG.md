@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- Reject ambiguous buffered Bedrock Converse results when the SDK reuses a
+  text-block object after an unrecognized or null-valued union member. Preserve
+  distinct equal-text blocks, the prepared request report and decode-error
+  observations; existing chain failover can recover without publishing corrupt
+  text. Advance Bedrock's adapter fingerprint to `bedrock-converse-v6` so earlier
+  accepted results are not reused from AI-output caches.
+
 ### Changed
 
 - Change only OpenRouter's built-in `default` alias to
