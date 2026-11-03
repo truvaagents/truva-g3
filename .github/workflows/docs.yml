@@ -31,13 +31,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          # docs-site/package.json pins "engines": { "node": ">=20.0" }
+          # Node 20 is supported by the docs site's declared engine range.
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: docs-site/package-lock.json
       - name: Install dependencies
         working-directory: docs-site
         run: npm ci
+      - name: Check high and critical dependency advisories
+        working-directory: docs-site
+        run: npm audit --audit-level=high
       - name: Build site
         # `npm run build` runs the prebuild step (Python sync-docs script) first,
         # then `docusaurus build`. Docusaurus 3.x defaults `onBrokenLinks: throw`,
