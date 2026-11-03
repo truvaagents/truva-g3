@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/examples/agent-example
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/truvaagents/truva-g3/ai v0.6.1

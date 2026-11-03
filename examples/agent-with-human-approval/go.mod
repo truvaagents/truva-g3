@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/examples/agent-with-human-approval
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0

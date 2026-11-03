@@ -1,6 +1,6 @@
 module github.com/truvaagents/truva-g3/examples/confluence-tool
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/truvaagents/truva-g3/core v0.6.1
