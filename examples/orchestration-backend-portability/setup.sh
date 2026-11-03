@@ -529,7 +529,6 @@ verify_failures() (
     restore_target() {
         trap - EXIT INT TERM
         kubectl set env -n "$NAMESPACE" "deployment/$TARGET_DEPLOYMENT" PORTABILITY_TARGET_FAIL_FIRST- >/dev/null 2>&1 || true
-        kubectl rollout restart -n "$NAMESPACE" "deployment/$TARGET_DEPLOYMENT" >/dev/null 2>&1 || true
         kubectl rollout status -n "$NAMESPACE" "deployment/$TARGET_DEPLOYMENT" --timeout=180s >/dev/null 2>&1 || true
     }
     trap restore_target EXIT INT TERM
@@ -538,7 +537,6 @@ verify_failures() (
     verify_worker_restart
     log_info "Failure check: target returns one HTTP 500 before succeeding on retry"
     kubectl set env -n "$NAMESPACE" "deployment/$TARGET_DEPLOYMENT" PORTABILITY_TARGET_FAIL_FIRST=1 >/dev/null
-    kubectl rollout restart -n "$NAMESPACE" "deployment/$TARGET_DEPLOYMENT" >/dev/null
     kubectl rollout status -n "$NAMESPACE" "deployment/$TARGET_DEPLOYMENT" --timeout=180s >/dev/null
     configured_failures="$(kubectl get deployment -n "$NAMESPACE" "$TARGET_DEPLOYMENT" -o \
         jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="PORTABILITY_TARGET_FAIL_FIRST")].value}')"
@@ -551,14 +549,18 @@ verify_failures() (
 )
 
 run_proof() {
-    local succeeded failed deadline
+    local succeeded failed deadline job_counts
     ensure_namespace
     kubectl delete job -n "$NAMESPACE" "$JOB_NAME" --ignore-not-found --wait=true >/dev/null
     log_info "Running provider conformance and mixed-composition proof"
     kubectl apply -f "$SCRIPT_DIR/k8-deployment-test.yaml" >/dev/null
     deadline=$((SECONDS + 180))
     while [ "$SECONDS" -lt "$deadline" ]; do
-        read -r succeeded failed <<< "$(kubectl get job -n "$NAMESPACE" "$JOB_NAME" -o jsonpath='{.status.succeeded} {.status.failed}')"
+        if ! job_counts="$(kubectl get job -n "$NAMESPACE" "$JOB_NAME" -o jsonpath='{.status.succeeded}{"|"}{.status.failed}')"; then
+            log_error "Could not read portability proof status"
+            return 1
+        fi
+        IFS='|' read -r succeeded failed <<< "$job_counts"
         if [ "${succeeded:-0}" -ge 1 ]; then
             kubectl logs -n "$NAMESPACE" "job/$JOB_NAME" --all-containers=true
             log_success "Provider conformance and mixed-composition proof passed"
