@@ -41,6 +41,9 @@ jobs:
       - name: Check high and critical dependency advisories
         working-directory: docs-site
         run: npm audit --audit-level=high
+      - name: Typecheck site configuration and components
+        working-directory: docs-site
+        run: npm run typecheck
       - name: Build site
         # `npm run build` runs the prebuild step (Python sync-docs script) first,
         # then `docusaurus build`. Docusaurus 3.x defaults `onBrokenLinks: throw`,
