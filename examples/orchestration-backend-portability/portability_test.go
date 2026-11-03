@@ -396,17 +396,17 @@ func newNATSConnection(t *testing.T) *nats.Conn {
 	return connection
 }
 
-func newRedisClient(t *testing.T) *redis.Client {
+func newRedisClient(t *testing.T) redis.UniversalClient {
 	t.Helper()
-	options, err := redis.ParseURL(requiredEnvironment(t, "REDIS_URL"))
+	connection, err := core.ResolveRedisConnectionConfig(nil, os.LookupEnv)
 	if err != nil {
 		t.Fatalf("configure Redis client: %v", err)
 	}
-	client := redis.NewClient(options)
-	t.Cleanup(func() { _ = client.Close() })
-	if err := client.Ping(t.Context()).Err(); err != nil {
+	client, err := core.NewRedisUniversalClient(connection)
+	if err != nil {
 		t.Fatalf("connect to Redis: %v", err)
 	}
+	t.Cleanup(func() { _ = client.Close() })
 	return client
 }
 
