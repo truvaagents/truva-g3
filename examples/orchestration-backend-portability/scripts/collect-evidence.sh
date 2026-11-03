@@ -38,4 +38,4 @@ kubectl exec -n "$NAMESPACE" deployment/redis -- \
     jq '{id, name, type, address, port, health}'
 printf 'scheduler_lock_ttl_seconds='
 kubectl exec -n "$NAMESPACE" deployment/redis -- \
-    redis-cli TTL 'truvag3:v1:orchestration-portability:locks:{orchestration-portability:locks:scheduler}:lease'
+    redis-cli TTL 'truvag3:v1:default:locks:{default:locks:scheduler}:lease'
