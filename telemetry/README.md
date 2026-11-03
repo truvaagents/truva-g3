@@ -562,7 +562,7 @@ Here's how to configure telemetry for containerized applications:
 
 ```dockerfile
 # Dockerfile
-FROM golang:1.27.2-alpine AS builder
+FROM golang:1.27.3-alpine AS builder
 WORKDIR /app
 COPY . .
 RUN go build -o myapp .

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- Require Go 1.27.3 or newer for framework builds, incorporating the
+  `crypto/x509` fix for GO-2026-6809. Align dependent example module minimums,
+  container compiler images, and generated workspaces with the patched version.
+  Rebuild deployed binaries to receive the standard-library fix.
+
 ## v0.6.1
 
 All seven Go modules are co-versioned and require Go 1.27.2 or newer. Update

@@ -1302,7 +1302,7 @@ constructor; it currently sets `service.version` to `1.0.0`.
 ### Dockerfile Best Practices
 
 ```dockerfile
-FROM golang:1.27.2-alpine AS builder
+FROM golang:1.27.3-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
