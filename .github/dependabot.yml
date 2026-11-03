@@ -77,3 +77,28 @@ updates:
       go-deps:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gomod"
+    directory: "/examples/orchestration-backend-portability"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      go-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # Documentation site dependencies.
+  - package-ecosystem: "npm"
+    directory: "/docs-site"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
