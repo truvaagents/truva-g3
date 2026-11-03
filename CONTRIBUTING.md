@@ -83,7 +83,7 @@ By participating in this project, you agree to abide by our Code of Conduct:
 
 ### Prerequisites
 
-- **Go 1.27.2 or higher** (the shared gate script selects the patch-pinned toolchain from `go.work`)
+- **Go 1.27.3 or higher** (the shared gate script selects the patch-pinned toolchain from `go.work`)
 - **Docker** (recommended) for running the in-tree Redis/Valkey backend used by integration tests and example deployments
 - **kind** (Kubernetes-in-Docker) for running the example multi-agent system locally
 
