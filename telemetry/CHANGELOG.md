@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.6.2
+
+Requires Go 1.27.3 or newer. See the [root changelog](../CHANGELOG.md)
+for coordinated module versions and adoption requirements.
 
 - Fall back to a validated typed core root for the same request when root
   baggage is absent in LLM-debug recording. Preserve existing nonempty baggage

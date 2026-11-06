@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.6.2
+
+Requires Go 1.27.3 or newer. See the [root changelog](../CHANGELOG.md)
+for coordinated module versions and adoption requirements.
 
 - Expose `TieredCapabilityProvider.SetRegenerationFeedbackMaxBytes` for direct
   callers and use it in the factory. It shares the existing correction budget,
