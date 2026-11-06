@@ -19,7 +19,7 @@ ENV CGO_ENABLED=0
 ENV GOOS=linux
 ENV GONOSUMDB=github.com/truvaagents/truva-g3/*
 
-# Download dependencies from GitHub (v0.6.6)
+# Download the dependency versions pinned in go.mod
 RUN go mod download && go mod verify
 
 # Build the binary with optimizations
