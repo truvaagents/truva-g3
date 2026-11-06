@@ -4746,6 +4746,16 @@ func main() {
 
 Intelligently coordinate multiple agents and tools to accomplish complex tasks.
 
+The built-in `SmartExecutor` requires each step it executes to provide
+`Metadata["capability"]` as a nonblank string. Plan validation supplies actionable
+step/field feedback to existing model-plan correction; direct execution rejects
+invalid identity before parameter resolution, step approval or HTTP dispatch.
+Omitted parameters and non-nil capability schemas with no parameters are valid;
+the existing named endpoint fallback without a schema is retained. This contract
+does not add a metadata requirement to custom `Executor` implementations.
+`ContextualReResolver.ReResolve` returns an error for a missing capability schema
+after its existing disabled-AI and cancellation checks, without invoking AI.
+
 ### Read-only execution inspection
 
 ```go

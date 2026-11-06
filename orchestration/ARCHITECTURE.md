@@ -401,6 +401,7 @@ model regeneration.
 
 | Check | Purpose |
 |---|---|
+| Capability identity | Each executable step for the built-in `SmartExecutor` supplies `metadata.capability` as a nonblank string; existing catalog membership checks still apply |
 | Template shape | Framework-form `{{step-…}}` macros must match `{{stepId.fieldPath}}`; unrelated tool-owned templates are left alone |
 | Cross-phase awareness | A template reference is valid if the step exists in the current plan **or** in a completed prior phase |
 | Template declaration consistency | Every step ID referenced by a template must appear in `depends_on` (same-phase) or `implicit_deps` (prior-phase) |
@@ -512,6 +513,11 @@ When Layer 3 cannot fix the error (lacks source data context), the `ContextualRe
 - Configurable via `TRUVAG3_SEMANTIC_RETRY_ENABLED` and `TRUVAG3_SEMANTIC_RETRY_MAX_ATTEMPTS`
 - Optionally runs for independent steps (no dependencies) via `TRUVAG3_SEMANTIC_RETRY_INDEPENDENT_STEPS`
 
+`ReResolve` returns an error when its capability schema is absent, before prompt
+construction or an AI call. Existing disabled-AI and cancellation checks retain
+their precedence. A non-nil capability with no parameters is valid. The executor
+retains the original dispatch failure if contextual re-resolution cannot run.
+
 **Implementation**: `ContextualReResolver` in `contextual_re_resolver.go`
 
 #### Layer 5: Human-in-the-Loop (HITL)
@@ -536,6 +542,16 @@ layers during resume.
 ---
 
 ## Execution Models
+
+The built-in `SmartExecutor` validates `metadata.capability` as a nonblank string
+before discovery, parameter resolution, step approval or HTTP dispatch. Invalid
+identity produces a timed failed step with zero dispatches and a failed step span.
+The same internal check runs during plan validation, so model-produced violations
+use existing bounded correction; hook mutations keep their hook failure policy.
+Names are preserved exactly. Omitted parameters, zero-argument capabilities and
+the existing named endpoint fallback without a schema remain supported. This is
+the built-in HTTP executor's contract, not a new requirement on custom `Executor`
+implementations or the generic `RoutingStep` type.
 
 Before each tool/agent dispatch, `validateDispatchParameters` checks declared
 required inputs, unresolved reserved references, enum membership and supported
