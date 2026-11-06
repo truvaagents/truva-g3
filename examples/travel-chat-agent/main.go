@@ -37,7 +37,9 @@ func main() {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		telemetry.Shutdown(ctx)
+		if err := telemetry.Shutdown(ctx); err != nil {
+			log.Print("operation=telemetry_shutdown status=failure error_type=shutdown")
+		}
 	}()
 
 	// 4. Create agent AFTER telemetry is initialized
@@ -232,11 +234,11 @@ func initTelemetry(serviceName string) {
 	telemetry.EnableFrameworkIntegration(nil)
 
 	log.Printf("Telemetry initialized successfully")
-	log.Printf("  Environment: %s", env)
+	log.Printf("  Environment profile: %s", profile)
 	log.Printf("  Profile: %s", profile)
 	log.Printf("  Service: %s", serviceName)
 	if config.Endpoint != "" {
-		log.Printf("  Endpoint: %s", config.Endpoint)
+		log.Print("  Exporter endpoint configured")
 	}
 }
 
@@ -249,7 +251,7 @@ func getPort() int {
 	}
 	p, err := strconv.Atoi(port)
 	if err != nil || p <= 0 {
-		log.Fatalf("PORT must be a positive integer, got: %s", port)
+		log.Fatal("PORT must be a positive integer")
 	}
 	return p
 }

@@ -2095,13 +2095,14 @@ function renderExecutionDetail(viewport = null) {
     } else if (activeTab === 'dag-raw') {
         container.innerHTML = `
             <div class="json-container">
-                <button class="copy-btn" onclick="event.stopPropagation()">Copy</button>
+                <button class="copy-btn">Copy</button>
                 <div class="json-view">${syntaxHighlightJson(selected)}</div>
             </div>`;
         // Bind copy button via delegation
         const copyBtn = container.querySelector('.copy-btn');
         if (copyBtn) {
             copyBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
                 copyToClipboard(JSON.stringify(selected, null, 2), e);
             });
         }
@@ -3768,7 +3769,7 @@ function initCytoscape() {
     }
 
     // Create Cytoscape instance with premium dark styling
-    cyInstance = cytoscape({
+    const graph = cytoscape({
         container: dagContainer,
         elements: { nodes, edges },
         style: [
@@ -4427,7 +4428,9 @@ function initCytoscape() {
             animate: false,
             stop: function() {
                 // Re-fit after layout completes to handle container sizing race
-                setTimeout(function() { cyInstance.fit(50); }, 100);
+                setTimeout(() => {
+                    if (cyInstance === graph && !graph.destroyed()) graph.fit(50);
+                }, 100);
             }
         },
         // Enable better rendering
@@ -4438,6 +4441,8 @@ function initCytoscape() {
         // because the optimal value depends on the user's mouse and OS,
         // and a hard-coded value zooms unnaturally on most hardware.
     });
+
+    cyInstance = graph;
 
     // Add click handler for nodes
     cyInstance.on('tap', 'node', function(evt) {
@@ -6259,7 +6264,7 @@ function renderSingleLLMCard(interaction, idx, displayNum, displayLabel) {
     `).join('');
 
     return `
-        <div class="dag-step-card" style="background: linear-gradient(135deg, ${config.bg} 0%, rgba(255, 255, 255, 0.03) 100%); backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); border: 1px solid ${config.border}; box-shadow: ${baseShadow};" onmouseenter="this.style.boxShadow='${hoverShadow}'; this.style.borderColor='rgba(${_r}, 0.4)';" onmouseleave="this.style.boxShadow='${baseShadow}'; this.style.borderColor='${config.border}';">
+        <div class="dag-step-card csp-hover-card" style="--card-border: ${config.border}; --card-hover-border: rgba(${_r}, 0.4); --card-shadow: ${baseShadow}; --card-hover-shadow: ${hoverShadow}; background: linear-gradient(135deg, ${config.bg} 0%, rgba(255, 255, 255, 0.03) 100%); backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); border: 1px solid var(--active-card-border); box-shadow: var(--active-card-shadow);">
             <div class="dag-step-header dag-llm-card-header">
                 <div class="dag-step-title">
                     <span style="padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12px; background: linear-gradient(135deg, ${config.bg}, rgba(255, 255, 255, 0.05)); border: 1px solid ${config.border}; color: ${config.color};">${config.icon} #${shownNum}</span>

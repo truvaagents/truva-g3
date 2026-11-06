@@ -14,7 +14,8 @@ import {
     escapeHtml,
 } from '../utils/format.js';
 
-import { fetchAPI } from '../api.js';
+import { fetchAPI, requestJSON } from '../api.js';
+import { createLoadGuard } from '../utils/load-guard.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
 
 // ---------------------------------------------------------------------------
@@ -25,6 +26,18 @@ let services = [];
 let selected = null;
 let activeTab = 'formatted';
 let inspectedRecord = null;
+let applicationRecordsAvailable = false;
+const catalogueLoad = createLoadGuard();
+const inspectionLoad = createLoadGuard();
+
+function invalidateInspection() {
+    inspectionLoad.cancel();
+    inspectedRecord = null;
+    const credential = document.getElementById('applicationRecordCredential');
+    if (credential) credential.value = '';
+    const result = document.getElementById('applicationRecordResult');
+    if (result) result.textContent = '';
+}
 
 // Catalogue text is application data, not trusted HTML. Quotes also need
 // escaping in attributes on a page that accepts a transient read credential.
@@ -73,6 +86,7 @@ function renderServiceTable(list) {
 }
 
 function selectService(serviceId) {
+    if (selected?.id !== serviceId) invalidateInspection();
     selected = services.find(s => s.id === serviceId);
     filterServices();
     renderDetail();
@@ -96,7 +110,7 @@ function renderDetail() {
     }
     title.textContent = selected.name;
     // A catalogue poll should not erase an operator's in-progress read form.
-    if (document.activeElement?.closest('.application-inspector') && content.querySelector('.application-inspector')?.dataset.serviceId === selected.id) return;
+    if (applicationRecordsAvailable && document.activeElement?.closest('.application-inspector') && content.querySelector('.application-inspector')?.dataset.serviceId === selected.id) return;
     if (activeTab === 'json') {
         content.innerHTML = `<div class="json-container"><button class="copy-btn" data-action="copy-json">Copy</button><pre class="json-view">${syntaxHighlightJson(selected)}</pre></div>`;
     } else {
@@ -127,7 +141,10 @@ function renderFormattedView(service) {
         </div></div>`;
     }
 
-    if ((service.capabilities || []).some(cap => cap.name === 'inspect_application_records_v1' && cap.internal)) {
+    if (!applicationRecordsAvailable && (service.capabilities || []).some(cap => cap.name === 'inspect_application_records_v1' && cap.internal)) {
+        html += '<section class="info-section"><div class="info-section-title">Application records (read-only)</div><p>Application record inspection is unavailable in this Viewer mode.</p></section>';
+    }
+    if (applicationRecordsAvailable && (service.capabilities || []).some(cap => cap.name === 'inspect_application_records_v1' && cap.internal)) {
         const captured = inspectedRecord?.serviceID === service.id ? inspectedRecord.data : null;
         html += `<section class="info-section application-inspector" data-service-id="${escapeAttribute(service.id)}">
             <div class="info-section-title">Application records (read-only)</div>
@@ -183,6 +200,7 @@ function copyJson(evt) {
 }
 
 async function fetchServices() {
+    const ticket = catalogueLoad.begin();
     const refreshBtn = document.querySelector('.refresh-btn');
     const errorBanner = document.getElementById('errorBanner');
     const listPanel = document.getElementById('registryListPanel');
@@ -190,7 +208,11 @@ async function fetchServices() {
     showLoading(listPanel, 'Loading services...');
 
     try {
-        const { data } = await fetchAPI('/api/services');
+        const { data } = await fetchAPI('/api/services', { signal: ticket.signal });
+        if (!catalogueLoad.current(ticket)) return;
+        const supported = data.viewer_capabilities?.application_records;
+        applicationRecordsAvailable = supported === undefined || supported === true;
+        if (!applicationRecordsAvailable) invalidateInspection();
 
         document.getElementById('totalCount').textContent = data.totalCount;
         document.getElementById('agentCount').textContent = data.agentCount;
@@ -209,17 +231,24 @@ async function fetchServices() {
         if (selected) {
             const updated = services.find(s => s.id === selected.id);
             if (updated) { selected = updated; renderDetail(); }
+            else { invalidateInspection(); selected = null; renderDetail(); }
         }
 
         document.getElementById('lastUpdated').textContent = `Last updated: ${formatDateTime(data.timestamp)}`;
         errorBanner.classList.remove('visible');
     } catch (error) {
+        if (!catalogueLoad.current(ticket)) return;
+        applicationRecordsAvailable = false;
+        invalidateInspection(); services = []; selected = null;
+        filterServices(); renderDetail();
         console.error('Failed to fetch services:', error);
         document.getElementById('errorMessage').textContent = error.message;
         errorBanner.classList.add('visible');
     } finally {
-        refreshBtn.classList.remove('loading');
-        hideLoading(listPanel);
+        if (catalogueLoad.current(ticket)) {
+            refreshBtn.classList.remove('loading');
+            hideLoading(listPanel);
+        }
     }
 }
 
@@ -266,7 +295,11 @@ function handleDetailContentClick(e) {
 }
 
 async function inspectApplicationRecords(button) {
+    // Check availability before reading a component credential or sending it.
+    if (!applicationRecordsAvailable) return;
     const panel = button.closest('.application-inspector');
+    if (!panel || panel.dataset.serviceId !== selected?.id) return;
+    const ticket = inspectionLoad.begin();
     const status = panel.querySelector('#applicationRecordStatus');
     const output = panel.querySelector('#applicationRecordResult');
     const credential = panel.querySelector('#applicationRecordCredential');
@@ -275,23 +308,21 @@ async function inspectApplicationRecords(button) {
     try {
         const input = JSON.parse(panel.querySelector('#applicationRecordInput').value);
         if (!input || Array.isArray(input) || typeof input !== 'object') throw new Error('Supply one JSON object.');
-        const response = await fetch('/api/application-records', {
-            method: 'POST', cache: 'no-store',
-            headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${credential.value}`},
-            body: JSON.stringify({service_id: panel.dataset.serviceId, input}),
-        });
-        // Credentials stay neither in component parameters nor durable UI state.
+        const authorization = `Bearer ${credential.value}`;
         credential.value = '';
-        if (!response.ok) throw new Error(`Read rejected or unavailable (HTTP ${response.status}).`);
-        const result = await response.json();
+        const { data: result } = await requestJSON('/api/application-records', {
+            method: 'POST', signal: ticket.signal,
+            headers: { Authorization: authorization },
+            body: { service_id: panel.dataset.serviceId, input },
+        });
+        if (!inspectionLoad.current(ticket) || !applicationRecordsAvailable || selected?.id !== panel.dataset.serviceId) return;
         if (result.success !== true || result.data?.schema_version !== 1 || !Array.isArray(result.data.records)) throw new Error('Unsupported inspection response.');
-        inspectedRecord = {serviceID: panel.dataset.serviceId, data: result.data};
+        inspectedRecord = { serviceID: panel.dataset.serviceId, data: result.data };
         output.innerHTML = formatResponseJson(result.data);
         status.textContent = result.data.truncated ? 'Bounded records returned; more records are omitted.' : 'Application records returned. No investigation was launched by this read.';
     } catch (error) {
-        inspectedRecord = null;
-        output.textContent = '';
-        status.textContent = error.message;
+        if (!inspectionLoad.current(ticket)) return;
+        inspectedRecord = null; output.textContent = ''; status.textContent = error.message;
     } finally {
         credential.value = '';
         button.disabled = false;
@@ -328,6 +359,9 @@ export function init() {
 }
 
 export function destroy() {
+    catalogueLoad.cancel();
+    applicationRecordsAvailable = false;
+    invalidateInspection();
     // Remove event listeners to avoid leaks if the view is torn down
     const tbody = document.getElementById('serviceTableBody');
     if (tbody) tbody.removeEventListener('click', handleTableClick);

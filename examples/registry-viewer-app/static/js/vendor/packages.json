@@ -1,0 +1,41 @@
+{
+  "scope": "Existing pinned Viewer DAG libraries served locally; versions unchanged",
+  "packages": [
+    {
+      "package": "cytoscape",
+      "version": "3.29.2",
+      "metadata": "https://registry.npmjs.org/cytoscape/3.29.2",
+      "archive": "https://registry.npmjs.org/cytoscape/-/cytoscape-3.29.2.tgz",
+      "npm_integrity": "sha512-2G1ycU28Nh7OHT9rkXRLpCDP30MKH1dXJORZuBhtEhEW7pKwgPi77ImqlCWinouyE1PNepIOGZBOrE84DG7LyQ==",
+      "source_member": "dist/cytoscape.min.js",
+      "file": "cytoscape.js",
+      "sha256": "4d1ba05f57890d46e90ffb603e7d665bf9466e1d674e030f93d8e6e63b958587",
+      "license_file": "cytoscape-LICENSE.txt",
+      "license_sha256": "a29c0d78a54de204b78357976c3d272a573b8592d0478b9db07af3f1da31a65a"
+    },
+    {
+      "package": "dagre",
+      "version": "0.8.5",
+      "metadata": "https://registry.npmjs.org/dagre/0.8.5",
+      "archive": "https://registry.npmjs.org/dagre/-/dagre-0.8.5.tgz",
+      "npm_integrity": "sha512-/aTqmnRta7x7MCCpExk7HQL2O4owCT2h8NT//9I1OQ9vt29Pa0BzSAkR5lwFUcQ7491yVi/3CXU9jQ5o0Mn2Sw==",
+      "source_member": "dist/dagre.min.js",
+      "file": "dagre.js",
+      "sha256": "62eb9787ccfdbdf4148d4d99d31dbf9ee4770eafee81e637d759b52aac22cd51",
+      "license_file": "dagre-LICENSE.txt",
+      "license_sha256": "6a349742a6cb219d5a2fc8d0844f6d89a6efc62e20c664450d884fc7ff2d6015"
+    },
+    {
+      "package": "cytoscape-dagre",
+      "version": "2.5.0",
+      "metadata": "https://registry.npmjs.org/cytoscape-dagre/2.5.0",
+      "archive": "https://registry.npmjs.org/cytoscape-dagre/-/cytoscape-dagre-2.5.0.tgz",
+      "npm_integrity": "sha512-VG2Knemmshop4kh5fpLO27rYcyUaaDkRw+6PiX4bstpB+QFt0p2oauMrsjVbUamGWQ6YNavh7x2em2uZlzV44g==",
+      "source_member": "cytoscape-dagre.js",
+      "file": "cytoscape-dagre.js",
+      "sha256": "bf70fe402991dcbff33e05a7e4a5271c78020bb75e85d1c80ab7538e4157112e",
+      "license_file": "cytoscape-dagre-LICENSE.txt",
+      "license_sha256": "fccef1f60ab551f032291912d77bb9e8cd98b99bd1cffe185062ac7216a36d5e"
+    }
+  ]
+}

@@ -120,17 +120,16 @@ function renderFullCard(interaction, index, config, label, expanded) {
         ? `<span style="font-size: 11px; color: var(--text-muted);">${interaction.prompt_tokens || 0} in / ${interaction.completion_tokens || 0} out</span>`
         : '';
 
-    const display = expanded ? 'block' : 'none';
+    const disclosureOpen = expanded ? ' open' : '';
     const promptSections = getLLMPromptSections(interaction).map((section) => `
-            <div style="border-top: 1px solid rgba(255,255,255,0.06);">
-                <button onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'"
-                        style="width: 100%; padding: 8px 16px; background: none; border: none; color: var(--text-muted); cursor: pointer; text-align: left; font-size: 12px;">
-                    ▶ ${section.label}
-                </button>
-                <div style="display: ${display}; padding: 0 16px 12px;">
+            <details${disclosureOpen} style="border-top: 1px solid rgba(255,255,255,0.06);">
+                <summary style="padding: 8px 16px; color: var(--text-muted); cursor: pointer; text-align: left; font-size: 12px;">
+                    ${section.label}
+                </summary>
+                <div style="padding: 0 16px 12px;">
                     <pre style="margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 11px; color: var(--text-secondary); max-height: 300px; overflow-y: auto;">${escapeHtml(section.text)}</pre>
                 </div>
-            </div>
+            </details>
     `).join('');
 
     return `
@@ -153,14 +152,13 @@ function renderFullCard(interaction, index, config, label, expanded) {
             ${!status && interaction.error ? `<div style="padding: 8px 16px; color: var(--accent-red); font-size: 12px; background: rgba(255,107,107,0.08);">${escapeHtml(interaction.error)}</div>` : ''}
             ${nonFatalNote ? `<div style="padding: 8px 16px; color: #ffb340; font-size: 12px; background: rgba(255,179,64,0.08);">Semantic note: ${escapeHtml(interaction.error)}</div>` : ''}
             ${promptSections}
-            <div style="border-top: 1px solid rgba(255,255,255,0.06);">
-                <button onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'"
-                        style="width: 100%; padding: 8px 16px; background: none; border: none; color: var(--text-muted); cursor: pointer; text-align: left; font-size: 12px;">
-                    ▶ Response
-                </button>
-                <div style="display: ${display}; padding: 0 16px 12px;">
+            <details${disclosureOpen} style="border-top: 1px solid rgba(255,255,255,0.06);">
+                <summary style="padding: 8px 16px; color: var(--text-muted); cursor: pointer; text-align: left; font-size: 12px;">
+                    Response
+                </summary>
+                <div style="padding: 0 16px 12px;">
                     <div style="font-size: 11px; color: var(--text-secondary); max-height: 300px; overflow-y: auto;">${formatResponseJson(interaction.response)}</div>
                 </div>
-            </div>
+            </details>
         </div>`;
 }

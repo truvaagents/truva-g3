@@ -1,112 +1,113 @@
-/**
- * API Layer with ETag Caching.
- *
- * Wraps fetch() with automatic ETag-based caching for GET requests.
- * On 304 Not Modified: returns cached data without JSON parsing.
- * On 200: caches data + ETag, returns parsed JSON.
- *
- * Combined with the backend ETag middleware (Phase 1a), the 5s polling
- * becomes near-zero-cost when data hasn't changed.
- */
-
-/** @type {Map<string, {data: *, etag: string, timestamp: number}>} */
+/** JSON API helpers. ETags save transfer bytes; endpoint handlers still run. */
 const cache = new Map();
+const endpointGenerations = new Map();
+let accessGeneration = 0;
 
-/**
- * Fetch a JSON API endpoint with ETag caching.
- *
- * @param {string} endpoint - URL path, e.g., '/api/executions?limit=50'
- * @returns {Promise<{data: *, fromCache: boolean}>}
- * @throws {Error} on non-200/304 responses
- */
-export async function fetchAPI(endpoint) {
+function generation(endpoint) {
+    return `${accessGeneration}:${endpointGenerations.get(endpoint) || 0}`;
+}
+
+function accessError(status, fallback) {
+    const error = new Error(status === 403
+        ? 'Your account does not have permission to view or change this data.'
+        : status === 401 ? 'Please sign in again to access this data.' : fallback);
+    error.status = status;
+    return error;
+}
+
+function assertCurrent(endpoint, expected, signal) {
+    if (signal?.aborted) throw new DOMException('Request cancelled.', 'AbortError');
+    if (generation(endpoint) !== expected) {
+        const error = new Error('Data access changed while loading. Refresh to try again.');
+        error.code = 'REFRESH_REQUIRED';
+        throw error;
+    }
+}
+
+function noStore(response) {
+    return (response.headers.get('Cache-Control') || '').split(',')
+        .some(part => part.trim().split('=')[0].trim().toLowerCase() === 'no-store');
+}
+
+/** @returns {Promise<{data: *, fromCache: boolean}>} */
+export async function fetchAPI(endpoint, options = {}) {
     const cached = cache.get(endpoint);
+    const expected = generation(endpoint);
     const headers = {};
-    if (cached?.etag) {
-        headers['If-None-Match'] = cached.etag;
+    if (cached?.etag) headers['If-None-Match'] = cached.etag;
+    let resp;
+    try {
+        resp = await fetch(endpoint, { headers, signal: options.signal });
+    } catch (error) {
+        // Superseding a load must not invalidate the new request that replaced it.
+        if (!options.signal?.aborted && error.name !== 'AbortError' && generation(endpoint) === expected) cache.delete(endpoint);
+        throw error;
     }
-
-    const resp = await fetch(endpoint, { headers });
-
-    if (resp.status === 304 && cached) {
-        return { data: cached.data, fromCache: true };
-    }
-
-    if (!resp.ok) {
+    assertCurrent(endpoint, expected, options.signal);
+    if (!resp.ok && resp.status !== 304) {
+        if (resp.status === 401 || resp.status === 403) invalidateCache();
+        else cache.delete(endpoint);
         const text = await resp.text().catch(() => resp.statusText);
-        throw new Error(text || `HTTP ${resp.status}`);
+        throw accessError(resp.status, text || `HTTP ${resp.status}`);
     }
-
-    const data = await resp.json();
+    const uncacheable = noStore(resp);
+    if (uncacheable) {
+        cache.delete(endpoint);
+    }
+    if (resp.status === 304) {
+        if (cached && cache.get(endpoint) === cached && !uncacheable) return { data: cached.data, fromCache: true };
+        throw accessError(304, 'Cached data is unavailable. Refresh to try again.');
+    }
+    let data;
+    try {
+        data = await resp.json();
+    } catch (error) {
+        if (!options.signal?.aborted && generation(endpoint) === expected) cache.delete(endpoint);
+        throw error;
+    }
+    assertCurrent(endpoint, expected, options.signal);
     const etag = resp.headers.get('ETag');
-    if (etag) {
-        cache.set(endpoint, { data, etag, timestamp: Date.now() });
-    }
+    if (etag && !uncacheable) cache.set(endpoint, { data, etag });
+    else cache.delete(endpoint);
     return { data, fromCache: false };
 }
 
-/**
- * POST JSON to an API endpoint. No caching.
- *
- * @param {string} endpoint - URL path
- * @param {object} body - request body (serialized as JSON)
- * @returns {Promise<{data: *, ok: boolean}>}
- * @throws {Error} on non-2xx responses
- */
+/** POST responses are never cached or automatically replayed. */
 export async function postAPI(endpoint, body) {
-    const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-
-    if (!resp.ok) {
-        const text = await resp.text().catch(() => resp.statusText);
-        let errorMsg = text;
-        try {
-            errorMsg = JSON.parse(text).error || text;
-        } catch { /* use raw text */ }
-        throw new Error(errorMsg);
-    }
-
-    const data = await resp.json();
+    const { data } = await requestJSON(endpoint, { method: 'POST', body });
     return { data, ok: true };
 }
 
-/**
- * Send a JSON control-plane request and retain response metadata such as ETag.
- * Unlike fetchAPI, mutations are never cached.
- */
+/** Retain response metadata needed for semantic conditional writes. */
 export async function requestJSON(endpoint, options = {}) {
     const headers = { ...(options.headers || {}) };
     if (options.body !== undefined) headers['Content-Type'] = 'application/json';
     const resp = await fetch(endpoint, {
-        method: options.method || 'GET',
-        headers,
+        method: options.method || 'GET', headers, signal: options.signal,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
+    // Invalidate as soon as denial is observed, before awaiting its body.
+    if (resp.status === 401 || resp.status === 403) invalidateCache();
     const text = await resp.text();
     let data = null;
     if (text) {
         try { data = JSON.parse(text); } catch { data = { message: text }; }
     }
     if (!resp.ok) {
-        const error = new Error(data?.message || data?.error || `HTTP ${resp.status}`);
-        error.status = resp.status;
+        const error = accessError(resp.status, data?.message || data?.error || `HTTP ${resp.status}`);
         error.code = data?.code || '';
         throw error;
     }
-    return { data, status: resp.status, etag: resp.headers.get('ETag') || '' };
+    return { data, status: resp.status, etag: resp.headers.get('ETag') || resp.headers.get('X-TruvaG3-Skill-ETag') || '' };
 }
 
-/**
- * Clear cache for a specific endpoint or all endpoints.
- * @param {string} [endpoint] - if omitted, clears all
- */
 export function invalidateCache(endpoint) {
     if (endpoint) {
+        endpointGenerations.set(endpoint, (endpointGenerations.get(endpoint) || 0) + 1);
         cache.delete(endpoint);
     } else {
+        accessGeneration++;
+        endpointGenerations.clear();
         cache.clear();
     }
 }

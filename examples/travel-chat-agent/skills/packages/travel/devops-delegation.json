@@ -1,0 +1,35 @@
+{
+  "display_name": "DevOps Agent Delegation",
+  "description": "Use when a request asks the Travel agent to investigate or operate Kubernetes workloads, infrastructure, or DevOps systems, including their diagnostics, observability, remediation, and verification.",
+  "domains": ["travel", "infrastructure"],
+  "tags": ["delegation", "devops", "kubernetes", "infrastructure", "observability"],
+  "planning_instructions": [
+    "For work whose meaning is Kubernetes, infrastructure, or DevOps investigation or operations, delegate the complete natural-language request to the currently discovered devops-chat-agent capability named devops_operations instead of decomposing it into Travel's own lower-level infrastructure calls.",
+    "For ordinary travel work, continue using the relevant discovered travel capabilities; interpret words such as service, deployment, log, and incident in the context of the user's task.",
+    "For DevOps delegation, use the current discovered capability and input schema as authoritative. The advertised devops_operations contract accepts the complete request in the required string query field and an optional string session_id; use query rather than inventing command or task parameters.",
+    "For one-shot DevOps delegation, omit session_id unless a real DevOps session is available. Keep Travel session identifiers separate from DevOps session identifiers.",
+    "For DevOps delegation, let discovery and the framework resolve the service address, runtime agent identity, and transport envelope. Keep deployment namespaces, credentials, resource identifiers, and approval policy out of this reusable skill.",
+    "If devops-chat-agent/devops_operations is absent from current discovery, explain that DevOps delegation is unavailable and that the requested DevOps work remains incomplete."
+  ],
+  "response_instructions": [
+    "For a request delegated to DevOps, return its synthesized findings and clearly preserve any request for approval or missing information, failure, limitation, or unverified result. Report completion only when the downstream result supports it."
+  ],
+  "tool_hints": [
+    "For semantically DevOps work, select the current discovered devops-chat-agent/devops_operations capability and follow its live input schema."
+  ],
+  "activation_examples": {
+    "should_activate": [
+      "Check whether the example-worker pod is configured securely",
+      "Investigate why this Kubernetes deployment is unhealthy",
+      "Find the logs and trace for a failing agent request",
+      "Restart the deployment after diagnosing the problem"
+    ],
+    "should_not_activate": [
+      "Find a flight from Chicago to Tokyo",
+      "Will it rain during my trip to Oslo?",
+      "Convert 500 USD to Japanese yen",
+      "Find a hotel with room service and log the options for my trip"
+    ]
+  },
+  "change_reason": "Move optional DevOps delegation guidance from the Travel persona into a published planner skill"
+}

@@ -77,13 +77,19 @@ type ParamInfo struct {
 	Example     string `json:"example,omitempty"`
 }
 
-// RegistryResponse is the API response format
+// ViewerCapabilities advertises supported application features, not permissions.
+type ViewerCapabilities struct {
+	ApplicationRecords bool `json:"application_records"`
+}
+
+// RegistryResponse is the service catalogue response.
 type RegistryResponse struct {
-	Services   []ServiceInfo `json:"services"`
-	TotalCount int           `json:"totalCount"`
-	ToolCount  int           `json:"toolCount"`
-	AgentCount int           `json:"agentCount"`
-	Timestamp  time.Time     `json:"timestamp"`
+	ViewerCapabilities ViewerCapabilities `json:"viewer_capabilities"`
+	Services           []ServiceInfo      `json:"services"`
+	TotalCount         int                `json:"totalCount"`
+	ToolCount          int                `json:"toolCount"`
+	AgentCount         int                `json:"agentCount"`
+	Timestamp          time.Time          `json:"timestamp"`
 }
 
 // ViewerReadinessResponse reports whether the Viewer can reach its configured
@@ -743,6 +749,12 @@ func initViewerTelemetry() core.Telemetry {
 
 func main() {
 	flag.Parse()
+	var err error
+	viewerProtection, err = resolveProtectedViewerConfig(os.LookupEnv)
+	if err != nil {
+		log.Fatalf("protected Viewer configuration: %v", err)
+	}
+	protectedHITLHTTPClient = viewerProtection.client(hitlHTTPClient)
 	if err := configureApplicationReads(); err != nil {
 		log.Fatalf("application inspection configuration: %v", err)
 	}
@@ -865,7 +877,7 @@ func main() {
 				})
 			}
 		}()
-		wrapped := withCORS(withGzip(skillHandler.ServeHTTP))
+		wrapped := withCORS(withGzip(withSkillProxyETag(skillHandler).ServeHTTP))
 		mux.HandleFunc("/api/v1/skills", wrapped)
 		mux.HandleFunc("/api/v1/skills/", wrapped)
 	}
@@ -919,7 +931,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           viewerProtection.middleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	if err := server.ListenAndServe(); err != nil {
@@ -936,7 +948,7 @@ func withCORS(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, If-Match, If-None-Match, Idempotency-Key, X-Audit-Reason")
-		w.Header().Set("Access-Control-Expose-Headers", "ETag, Location")
+		w.Header().Set("Access-Control-Expose-Headers", "ETag, X-TruvaG3-Skill-ETag, Location")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -955,6 +967,13 @@ type responseRecorder struct {
 }
 
 func (r *responseRecorder) WriteHeader(code int) {
+	if r.written {
+		return
+	}
+	if code >= 100 && code < 200 {
+		r.ResponseWriter.WriteHeader(code)
+		return
+	}
 	r.statusCode = code
 	r.written = true
 }
@@ -968,34 +987,49 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 }
 
 // withETag computes an ETag from the response body and returns 304 Not Modified
-// when the client sends a matching If-None-Match header. Applied to polled list
-// endpoints so the 5s auto-refresh becomes near-zero-cost when data is unchanged.
+// when an eligible successful GET/HEAD has not changed. It saves response bytes;
+// the handler still runs to construct the representation.
 func withETag(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rec := &responseRecorder{ResponseWriter: w, body: &bytes.Buffer{}}
 		next(rec, r)
 
 		body := rec.body.Bytes()
-
-		// Compute ETag from FNV-1a hash of the response body (fast, stdlib)
-		h := fnv.New64a()
-		_, _ = h.Write(body) // hash.Hash.Write never returns an error
-		etag := fmt.Sprintf(`"%x"`, h.Sum64())
-
-		// If client has this version, return 304
-		if r.Header.Get("If-None-Match") == etag {
-			w.WriteHeader(http.StatusNotModified)
+		status := rec.statusCode
+		if status == 0 {
+			status = http.StatusOK
+		}
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+			status == http.StatusOK && !responseNoStore(w.Header()) {
+			h := fnv.New64a()
+			_, _ = h.Write(body) // hash.Hash.Write never returns an error
+			etag := fmt.Sprintf(`"%x"`, h.Sum64())
+			w.Header().Set("ETag", etag)
+			if r.Header.Get("If-None-Match") == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+		w.WriteHeader(status)
+		if r.Method == http.MethodHead || status == http.StatusNoContent || status == http.StatusNotModified {
 			return
 		}
-
-		// Headers set by the handler are already on the underlying writer
-		// (responseRecorder delegates Header() to the embedded ResponseWriter).
-		w.Header().Set("ETag", etag)
-		w.WriteHeader(rec.statusCode)
 		if _, err := w.Write(body); err != nil {
 			log.Printf("Failed to write HTTP response: %v", err)
 		}
 	}
+}
+
+func responseNoStore(header http.Header) bool {
+	for _, value := range header.Values("Cache-Control") {
+		for _, directive := range strings.Split(value, ",") {
+			name, _, _ := strings.Cut(strings.TrimSpace(directive), "=")
+			if strings.EqualFold(strings.TrimSpace(name), "no-store") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // gzipResponseWriter wraps an http.ResponseWriter to gzip the output.
@@ -1145,11 +1179,12 @@ func handleServices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := RegistryResponse{
-		Services:   nonNilSlice(services),
-		TotalCount: len(services),
-		ToolCount:  toolCount,
-		AgentCount: agentCount,
-		Timestamp:  time.Now(),
+		ViewerCapabilities: ViewerCapabilities{ApplicationRecords: viewerProtection == nil},
+		Services:           nonNilSlice(services),
+		TotalCount:         len(services),
+		ToolCount:          toolCount,
+		AgentCount:         agentCount,
+		Timestamp:          time.Now(),
 	}
 
 	writeJSON(w, response)
@@ -1358,6 +1393,17 @@ func getMockServices() []ServiceInfo {
 // Uses a 10s timeout to avoid hanging on unresponsive agents.
 var hitlHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
+// Built once from immutable protected configuration. Ordinary mode retains the
+// original client, including existing test/application injection behavior.
+var protectedHITLHTTPClient *http.Client
+
+func viewerHITLClient() *http.Client {
+	if viewerProtection != nil {
+		return protectedHITLHTTPClient
+	}
+	return hitlHTTPClient
+}
+
 func doHITLGet(ctx context.Context, targetURL string) (*http.Response, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1375,7 +1421,7 @@ func doHITLGet(ctx context.Context, targetURL string) (*http.Response, error) {
 		return nil, err
 	}
 	// #nosec G704 -- the request uses the same validated registry-owned URL.
-	return hitlHTTPClient.Do(req)
+	return viewerHITLClient().Do(req)
 }
 
 func doHITLPost(ctx context.Context, targetURL string, body io.Reader) (*http.Response, error) {
@@ -1395,7 +1441,7 @@ func doHITLPost(ctx context.Context, targetURL string, body io.Reader) (*http.Re
 	// The destination comes from the framework service registry or a stored
 	// checkpoint created by that registered service, and is validated above.
 	// #nosec G704 -- validated framework-owned service URL.
-	return hitlHTTPClient.Do(req)
+	return viewerHITLClient().Do(req)
 }
 
 // Discovery client singleton. The viewer talks to core.Discovery so the
@@ -1980,7 +2026,7 @@ func getAgentAddress(agentName string) (string, error) {
 			if svc.Address == "" || svc.Port == 0 {
 				return "", fmt.Errorf("agent %q found in registry but has no address/port", agentName)
 			}
-			return fmt.Sprintf("http://%s:%d", svc.Address, svc.Port), nil
+			return viewerProtection.agentOrigin(svc.Address, svc.Port)
 		}
 	}
 	return "", fmt.Errorf("agent %q not found in service registry — it may be offline or not yet registered", agentName)
@@ -3569,7 +3615,10 @@ func getAgentHITLCheckpointSummaries(ctx context.Context) ([]HITLCheckpointSumma
 		if svc.Address == "" || svc.Port == 0 || svc.Type != "agent" {
 			continue
 		}
-		agentURL := fmt.Sprintf("http://%s:%d", svc.Address, svc.Port)
+		agentURL, err := viewerProtection.agentOrigin(svc.Address, svc.Port)
+		if err != nil {
+			continue
+		}
 		resp, err := doHITLGet(ctx, agentURL+"/hitl/checkpoints")
 		if err != nil {
 			log.Printf("Warning: could not reach agent %s for HITL checkpoints: %v", svc.Name, err)
@@ -3611,7 +3660,10 @@ func getAgentHITLCheckpoint(ctx context.Context, checkpointID string) (*HITLChec
 		if svc.Address == "" || svc.Port == 0 || svc.Type != "agent" {
 			continue
 		}
-		agentURL := fmt.Sprintf("http://%s:%d", svc.Address, svc.Port)
+		agentURL, err := viewerProtection.agentOrigin(svc.Address, svc.Port)
+		if err != nil {
+			continue
+		}
 		resp, err := doHITLGet(ctx, agentURL+"/hitl/checkpoints/"+url.PathEscape(checkpointID))
 		if err != nil {
 			continue
@@ -3662,7 +3714,10 @@ func getAgentHITLCheckpointsByRequestID(ctx context.Context, requestID string) (
 			continue
 		}
 		g.Go(func() error {
-			agentURL := fmt.Sprintf("http://%s:%d", svc.Address, svc.Port)
+			agentURL, err := viewerProtection.agentOrigin(svc.Address, svc.Port)
+			if err != nil {
+				return nil
+			}
 			resp, err := doHITLGet(ctx, agentURL+"/hitl/checkpoints?request_id="+url.QueryEscape(requestID))
 			if err != nil {
 				return nil // swallow per-agent failures, same as the sequential implementation

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/truvaagents/truva-g3/core"
 )
@@ -13,8 +15,46 @@ type PlaywrightTool struct {
 	*core.BaseTool
 	browser *BrowserClient
 	s3      *S3Client
+	storeMu sync.RWMutex
 	store   *TestStore
-	s3Ready bool // true if S3 client initialized successfully
+	// Once stopped, ownership cannot be reopened by a late recovery attempt.
+	storeStopped   bool
+	storeCloseOnce sync.Once
+	storeCloseErr  error
+	s3Ready        bool // true if S3 client initialized successfully
+}
+
+// testStore snapshots availability for one group of metadata operations. It does
+// not hold a lock during Redis I/O or promise that a shutdown cannot close it.
+func (t *PlaywrightTool) testStore() *TestStore {
+	t.storeMu.RLock()
+	defer t.storeMu.RUnlock()
+	return t.store
+}
+
+func (t *PlaywrightTool) installTestStore(ctx context.Context, store *TestStore) bool {
+	t.storeMu.Lock()
+	defer t.storeMu.Unlock()
+	if store == nil || t.storeStopped || t.store != nil || ctx.Err() != nil {
+		return false
+	}
+	t.store = store
+	return true
+}
+
+// closeTestStore runs after Framework.Run's bounded HTTP/runnable drain, or on
+// startup failure. A timed-out drain may still have active operations; those
+// retain the existing client's concurrent-Close/error behavior.
+func (t *PlaywrightTool) closeTestStore() error {
+	t.storeCloseOnce.Do(func() {
+		t.storeMu.Lock()
+		t.storeStopped = true
+		store := t.store
+		t.store = nil
+		t.storeMu.Unlock()
+		t.storeCloseErr = store.Close()
+	})
+	return t.storeCloseErr
 }
 
 // --- Request Types ---

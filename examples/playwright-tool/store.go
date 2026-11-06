@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -13,8 +14,10 @@ import (
 
 // TestStore indexes test run metadata in the versioned shared DB-0 keyspace.
 type TestStore struct {
-	rdb      redis.UniversalClient
-	keyspace core.RedisKeyspace
+	rdb       redis.UniversalClient
+	keyspace  core.RedisKeyspace
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // RunMetadata is the metadata stored in Redis for each test run
@@ -272,5 +275,13 @@ func (s *TestStore) UpdateScriptRunStatus(ctx context.Context, site, name, statu
 
 // Close closes the Redis connection
 func (s *TestStore) Close() error {
-	return s.rdb.Close()
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		if s.rdb != nil {
+			s.closeErr = s.rdb.Close()
+		}
+	})
+	return s.closeErr
 }

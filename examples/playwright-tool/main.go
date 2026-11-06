@@ -50,13 +50,30 @@ func run() error {
 		}
 	}()
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	defer func() {
+		if err := tool.closeTestStore(); err != nil {
+			tool.Logger.WarnWithContext(ctx, "Test store shutdown error", map[string]interface{}{
+				"operation": "test_store_shutdown", "error_type": "redis_close_error", "error": "test store close failed",
+			})
+		}
+	}()
+
 	// Initialize Redis store for test result indexing (best-effort)
-	store, err := NewTestStore(redisResolution, redisKeyspace)
+	factory := func() (*TestStore, error) { return NewTestStore(redisResolution, redisKeyspace) }
+	var recovery *testStoreRecovery
+	store, err := factory()
+	if ctx.Err() != nil {
+		_ = store.Close()
+		return nil
+	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Test store initialization failed: %v (results will not be indexed)\n", err)
+		recovery = &testStoreRecovery{tool: tool, factory: factory}
 	} else {
-		tool.store = store
-		defer store.Close()
+		if !tool.installTestStore(ctx, store) {
+			_ = store.Close()
+		}
 	}
 
 	// Get port configuration
@@ -93,17 +110,32 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("Failed to create framework: %w", err)
 	}
+	if recovery != nil {
+		// Register only after framework construction configures the logger.
+		tool.Logger.WarnWithContext(ctx, "Test store initialization failed; background recovery enabled", map[string]interface{}{
+			"operation": "test_store_initialize", "error_type": "redis_startup_error",
+			"error": "test store initialization failed", "retry_seconds": testStoreRetryInterval.Seconds(),
+		})
+		recovery.onFailure = func(error) {
+			tool.Logger.WarnWithContext(ctx, "Test store recovery attempt failed", map[string]interface{}{
+				"operation": "test_store_recovery", "error_type": "redis_startup_error",
+				"error": "test store initialization failed", "retry_seconds": testStoreRetryInterval.Seconds(),
+			})
+		}
+		recovery.onRecovered = func() {
+			tool.Logger.InfoWithContext(ctx, "Test store connection recovered", map[string]interface{}{
+				"operation": "test_store_recovery", "service": "playwright-tool",
+			})
+		}
+		framework.RegisterRunnable(recovery)
+	}
 
 	tool.Logger.Info("Playwright Tool Service Starting", map[string]interface{}{
 		"service":  "playwright-tool",
 		"port":     port,
 		"s3_ready": tool.s3Ready,
-		"store":    tool.store != nil,
+		"store":    tool.testStore() != nil,
 	})
-
-	// Set up graceful shutdown
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	if err := framework.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("run framework: %w", err)

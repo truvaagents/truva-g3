@@ -223,10 +223,8 @@ function renderMemoryEvents() {
         // Truncated summary preview
         const preview = truncateText(evt.summary || '', 70);
 
-        return `<div class="memory-event-card ${selectedClass}" data-event-idx="${idx}"
-            style="border-color: rgba(${_rgb}, 0.25); box-shadow: ${_baseShadow};"
-            onmouseenter="this.style.boxShadow='${_hoverShadow}'; this.style.borderColor='rgba(${_rgb}, 0.4)';"
-            onmouseleave="this.style.boxShadow='${_baseShadow}'; this.style.borderColor='rgba(${_rgb}, 0.25)';">
+        return `<div class="memory-event-card csp-hover-card ${selectedClass}" data-event-idx="${idx}"
+            style="--card-border: rgba(${_rgb}, 0.25); --card-hover-border: rgba(${_rgb}, 0.4); --card-shadow: ${_baseShadow}; --card-hover-shadow: ${_hoverShadow}; border-color: var(--active-card-border); box-shadow: var(--active-card-shadow);">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
                 <span style="display: inline-flex; align-items: center; justify-content: center; min-width: 130px; padding: 4px 10px; border-radius: 20px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; background: ${outcomeBadgeBg}; color: ${outcomeBadgeColor}; border: 1px solid ${outcomeBadgeBorder};">${escapeHtml(evt.action_type || '-')}</span>
                 <span style="font-size: 11px; color: var(--text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(preview)}</span>

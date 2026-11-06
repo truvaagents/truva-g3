@@ -228,7 +228,8 @@ Local Development:
   status        Show status of local/docker/k8s resources
 
 Docker:
-  docker             Build Docker image
+  docker             Build image from local framework source
+  docker-standalone  Build released-module image only (no deployment)
   docker-run         Run Docker container locally with mock data
   docker-run redis   Run Docker container with URL or structured Redis configuration
 
@@ -299,6 +300,49 @@ no activity. Historical events and execution/debug records are separate views.
 | `-redis-url` | unset | Deprecated DB-0 standalone URL override; use connection environment for new deployments |
 | `-namespace` | `default` | Deployment namespace shared by all versioned DB-0 keys |
 | `-port` | `8361` | HTTP server port |
+
+### Optional protected Viewer integration
+
+Ordinary local/Kind behavior remains the default. Protected mode is an integration
+for a Viewer behind a non-bypassable gateway/mesh that already verifies JWT
+signatures, issuer/audience and authorization. That boundary must strip caller
+identity headers, inject the verified requester's bearer credential, restrict
+direct access, and enforce same-origin/CSRF and JSON-content checks for cookie-backed
+writes. The Viewer parses claims only to reject invalid inputs; it does not
+validate signatures or supply an authentication/authorization service.
+
+Supply these through the **process environment**, not additional `.env` keys:
+
+| Setting | Required protected-mode value |
+|---|---|
+| `TRUVAG3_VIEWER_PROTECTED_MODE` | `true` enables; unset or `false` retains ordinary mode |
+| `TRUVAG3_VIEWER_REQUESTER_ISSUER` | Exact expected HTTPS issuer URL |
+| `TRUVAG3_VIEWER_REQUESTER_AUDIENCE` | Exact nonempty audience |
+| `TRUVAG3_VIEWER_RELAY_ORIGINS` | Nonempty JSON array of exact HTTP(S) origins with explicit ports, e.g. `["https://review.team.svc.cluster.local:8443"]` |
+| `TRUVAG3_VIEWER_JAEGER_PATH` | Canonical same-origin base path, e.g. `/observability/tracing` or `/` |
+
+Malformed or incomplete settings fail startup. Protection-specific settings while
+mode is disabled also fail, as do legacy `TRUVAG3_SECURITY_SHARED` and
+`TRUVAG3_SECURITY_SHARED_RELAYS` settings; migrate those explicitly. The normal
+setup script does not provision this gateway or carry these settings into a
+protected deployment. Its local `.env` parser intentionally remains restricted
+to memory domains.
+
+Every `/api/` request is gated except exact GET health/readiness probes. API
+responses use `private, no-store`. HITL requests carry only the current requester's
+bearer token to an exact admitted discovery origin and finite HITL route; redirects
+and environment proxies are disabled, and expiry is checked again before forwarding.
+HTTP recipients are suitable only inside the externally enforced boundary. Tokens
+are not placed in browser storage, URLs or public responses. Trace redirects use
+the configured same-origin path; ordinary mode retains `JAEGER_UI_URL`.
+
+**Application-record inspection is unavailable in protected mode.** The ordinary
+endpoint uses a separate component-read credential protocol. After requester
+admission, protected inspection returns HTTP503 with
+`APPLICATION_INSPECTION_UNAVAILABLE_IN_PROTECTED_MODE` before inspector lookup.
+`/api/services` advertises `viewer_capabilities.application_records=false`, and the
+UI replaces the credential form with an explanation. Ordinary inspection remains
+available and advertises `true`. This feature flag is not an authorization grant.
 
 ### Environment Variables
 
@@ -590,8 +634,11 @@ each value is a JSON object:
 ### Build and Run
 
 ```bash
-# Build
+# Build from the local framework checkout
 ./setup.sh docker
+
+# Independently verify the released-module Dockerfile (build only)
+./setup.sh docker-standalone
 
 # Run with mock data
 ./setup.sh docker-run
@@ -649,32 +696,35 @@ registry-viewer-app/
 
 ## Extracting to Standalone Repository
 
-The application is independently deployable, but its source is not currently a
-single-folder standalone module. Its module path is
-`github.com/truvaagents/truva-g3/examples/registry-viewer-app`, and `go.mod`
-imports `core`, `memory`, `orchestration`, and `telemetry` through local
-`../../...` replacements.
+The Viewer Go module pins released TruvaG3 versions and has no local `replace`
+directives. `Dockerfile` builds with those pins and `GOWORK=off`.
+`./setup.sh docker-standalone` verifies that path using only this directory as
+the build context, producing `registry-viewer-standalone:local` without deployment.
+The normal `./setup.sh docker` and deployment commands use `Dockerfile.workspace`
+and build the framework code from the current checkout.
 
-To move it to a separate repository:
+For a separate repository, copy the complete directory, including `static/`,
+its vendor scripts and licenses, and the tests. Update the module path and replace
+the repository-specific setup wrapper with your deployment integration. Run the
+Go and frontend tests before building. The Go application and standalone Dockerfile
+do not require sibling framework source directories.
 
-1. Copy the complete `registry-viewer-app` directory, including `static/` and
-   the frontend tests.
-2. Choose the new module path and update the `module` directive.
-3. Remove the local `replace` directives and depend on released TruvaG3 module
-   versions that contain the APIs used by the viewer, or copy and maintain those
-   modules in the new repository.
-4. Update the container build. In this repository, `setup.sh` deliberately uses
-   `Dockerfile.workspace` so it can copy the local framework modules. The
-   source-level `Dockerfile` is usable only after the dependencies above resolve
-   without reaching outside its build context.
-5. Run the Go and frontend tests before building the binary or image.
+### Browser assets and failure behavior
 
-```bash
-# After updating the module dependencies in the new repository
-GOWORK=off go test ./...
-go build -o registry-viewer .
-./registry-viewer
-```
+The DAG uses the local scripts under `static/js/vendor/`; `packages.json` records
+the pinned versions and hashes, alongside their license files. The Viewer needs
+no third-party script request for graph layout. First-party controls, including
+prompt and response controls, use CSP-compatible event listeners with no inline
+JavaScript event handlers. An enforcing gateway may use `script-src 'self'`;
+the current UI still requires inline styles.
+
+HITL and LLM Debug show API failures explicitly and clear inaccessible data.
+Sample data is available through the backend's explicit mock mode. GET caching
+honors `no-store`; denial invalidates cached access, and late responses cannot
+restore invalidated data. Body ETags save transfer bytes while handlers still
+construct their responses. Skills revision ETags are semantic concurrency tokens:
+`X-TruvaG3-Skill-ETag` mirrors the exact token for proxies that omit `ETag`, and
+browser/setup consumers prefer the standard header when available.
 
 ## Port Allocation
 

@@ -1,0 +1,14 @@
+# Keep local configuration and generated files outside the standalone context.
+.env
+.env.*
+.git
+**/.git
+*.key
+*.pem
+*.p12
+*.pfx
+*.kubeconfig
+registry-viewer
+coverage*.out
+*.log
+.DS_Store

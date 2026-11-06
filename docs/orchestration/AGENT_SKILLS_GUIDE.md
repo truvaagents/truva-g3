@@ -276,6 +276,7 @@ cd ../geocoding-tool && ./setup.sh deploy && cd ../travel-chat-agent
 The script publishes these packages through the Registry Viewer host:
 
 - `travel/action-verification` — `always`
+- `travel/devops-delegation` — `always` (optional guidance for a discovered DevOps agent)
 - `travel/travel-search-preparation` — `auto`
 - `travel/currency-conversion` — `auto`
 - `travel/travel-readiness-assessment` — `auto`

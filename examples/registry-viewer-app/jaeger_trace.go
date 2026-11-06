@@ -20,6 +20,9 @@ func jaegerBrowserTraceURL(traceID string) (string, error) {
 	if !jaegerTraceIDPattern.MatchString(traceID) {
 		return "", fmt.Errorf("trace ID is invalid")
 	}
+	if viewerProtection != nil {
+		return strings.TrimRight(viewerProtection.jaegerPath, "/") + "/trace/" + traceID, nil
+	}
 	base, err := url.Parse(jaegerUIURL)
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") ||
 		base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
@@ -36,5 +39,8 @@ func handleJaegerTraceRedirect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// The base is validated operator configuration; the request contributes
+	// only a validated hex trace ID. Protected mode uses a canonical local path.
+	// #nosec G710 -- no requester-supplied redirect origin or path is admitted.
 	http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 }
