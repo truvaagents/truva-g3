@@ -79,6 +79,7 @@ func validPlanJSON(terminal *bool) string {
 				"namespace":   "default",
 				"instruction": "Do something",
 				"depends_on":  []string{},
+				"metadata":    map[string]interface{}{"capability": "test_capability"},
 			},
 		},
 	}
