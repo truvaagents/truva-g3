@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -150,6 +151,52 @@ func TestReResolve_CancelledContext(t *testing.T) {
 	}
 	if ai.callCount > 0 {
 		t.Error("LLM should not be called when context is cancelled")
+	}
+}
+
+func TestReResolve_CapabilityBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		capability *EnhancedCapability
+		noAI       bool
+		cancelled  bool
+		wantError  string
+		wantCalls  int
+	}{
+		{name: "missing schema", wantError: "capability schema is required"},
+		{name: "disabled AI remains a no-op", noAI: true},
+		{name: "cancellation takes precedence", cancelled: true, wantError: context.Canceled.Error()},
+		{name: "zero-argument capability", capability: &EnhancedCapability{Name: "inspect"}, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ai := &contextualReResolverMockAI{response: `{"should_retry":false,"analysis":"No correction"}`}
+			resolver := NewContextualReResolver(ai, nil)
+			if tc.noAI {
+				resolver = NewContextualReResolver(nil, nil)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.cancelled {
+				cancel()
+			}
+			result, err := resolver.ReResolve(ctx, &ExecutionContext{
+				StepID: "step-15", Capability: tc.capability,
+				HTTPStatus: http.StatusNotFound, ErrorResponse: "404 page not found",
+			})
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) || result != nil {
+					t.Fatalf("result=%+v error=%v; want %q", result, err, tc.wantError)
+				}
+				if tc.cancelled && !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation identity lost: %v", err)
+				}
+			} else if err != nil || result == nil || result.ShouldRetry {
+				t.Fatalf("expected non-retry result, got result=%+v error=%v", result, err)
+			}
+			if ai.callCount != tc.wantCalls {
+				t.Fatalf("AI calls=%d, want %d", ai.callCount, tc.wantCalls)
+			}
+		})
 	}
 }
 

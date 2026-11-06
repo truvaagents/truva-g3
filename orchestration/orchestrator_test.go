@@ -206,13 +206,14 @@ func TestAIOrchestrator_ValidatePlan(t *testing.T) {
 			{
 				StepID:    "step-1",
 				AgentName: "non-existent-agent",
+				Metadata:  map[string]interface{}{"capability": "capability1"},
 			},
 		},
 	}
 
 	err = orchestrator.validatePlan(invalidPlan1)
-	if err == nil {
-		t.Error("Expected validation to fail for non-existent agent")
+	if err == nil || !strings.Contains(err.Error(), "agent non-existent-agent not found") {
+		t.Errorf("Expected missing-agent validation, got %v", err)
 	}
 
 	// Test invalid plan - non-existent capability
@@ -242,13 +243,14 @@ func TestAIOrchestrator_ValidatePlan(t *testing.T) {
 				StepID:    "step-1",
 				AgentName: "test-agent",
 				DependsOn: []string{"non-existent-step"},
+				Metadata:  map[string]interface{}{"capability": "capability1"},
 			},
 		},
 	}
 
 	err = orchestrator.validatePlan(invalidPlan3)
-	if err == nil {
-		t.Error("Expected validation to fail for missing dependency")
+	if err == nil || !strings.Contains(err.Error(), "dependency non-existent-step not found") {
+		t.Errorf("Expected missing-dependency validation, got %v", err)
 	}
 }
 

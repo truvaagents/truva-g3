@@ -9,6 +9,17 @@ import (
 	"strings"
 )
 
+// stepCapabilityName validates the capability identity required by SmartExecutor's
+// HTTP dispatch contract. It preserves the supplied name and does not require a
+// parameter schema or impose metadata requirements on custom Executor implementations.
+func stepCapabilityName(step RoutingStep) (string, error) {
+	name, ok := step.Metadata["capability"].(string)
+	if !ok || strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("step %q requires metadata.capability as a non-empty string", step.StepID)
+	}
+	return name, nil
+}
+
 // componentError preserves the original error object. Retry policy is parsed
 // separately so an omitted/null/wrongly typed declaration is not false.
 func componentError(body string) json.RawMessage {

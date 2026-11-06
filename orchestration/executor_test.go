@@ -249,6 +249,7 @@ func TestSmartExecutor_ExecuteStep(t *testing.T) {
 	stepNotFound := RoutingStep{
 		StepID:    "test-step",
 		AgentName: "non-existent-agent",
+		Metadata:  map[string]interface{}{"capability": "test_cap"},
 	}
 
 	result = executor.executeStep(ctx, stepNotFound)

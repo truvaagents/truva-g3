@@ -127,6 +127,10 @@ func (r *ContextualReResolver) ReResolve(
 		return nil, ctx.Err()
 	}
 
+	if execCtx.Capability == nil {
+		return nil, fmt.Errorf("capability schema is required for contextual re-resolution")
+	}
+
 	// Build comprehensive prompt with ALL context (source data trimmed if needed)
 	prompt := r.buildReResolutionPrompt(ctx, execCtx)
 

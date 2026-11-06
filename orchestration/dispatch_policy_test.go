@@ -10,7 +10,165 @@ import (
 	"time"
 
 	"github.com/truvaagents/truva-g3/core"
+	"github.com/truvaagents/truva-g3/telemetry"
+	"go.opentelemetry.io/otel/codes"
 )
+
+func TestInvalidCapabilityWarningPreservesRequestCorrelation(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		orchestrator  string
+		core          string
+		baggage       string
+		wantRequestID string
+	}{
+		{name: "orchestrator identity", orchestrator: "managed-request", wantRequestID: "managed-request"},
+		{name: "core identity", core: "direct-request", wantRequestID: "direct-request"},
+		{name: "baggage identity", baggage: "baggage-request", wantRequestID: "baggage-request"},
+		{name: "managed identity precedes inherited context", orchestrator: "managed-request", core: "older-core-request", baggage: "older-baggage-request", wantRequestID: "managed-request"},
+		{name: "core identity precedes inherited baggage", core: "direct-request", baggage: "older-baggage-request", wantRequestID: "direct-request"},
+		{name: "no request identity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			if tc.orchestrator != "" {
+				ctx = WithRequestID(ctx, tc.orchestrator)
+			}
+			if tc.core != "" {
+				ctx = core.WithRequestID(ctx, tc.core)
+			}
+			if tc.baggage != "" {
+				ctx = telemetry.WithBaggage(ctx, "request_id", tc.baggage)
+			}
+			logger := &TestLogger{}
+			executor := NewSmartExecutor(nil)
+			executor.SetLogger(logger)
+			_, err := executor.ExecuteStep(ctx, RoutingStep{StepID: "step-1", AgentName: "target"})
+			if err == nil || !strings.Contains(err.Error(), "metadata.capability") {
+				t.Fatalf("expected capability validation error, got %v", err)
+			}
+			warnings := logger.GetLogsByLevel("WARN")
+			if len(warnings) != 1 || warnings[0].Fields["operation"] != "step_validation" {
+				t.Fatalf("expected one validation warning, got %+v", warnings)
+			}
+			requestID, present := warnings[0].Fields["request_id"]
+			if tc.wantRequestID == "" && present || tc.wantRequestID != "" && requestID != tc.wantRequestID {
+				t.Fatalf("validation warning lost request correlation: %+v, want %q", warnings, tc.wantRequestID)
+			}
+			if GetRequestID(ctx) != tc.orchestrator || core.GetRequestID(ctx) != tc.core || telemetry.GetBaggage(ctx)["request_id"] != tc.baggage {
+				t.Fatal("validation changed the caller's request context")
+			}
+		})
+	}
+}
+
+func TestInvalidCapabilityRejectedBeforeStepSideEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata map[string]interface{}
+	}{
+		{"nil metadata", nil},
+		{"missing capability", map[string]interface{}{"Well": "placeholder"}},
+		{"null capability", map[string]interface{}{"capability": nil}},
+		{"non-string capability", map[string]interface{}{"capability": 42}},
+		{"empty capability", map[string]interface{}{"capability": ""}},
+		{"blank capability", map[string]interface{}{"capability": " \t\n\u2003"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := setupExecutorTestTracer(t)
+			catalog := &AgentCatalog{agents: map[string]*AgentInfo{"target": {
+				Registration: &core.ServiceRegistration{ID: "target", Name: "target", Address: "localhost", Port: 8080},
+			}}}
+			e := NewSmartExecutor(catalog)
+			logger := &TestLogger{}
+			if tc.metadata != nil {
+				e.SetLogger(logger)
+			}
+			rt := NewMockRoundTripper()
+			e.httpClient = &http.Client{Transport: rt}
+			ai := newMockAIClientWithResponse(map[string]interface{}{"should_retry": false})
+			e.errorAnalyzer = NewErrorAnalyzer(ai, nil)
+			e.contextualReResolver = NewContextualReResolver(ai, nil)
+			approval := &recordingInterruptController{}
+			e.interruptController = approval
+			step := RoutingStep{StepID: "step-15", AgentName: "target", Metadata: tc.metadata}
+			ctx := WithRequestID(t.Context(), "capability-rejection-request")
+			result := e.executeStep(ctx, step)
+			if result.Success || !strings.Contains(result.Error, "metadata.capability") || !strings.Contains(result.Error, step.StepID) {
+				t.Fatalf("expected actionable capability rejection: %+v", result)
+			}
+			if result.Attempts != 0 || result.DispatchCount != 0 || len(result.Dispatches) != 0 || rt.GetCallCount() != 0 || len(ai.calls) != 0 || approval.observedStepID != "" {
+				t.Fatalf("invalid capability caused side effects: result=%+v HTTP=%d AI=%d approval=%q", result, rt.GetCallCount(), len(ai.calls), approval.observedStepID)
+			}
+			if result.StartTime.IsZero() || result.EndTime.Before(result.StartTime) || result.Duration < 0 {
+				t.Fatalf("rejected step timing missing: %+v", result)
+			}
+			if tc.metadata != nil {
+				warnings := logger.GetLogsByLevel("WARN")
+				if len(warnings) != 1 || warnings[0].Fields["operation"] != "step_validation" || warnings[0].Fields["request_id"] != "capability-rejection-request" || warnings[0].Fields["error"] != result.Error {
+					t.Fatalf("rejection log lost operation, correlation or error: %+v", warnings)
+				}
+			}
+			spans := recorder.Ended()
+			if len(spans) != 1 || spans[0].Name() != "orchestrator.step.step-15" || spans[0].Status().Code != codes.Error {
+				t.Fatalf("rejected step must close its span with error: %v", spans)
+			}
+			if result, err := e.ExecuteStep(t.Context(), step); err == nil || result != nil || !strings.Contains(err.Error(), "metadata.capability") {
+				t.Fatalf("public ExecuteStep failure contract changed: result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestNamedCapabilityWithoutSchemaPreservesDispatchFailure(t *testing.T) {
+	catalog := &AgentCatalog{agents: map[string]*AgentInfo{"target": {
+		Registration: &core.ServiceRegistration{ID: "target", Name: "target", Address: "localhost", Port: 8080},
+	}}}
+	e := NewSmartExecutor(catalog)
+	rt := NewMockRoundTripper()
+	const body = "404 page not found"
+	rt.SetResponse("http://localhost:8080/api/inspect", http.StatusNotFound, body)
+	e.httpClient = &http.Client{Transport: rt}
+	ai := newMockAIClientWithResponse(map[string]interface{}{"should_retry": false, "reason": "Endpoint is unavailable"})
+	e.errorAnalyzer = NewErrorAnalyzer(ai, nil)
+	e.contextualReResolver = NewContextualReResolver(ai, nil)
+	e.semanticRetryForIndependentSteps = true
+	result := e.executeStep(t.Context(), RoutingStep{
+		StepID: "step-15", AgentName: "target", Metadata: map[string]interface{}{"capability": "inspect"},
+	})
+	if result.Success || !strings.Contains(result.Error, body) || strings.Contains(result.Error, "panic") || strings.Contains(result.Error, "schema is required") {
+		t.Fatalf("original failure replaced: %+v", result)
+	}
+	if result.DispatchCount != 1 || len(result.Dispatches) != 1 || rt.GetCallCount() != 1 || result.Dispatches[0].Response != body || result.Dispatches[0].Success {
+		t.Fatalf("original dispatch evidence lost: %+v", result)
+	}
+	if len(ai.calls) != 1 || result.EndTime.Before(result.StartTime) {
+		t.Fatalf("unexpected retry or incomplete step: AI calls=%d result=%+v", len(ai.calls), result)
+	}
+}
+
+func TestCapabilityNamePreservesNamedEndpointFallback(t *testing.T) {
+	for _, withSchema := range []bool{false, true} {
+		t.Run(fmt.Sprintf("schema=%v", withSchema), func(t *testing.T) {
+			agent := &AgentInfo{Registration: &core.ServiceRegistration{ID: "target", Name: "target", Address: "localhost", Port: 8080}}
+			if withSchema {
+				agent.Capabilities = []EnhancedCapability{{Name: "inspect", Endpoint: "/api/inspect"}}
+			}
+			e := NewSmartExecutor(&AgentCatalog{agents: map[string]*AgentInfo{"target": agent}})
+			rt := NewMockRoundTripper()
+			rt.SetResponse("http://localhost:8080/api/inspect", http.StatusOK, `{"success":true}`)
+			e.httpClient = &http.Client{Transport: rt}
+			result := e.executeStep(t.Context(), RoutingStep{StepID: "step-1", AgentName: "target", Metadata: map[string]interface{}{"capability": "inspect"}})
+			if !result.Success || result.Capability != "inspect" || result.DispatchCount != 1 || rt.GetCallCount() != 1 {
+				t.Fatalf("named zero-argument call rejected: %+v", result)
+			}
+		})
+	}
+	step := RoutingStep{StepID: "step-1", Metadata: map[string]interface{}{"capability": " inspect "}}
+	if got, err := stepCapabilityName(step); err != nil || got != " inspect " {
+		t.Fatalf("capability identity was rewritten: name=%q err=%v", got, err)
+	}
+}
 
 func TestRetryDeclarationPresence(t *testing.T) {
 	for _, tc := range []struct {
