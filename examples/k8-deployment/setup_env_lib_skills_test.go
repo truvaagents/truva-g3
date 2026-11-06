@@ -19,6 +19,7 @@ type skillSetupMock struct {
 	packageBody   json.RawMessage
 	putCount      int
 	idempotencies map[string]struct{}
+	etagHeader    string
 }
 
 func (mock *skillSetupMock) serveHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -105,7 +106,11 @@ func (mock *skillSetupMock) writePublished(writer http.ResponseWriter) {
 		"ref":     map[string]any{"namespace": "test", "name": "demo"},
 		"version": mock.version, "manifest_hash": manifestHash,
 	}
-	writer.Header().Set("ETag", fmt.Sprintf(`"token-%d"`, mock.version))
+	name := mock.etagHeader
+	if name == "" {
+		name = "ETag"
+	}
+	writer.Header().Set(name, fmt.Sprintf(`"token-%d"`, mock.version))
 	_ = json.NewEncoder(writer).Encode(map[string]any{
 		"revision": map[string]any{
 			"ref": ref,
@@ -610,4 +615,62 @@ source "$SKILL_SETUP_LIBRARY" >/dev/null
 	)
 	command.Env = append(command.Env, extraEnv...)
 	return command.CombinedOutput()
+}
+
+func TestSkillRevisionHeaderSelection(t *testing.T) {
+	for _, scenario := range []struct{ name, headers, want string }{
+		{"standard", "ETag: \"exact token\"\r\n", `"exact token"`},
+		{"mirror", "x-truvag3-skill-etag: \"mirror\"\r\n", `"mirror"`},
+		{"precedence", "ETag: \"standard\"\r\nX-TruvaG3-Skill-ETag: \"mirror\"\r\n", `"standard"`},
+		{"ignore-folded-mirror", "ETag: \"standard\"\r\nX-TruvaG3-Skill-ETag: \"mirror\"\r\n continued\r\n", `"standard"`},
+		{"last-response", "HTTP/1.1 100 Continue\r\nETag: \"old\"\r\n\r\nHTTP/1.1 200 OK\r\nX-TruvaG3-Skill-ETag: \"new\"\r\n", `"new"`},
+		{"missing", "Content-Type: application/json\r\n", ""},
+		{"malformed-standard", "ETag: wrong\r\nX-TruvaG3-Skill-ETag: \"mirror\"\r\n", ""},
+		{"duplicate", "ETag: \"one\"\r\netag: \"two\"\r\n", ""},
+		{"unquoted", "ETag: value\r\n", ""},
+		{"empty", "ETag: \"\"\r\n", ""},
+		{"embedded-cr", "ETag: \"bad\rvalue\"\r\n", ""},
+		{"folded", "ETag: \"one\"\r\n continued\r\n", ""},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "headers")
+			if err := os.WriteFile(path, []byte(scenario.headers), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("bash", "-c", `source "$SKILL_SETUP_LIBRARY" >/dev/null; _truvag3_skill_revision_header "$SKILL_HEADER_FILE"`)
+			command.Env = append(os.Environ(), "SKILL_SETUP_LIBRARY="+skillSetupLibraryPath(t), "SKILL_HEADER_FILE="+path)
+			output, err := command.CombinedOutput()
+			if scenario.want == "" {
+				if err == nil {
+					t.Fatalf("invalid header accepted: %q", output)
+				}
+				return
+			}
+			if err != nil || strings.TrimSpace(string(output)) != scenario.want {
+				t.Fatalf("token=%q err=%v", output, err)
+			}
+		})
+	}
+}
+
+func TestSkillSetupReconcilesWithOnlyMirroredRevision(t *testing.T) {
+	for _, tool := range []string{"bash", "curl", "jq", "cksum"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s unavailable", tool)
+		}
+	}
+	mock := &skillSetupMock{etagHeader: "X-TruvaG3-Skill-ETag", idempotencies: make(map[string]struct{})}
+	server := httptest.NewServer(http.HandlerFunc(mock.serveHTTP))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "package.json")
+	library := skillSetupLibraryPath(t)
+	writeSkillPackage(t, path, "first", "Initial")
+	runSkillHelper(t, library, server.URL+"/api/v1/skills", "sync", path, true)
+	runSkillHelper(t, library, server.URL+"/api/v1/skills", "check", path, true)
+	writeSkillPackage(t, path, "second", "Updated")
+	runSkillHelper(t, library, server.URL+"/api/v1/skills", "sync", path, true)
+	runSkillHelper(t, library, server.URL+"/api/v1/skills", "check", path, true)
+	if puts, version := mock.state(); puts != 2 || version != 2 {
+		t.Fatalf("puts=%d version=%d", puts, version)
+	}
 }

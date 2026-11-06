@@ -184,9 +184,16 @@ func (t *DevOpsChatAgent) serveResumeSSE(w http.ResponseWriter, r *http.Request,
 	var callback *SSECallback
 	var terminal *terminalResumeCallback
 	var sessionID string
-	startStream := func(ctx context.Context) {
+	requestCtx, cancelRequest := context.WithCancel(r.Context())
+	defer func() {
+		cancelRequest()
 		if callback != nil {
-			return
+			callback.StopHeartbeat()
+		}
+	}()
+	startStream := func() error {
+		if callback != nil {
+			return callback.Err()
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -194,12 +201,18 @@ func (t *DevOpsChatAgent) serveResumeSSE(w http.ResponseWriter, r *http.Request,
 		w.Header().Set("X-Accel-Buffering", "no")
 		// Terminal delivery outlives the joined executor context, but never the
 		// HTTP request. A claim-loss error can still be sent to a connected client.
-		callback = NewSSECallbackWithLogger(w, flusher, t.Logger, r.Context())
+		callback = newManagedSSECallback(w, flusher, t.Logger, requestCtx, cancelRequest)
+		if err := callback.StartHeartbeat(); err != nil {
+			return err
+		}
 		terminal = &terminalResumeCallback{StreamCallback: callback}
+		return nil
 	}
-	_, err := hitl.Resumer.ResumeWithExecutor(r.Context(), checkpointID,
+	_, err := hitl.Resumer.ResumeWithExecutor(requestCtx, checkpointID,
 		orchestration.ResumeExecutorFunc(func(ctx context.Context, checkpoint *orchestration.ExecutionCheckpoint) (*orchestration.ExecutionResult, error) {
-			startStream(ctx)
+			if err := startStream(); err != nil {
+				return nil, err
+			}
 			var created bool
 			sessionID, created = t.resumeSession(checkpoint)
 			if created {
@@ -210,7 +223,9 @@ func (t *DevOpsChatAgent) serveResumeSSE(w http.ResponseWriter, r *http.Request,
 		}))
 	var lifecycle *orchestration.ErrCheckpointResumeLifecycle
 	if err != nil && !errors.As(err, &lifecycle) && orchestration.IsInterrupted(err) {
-		startStream(r.Context()) // Recovery may find a child without invoking the executor.
+		if err := startStream(); err != nil {
+			return
+		} // Recovery may find a child without invoking the executor.
 		callback.SendCheckpoint(orchestration.GetCheckpoint(err))
 		return
 	}

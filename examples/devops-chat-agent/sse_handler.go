@@ -54,6 +54,23 @@ func (t *DevOpsChatAgent) recordFinalSSEDeliveryFailure(ctx context.Context, err
 	telemetry.RecordRequest("devops-chat-agent", operation, float64(elapsed.Milliseconds()), "failure")
 }
 
+// forwardStreamChunk keeps phase progress out of response text and propagates
+// both delivery failures and cancellation to the orchestrator.
+func forwardStreamChunk(ctx context.Context, callback StreamCallback, chunk core.StreamChunk) error {
+	if chunk.Metadata != nil && chunk.Metadata["type"] == "phase_complete" {
+		phase, _ := chunk.Metadata["phase"].(int)
+		callback.SendStatus("phase_complete", fmt.Sprintf("Phase %d complete. Planning next phase...", phase))
+	} else if chunk.Content != "" {
+		callback.SendChunk(chunk.Content)
+	}
+	if delivery, ok := callback.(interface{ Err() error }); ok {
+		if err := delivery.Err(); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
 // SSEHandler handles Server-Sent Events for chat streaming.
 type SSEHandler struct {
 	agent *DevOpsChatAgent
@@ -71,14 +88,34 @@ type ChatRequest struct {
 	Options   map[string]interface{} `json:"options,omitempty"`
 }
 
+const sseHeartbeatInterval = 20 * time.Second
+
+type sseHeartbeatTicker interface {
+	C() <-chan time.Time
+	Stop()
+}
+
+type realSSEHeartbeatTicker struct {
+	*time.Ticker
+}
+
+func (t realSSEHeartbeatTicker) C() <-chan time.Time { return t.Ticker.C }
+
+type sseHeartbeatTickerFactory func(time.Duration) sseHeartbeatTicker
+
 // SSECallback implements StreamCallback for SSE responses.
 type SSECallback struct {
-	mu      sync.Mutex
-	err     error
-	w       http.ResponseWriter
-	flusher http.Flusher
-	logger  core.Logger
-	ctx     context.Context
+	mu               sync.Mutex
+	err              error
+	w                http.ResponseWriter
+	flusher          http.Flusher
+	logger           core.Logger
+	ctx              context.Context
+	cancel           context.CancelFunc
+	heartbeatMu      sync.Mutex
+	heartbeatStopped bool
+	heartbeatCancel  context.CancelFunc
+	heartbeatDone    chan struct{}
 }
 
 // NewSSECallback creates a new SSE callback.
@@ -89,6 +126,10 @@ func NewSSECallback(w http.ResponseWriter, flusher http.Flusher) *SSECallback {
 // NewSSECallbackWithLogger creates a new SSE callback with contextual logging.
 func NewSSECallbackWithLogger(w http.ResponseWriter, flusher http.Flusher, logger core.Logger, ctx context.Context) *SSECallback {
 	return &SSECallback{w: w, flusher: flusher, logger: logger, ctx: ctx}
+}
+
+func newManagedSSECallback(w http.ResponseWriter, flusher http.Flusher, logger core.Logger, ctx context.Context, cancel context.CancelFunc) *SSECallback {
+	return &SSECallback{w: w, flusher: flusher, logger: logger, ctx: ctx, cancel: cancel}
 }
 
 // SendStatus sends a status update event.
@@ -242,26 +283,119 @@ func (c *SSECallback) SendCheckpoint(checkpoint *orchestration.ExecutionCheckpoi
 
 // sendEvent sends a generic SSE event.
 func (c *SSECallback) sendEvent(eventType string, data interface{}) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.err != nil {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		c.fail(err)
 		return
+	}
+	_ = c.writeFrame(fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, jsonData))
+}
+
+func (c *SSECallback) fail(err error) {
+	if err == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.err == nil {
+		c.err = err
+	}
+	cancel := c.cancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (c *SSECallback) writeFrame(frame string) error {
+	c.mu.Lock()
+	if c.err != nil {
+		err := c.err
+		c.mu.Unlock()
+		return err
 	}
 	if c.ctx != nil && c.ctx.Err() != nil {
 		c.err = c.ctx.Err()
-		return
+		err := c.err
+		c.mu.Unlock()
+		return err
 	}
-	jsonData, err := json.Marshal(data)
+	_, err := fmt.Fprint(c.w, frame)
+	if err == nil {
+		err = http.NewResponseController(c.w).Flush()
+	}
 	if err != nil {
 		c.err = err
-		return
+	}
+	cancel := c.cancel
+	c.mu.Unlock()
+	if err != nil && cancel != nil {
+		cancel()
+	}
+	return err
+}
+
+// StartHeartbeat establishes the stream with a comment and keeps it active until cancellation or cleanup.
+func (c *SSECallback) StartHeartbeat() error {
+	return c.startHeartbeat(sseHeartbeatInterval, func(interval time.Duration) sseHeartbeatTicker {
+		return realSSEHeartbeatTicker{Ticker: time.NewTicker(interval)}
+	})
+}
+
+func (c *SSECallback) startHeartbeat(interval time.Duration, factory sseHeartbeatTickerFactory) error {
+	if interval <= 0 || factory == nil {
+		return fmt.Errorf("invalid SSE heartbeat configuration")
+	}
+	c.heartbeatMu.Lock()
+	defer c.heartbeatMu.Unlock()
+	if c.heartbeatStopped || c.heartbeatDone != nil {
+		return c.Err()
 	}
 
-	if _, err := fmt.Fprintf(c.w, "event: %s\ndata: %s\n\n", eventType, jsonData); err != nil {
-		c.err = err
-		return
+	// Publish the lifecycle while holding its lock so concurrent cleanup cannot
+	// miss a ticker being started. The worker never takes heartbeatMu.
+	if err := c.writeFrame(": heartbeat\n\n"); err != nil {
+		return err
 	}
-	c.err = http.NewResponseController(c.w).Flush()
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	ticker := factory(interval)
+	done := make(chan struct{})
+	c.heartbeatCancel, c.heartbeatDone = cancel, done
+	go func() {
+		defer close(done)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C():
+				if heartbeatCtx.Err() != nil {
+					return
+				}
+				if err := c.writeFrame(": heartbeat\n\n"); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return nil
+}
+
+// StopHeartbeat stops and joins the request-owned worker. Concurrent callers
+// all wait for that same worker, and a stopped callback cannot restart it.
+func (c *SSECallback) StopHeartbeat() {
+	c.heartbeatMu.Lock()
+	defer c.heartbeatMu.Unlock()
+	c.heartbeatStopped = true
+	if c.heartbeatCancel != nil {
+		c.heartbeatCancel()
+	}
+	if c.heartbeatDone != nil {
+		<-c.heartbeatDone
+	}
 }
 
 // Err exposes delivery failure to the normal orchestration callback.
@@ -351,6 +485,16 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	callback := newManagedSSECallback(w, flusher, h.agent.Logger, streamCtx, cancelStream)
+	defer func() {
+		cancelStream()
+		callback.StopHeartbeat()
+	}()
+	if err := callback.StartHeartbeat(); err != nil {
+		return
+	}
+
 	// Extract user ID from header (canonicalized — see getUserID)
 	userID := getUserID(r)
 
@@ -361,7 +505,6 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sessionID = session.ID
 
 		// Send session event
-		callback := NewSSECallback(w, flusher)
 		callback.sendEvent("session", map[string]interface{}{
 			"id": sessionID,
 		})
@@ -374,7 +517,6 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		session = h.agent.sessionStore.Create(userID, nil)
 		sessionID = session.ID
 
-		callback := NewSSECallback(w, flusher)
 		callback.sendEvent("session", map[string]interface{}{
 			"id": sessionID,
 		})
@@ -393,9 +535,6 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		attribute.Int("message_length", len(req.Message)),
 	)
 
-	// Create callback and process
-	callback := NewSSECallbackWithLogger(w, flusher, h.agent.Logger, ctx)
-
 	// Check if orchestrator is available
 	if h.agent.GetOrchestrator() == nil {
 		h.agent.Logger.WarnWithContext(ctx, "Orchestrator not available", map[string]interface{}{
@@ -407,7 +546,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Process with streaming
-	if err := h.agent.ProcessWithStreaming(ctx, sessionID, req.Message, callback); err != nil {
+	if err := h.agent.ProcessWithStreaming(streamCtx, sessionID, req.Message, callback); err != nil {
 		// Check for HITL interrupt — checkpoint already sent via callback.SendCheckpoint()
 		if orchestration.IsInterrupted(err) {
 			h.agent.Logger.InfoWithContext(ctx, "Execution paused for HITL approval", map[string]interface{}{

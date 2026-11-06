@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -172,31 +173,7 @@ func (t *TravelChatAgent) InitializeOrchestrator(
 	}
 
 	// Create orchestrator config
-	skillConfig := orchestration.SkillConfig{
-		Enabled: true,
-		Bindings: []orchestration.SkillBinding{
-			{
-				Namespace: "travel", Name: "action-verification", Version: "published",
-				Activation: orchestration.SkillActivationAlways,
-			},
-			{
-				Namespace: "travel", Name: "travel-search-preparation", Version: "published",
-				Activation: orchestration.SkillActivationAuto,
-			},
-			{
-				Namespace: "travel", Name: "currency-conversion", Version: "published",
-				Activation: orchestration.SkillActivationAuto,
-			},
-			{
-				Namespace: "travel", Name: "travel-readiness-assessment", Version: "published",
-				Activation: orchestration.SkillActivationAuto,
-			},
-			{
-				Namespace: "travel", Name: "weather-assessment", Version: "published",
-				Activation: orchestration.SkillActivationAuto,
-			},
-		},
-	}
+	skillConfig := travelSkillConfig()
 	resolved, err := orchestration.ResolveOrchestratorConfig(orchestration.ConfigResolution{
 		Environment: orchestration.EnvironmentCompatible,
 		Options: []orchestration.OrchestratorOption{
@@ -233,11 +210,7 @@ func (t *TravelChatAgent) InitializeOrchestrator(
 		// Similar to LangChain's system_prompt, AutoGen's system_message, or OpenAI's instructions.
 		SystemInstructions: `You are a friendly travel chat assistant.
 You help users plan trips by coordinating information from various travel services.
-Be conversational and helpful while providing accurate, real-time information.
-
-For Kubernetes, cluster, or DevOps questions that fall outside the travel domain,
-delegate the user's request to the devops_operations capability exposed by the
-devops-chat-agent and return its synthesized response.`,
+Be conversational and helpful while providing accurate, real-time information.`,
 
 		Domain: "travel",
 		AdditionalTypeRules: []orchestration.TypeRule{
@@ -359,7 +332,7 @@ func (t *TravelChatAgent) formatConversationHistory(history []Message) string {
 		if msg.Role == "assistant" {
 			role = "Assistant"
 		}
-		sb.WriteString(fmt.Sprintf("%s: %s\n", role, msg.Content))
+		_, _ = fmt.Fprintf(&sb, "%s: %s\n", role, msg.Content)
 	}
 	return strings.TrimSpace(sb.String())
 }
@@ -462,21 +435,17 @@ func (t *TravelChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, q
 		)
 	})
 
+	deliveryError := func() error {
+		if delivery, ok := callback.(interface{ Err() error }); ok {
+			if err := delivery.Err(); err != nil {
+				return err
+			}
+		}
+		return ctx.Err()
+	}
 	// Pass raw query + metadata (history auto-promoted to enrichments by orchestrator)
 	result, err := orch.ProcessRequestStreaming(ctx, query, metadata, func(chunk core.StreamChunk) error {
-		// Phase-complete chunks are transient progress indicators, not response content.
-		// Send them as status events so the UI shows them temporarily during processing
-		// rather than accumulating them into the final response text.
-		if chunk.Metadata != nil && chunk.Metadata["type"] == "phase_complete" {
-			phaseNum, _ := chunk.Metadata["phase"].(int)
-			callback.SendStatus("phase_complete", fmt.Sprintf("Phase %d complete. Planning next phase...", phaseNum))
-			return nil
-		}
-		// Forward content chunks to SSE callback
-		if chunk.Content != "" {
-			callback.SendChunk(chunk.Content)
-		}
-		return nil
+		return forwardStreamChunk(ctx, callback, chunk)
 	})
 	if err != nil {
 		t.Logger.ErrorWithContext(ctx, "Streaming orchestration failed", map[string]interface{}{
@@ -486,6 +455,36 @@ func (t *TravelChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, q
 		})
 		telemetry.RecordSpanError(ctx, err)
 		return fmt.Errorf("streaming orchestration failed: %w", err)
+	}
+	if result == nil {
+		return fmt.Errorf("streaming orchestration returned no response")
+	}
+	// Native streaming can retain a partial response while returning a nil Go
+	// error. Preserve that content without publishing terminal success or retrying
+	// tool effects that may already have completed.
+	if deliveryErr := deliveryError(); deliveryErr != nil || result.PartialContent || !result.StreamCompleted || len(result.Errors) > 0 {
+		metadata := map[string]interface{}{
+			"request_id": result.RequestID, "tools_used": result.AgentsInvolved,
+			"confidence": result.Confidence, "duration_ms": time.Since(startTime).Milliseconds(),
+			"partial_content": result.PartialContent, "stream_completed": result.StreamCompleted,
+			"finish_reason": result.FinishReason, "errors": result.Errors,
+			"usage_by_phase": result.UsageByPhase,
+		}
+		if result.Usage != nil {
+			metadata["prompt_tokens"] = result.Usage.PromptTokens
+			metadata["completion_tokens"] = result.Usage.CompletionTokens
+			metadata["total_tokens"] = result.Usage.TotalTokens
+		}
+		if result.Clarification != nil {
+			metadata["clarification"] = result.Clarification
+		}
+		t.sessionStore.AddMessage(sessionID, Message{
+			Role: "assistant", Content: result.Response, Timestamp: time.Now(), Metadata: metadata,
+		})
+		incompleteErr := fmt.Errorf("incomplete streamed response %s: %w", result.RequestID,
+			errors.Join(core.ErrStreamPartiallyCompleted, deliveryErr))
+		telemetry.RecordSpanError(ctx, incompleteErr)
+		return incompleteErr
 	}
 
 	response := result.Response
@@ -564,6 +563,11 @@ func (t *TravelChatAgent) ProcessWithStreaming(ctx context.Context, sessionID, q
 		},
 	})
 
+	if err := deliveryError(); err != nil {
+		deliveryErr := fmt.Errorf("deliver final streamed response: %w", errors.Join(core.ErrStreamPartiallyCompleted, err))
+		telemetry.RecordSpanError(ctx, deliveryErr)
+		return deliveryErr
+	}
 	t.Logger.InfoWithContext(ctx, "Chat request completed", map[string]interface{}{
 		"operation":   "process_chat",
 		"session_id":  sessionID,

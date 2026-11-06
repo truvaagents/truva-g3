@@ -19,14 +19,19 @@ import {
 } from '../utils/format.js';
 
 import { fetchAPI, postAPI } from '../api.js';
+import { createLoadGuard } from '../utils/load-guard.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
 import { formatCheckpointExpiry, renderCheckpointContext } from '../utils/hitl-content.js';
 
 // ---------------------------------------------------------------------------
 // Module-level state (replaces former globals)
 // ---------------------------------------------------------------------------
+const listLoad = createLoadGuard();
+const detailLoad = createLoadGuard();
 let checkpoints = [];
 let selected = null;
+let requestedSelection = null;
+let detailPending = false;
 let activeTab = 'overview';
 let typeFilter = 'all';
 let sortColumn = 'expires_at';
@@ -177,28 +182,34 @@ function renderTable(list) {
     `}).join('');
 }
 
+function showCheckpointError(error) {
+    const message = document.getElementById('hitlErrorMessage');
+    if (message) message.textContent = error.message;
+    document.getElementById('hitlErrorBanner')?.classList.add('visible');
+}
+
 async function selectCheckpoint(checkpointId) {
-    // Check if we already have the full checkpoint
-    const summaryCheckpoint = checkpoints.find(c => c.checkpoint_id === checkpointId);
-
-    // Fetch full checkpoint details from API
+    requestedSelection = checkpointId;
+    detailPending = true;
+    const ticket = detailLoad.begin();
     try {
-        const { data } = await fetchAPI(`/api/hitl/checkpoints/${encodeURIComponent(checkpointId)}`);
+        const { data } = await fetchAPI(`/api/hitl/checkpoints/${encodeURIComponent(checkpointId)}`, { signal: ticket.signal });
+        if (!detailLoad.current(ticket)) return false;
         selected = data;
+        document.getElementById('hitlErrorBanner')?.classList.remove('visible');
     } catch (error) {
-        console.error('Failed to fetch HITL checkpoint:', error);
-        if (summaryCheckpoint) {
-            // API failed but we have summary - use what we can
-            selected = summaryCheckpoint;
-        } else {
-            // Fallback to mock if available
-            const mockCheckpoint = getMockHITLCheckpoint(checkpointId);
-            selected = mockCheckpoint || null;
-        }
+        if (!detailLoad.current(ticket)) return false;
+        selected = null;
+        showCheckpointError(error);
+        filterCheckpoints();
+        renderDetail();
+        return false;
+    } finally {
+        if (detailLoad.current(ticket)) detailPending = false;
     }
-
     filterCheckpoints();
     renderDetail();
+    return true;
 }
 
 function setDetailTab(tab) {
@@ -575,209 +586,48 @@ async function submitCommand(checkpointId, commandType) {
 }
 
 async function fetchCheckpoints() {
+    const ticket = listLoad.begin();
     const refreshBtn = document.querySelector('.refresh-btn');
-    const errorBanner = document.getElementById('hitlErrorBanner');
     const listPanel = document.getElementById('hitlListPanel');
-    if (refreshBtn) refreshBtn.classList.add('loading');
+    refreshBtn?.classList.add('loading');
     showLoading(listPanel, 'Loading checkpoints...');
-
     try {
-        let data;
-        try {
-            const result = await fetchAPI('/api/hitl/checkpoints');
-            data = result.data;
-        } catch {
-            // Use mock data for development
-            data = getMockHITLData();
-        }
-
-        // Count critical checkpoints
-        const criticalCount = data.checkpoints.filter(c => c.priority === 'critical').length;
-
-        const pendingEl = document.getElementById('pendingCount');
-        const criticalEl = document.getElementById('criticalCount');
-        if (pendingEl) pendingEl.textContent = data.checkpoints.length;
-        if (criticalEl) criticalEl.textContent = criticalCount;
-
+        const { data } = await fetchAPI('/api/hitl/checkpoints', { signal: ticket.signal });
+        if (!listLoad.current(ticket)) return;
         checkpoints = data.checkpoints.sort((a, b) => {
-            // Sort by priority (critical first), then by created_at
-            const priorityOrder = { critical: 0, high: 1, normal: 2, low: 3 };
-            const aPriority = priorityOrder[a.priority] ?? 2;
-            const bPriority = priorityOrder[b.priority] ?? 2;
-            if (aPriority !== bPriority) return aPriority - bPriority;
-            return new Date(b.created_at) - new Date(a.created_at);
+            const order = { critical: 0, high: 1, normal: 2, low: 3 };
+            return (order[a.priority] ?? 2) - (order[b.priority] ?? 2) || new Date(b.created_at) - new Date(a.created_at);
         });
-
+        const pending = document.getElementById('pendingCount');
+        const critical = document.getElementById('criticalCount');
+        if (pending) pending.textContent = checkpoints.length;
+        if (critical) critical.textContent = checkpoints.filter(c => c.priority === 'critical').length;
         filterCheckpoints();
-
-        // Refresh selected checkpoint if still exists
-        if (selected) {
-            const updated = checkpoints.find(c => c.checkpoint_id === selected.checkpoint_id);
-            if (updated) {
-                await selectCheckpoint(selected.checkpoint_id);
-            } else {
-                // Checkpoint was resolved/expired
-                selected = null;
-                renderDetail();
+        let detailOK = true;
+        const wanted = requestedSelection ?? selected?.checkpoint_id;
+        if (wanted) {
+            if (!checkpoints.some(c => c.checkpoint_id === wanted)) {
+                detailLoad.cancel(); requestedSelection = null; detailPending = false;
+                selected = null; renderDetail();
+            } else if (!detailPending) {
+                detailOK = await selectCheckpoint(wanted);
             }
         }
-
-        const lastUpdatedEl = document.getElementById('hitlLastUpdated');
-        if (lastUpdatedEl) lastUpdatedEl.textContent = `Last updated: ${formatDateTime(new Date())}`;
-        if (errorBanner) errorBanner.classList.remove('visible');
+        if (!listLoad.current(ticket)) return;
+        const updated = document.getElementById('hitlLastUpdated');
+        if (updated) updated.textContent = `Last updated: ${formatDateTime(new Date())}`;
+        if (detailOK) document.getElementById('hitlErrorBanner')?.classList.remove('visible');
     } catch (error) {
-        console.error('Failed to fetch HITL checkpoints:', error);
-        const errMsgEl = document.getElementById('hitlErrorMessage');
-        if (errMsgEl) errMsgEl.textContent = error.message;
-        if (errorBanner) errorBanner.classList.add('visible');
+        if (!listLoad.current(ticket)) return;
+        detailLoad.cancel(); requestedSelection = null; detailPending = false; checkpoints = []; selected = null;
+        for (const id of ['pendingCount', 'criticalCount']) {
+            const element = document.getElementById(id);
+            if (element) element.textContent = 'Unavailable';
+        }
+        filterCheckpoints(); renderDetail(); showCheckpointError(error);
     } finally {
-        if (refreshBtn) refreshBtn.classList.remove('loading');
-        hideLoading(listPanel);
+        if (listLoad.current(ticket)) { refreshBtn?.classList.remove('loading'); hideLoading(listPanel); }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Mock data for development
-// ---------------------------------------------------------------------------
-
-function getMockHITLData() {
-    const now = new Date();
-    return {
-        checkpoints: [
-            {
-                checkpoint_id: "cp-abc123-plan",
-                request_id: "req-travel-001",
-                interrupt_point: "plan_generated",
-                reason: "plan_approval",
-                priority: "normal",
-                message: "Execution plan requires approval before proceeding",
-                original_request: "What's the weather in Tokyo and book me a flight there?",
-                step_count: 3,
-                completed_count: 0,
-                current_step: "",
-                created_at: new Date(now - 2 * 60000).toISOString(),
-                expires_at: new Date(now.getTime() + 5 * 60000).toISOString(),
-                status: "pending",
-                agent_name: "travel-agent"
-            },
-            {
-                checkpoint_id: "cp-def456-step",
-                request_id: "req-stock-002",
-                interrupt_point: "before_step",
-                reason: "sensitive_operation",
-                priority: "high",
-                message: "About to execute sensitive operation: stock_trade.execute_trade",
-                original_request: "Buy 100 shares of AAPL",
-                step_count: 2,
-                completed_count: 1,
-                current_step: "stock_trade.execute_trade",
-                created_at: new Date(now - 5 * 60000).toISOString(),
-                expires_at: new Date(now.getTime() + 10 * 60000).toISOString(),
-                status: "pending",
-                agent_name: "trading-bot"
-            },
-            {
-                checkpoint_id: "cp-ghi789-error",
-                request_id: "req-payment-003",
-                interrupt_point: "on_error",
-                reason: "escalation",
-                priority: "critical",
-                message: "Payment processing failed after 3 retries - human intervention required",
-                original_request: "Process refund for order #12345",
-                step_count: 1,
-                completed_count: 0,
-                current_step: "payment.process_refund",
-                created_at: new Date(now - 10 * 60000).toISOString(),
-                expires_at: new Date(now.getTime() + 30 * 60000).toISOString(),
-                status: "pending",
-                agent_name: "payment-service"
-            }
-        ],
-        total: 3,
-        timestamp: now.toISOString()
-    };
-}
-
-function getMockHITLCheckpoint(checkpointId) {
-    // For mock mode, return detailed checkpoint data
-    const mockData = getMockHITLData();
-    const summary = mockData.checkpoints.find(c => c.checkpoint_id === checkpointId);
-    if (!summary) return null;
-
-    // Expand to full checkpoint (simulating API response)
-    const now = new Date();
-    if (checkpointId === 'cp-abc123-plan') {
-        return {
-            ...summary,
-            decision: {
-                should_interrupt: true,
-                reason: "plan_approval",
-                message: "Execution plan requires approval before proceeding",
-                priority: "normal",
-                default_action: "approve"
-            },
-            plan: {
-                request_id: "req-travel-001",
-                steps: [
-                    { step_id: "step-1", capability: "weather-tool.get_weather", service_name: "weather-tool", capability_name: "get_weather", parameters: { location: "Tokyo, Japan" }, depends_on: [], description: "Get current weather for Tokyo" },
-                    { step_id: "step-2", capability: "flight-search.search_flights", service_name: "flight-search", capability_name: "search_flights", parameters: { destination: "Tokyo", date: "2024-03-15" }, depends_on: [], description: "Search for available flights to Tokyo" },
-                    { step_id: "step-3", capability: "flight-booking.book_flight", service_name: "flight-booking", capability_name: "book_flight", parameters: { flight_id: "{{step-2.flights[0].id}}" }, depends_on: ["step-2"], description: "Book the selected flight" }
-                ],
-                synthesis_strategy: "llm",
-                rationale: "User wants weather info and flight booking. Steps 1 and 2 can run in parallel, step 3 depends on step 2 results."
-            },
-            completed_steps: [],
-            user_context: { user_id: "user-123", session_id: "session-abc" }
-        };
-    } else if (checkpointId === 'cp-def456-step') {
-        return {
-            ...summary,
-            decision: {
-                should_interrupt: true,
-                reason: "sensitive_operation",
-                message: "About to execute sensitive operation: stock_trade.execute_trade",
-                priority: "high"
-            },
-            plan: {
-                steps: [
-                    { step_id: "step-1", capability: "stock-market.get_quote", service_name: "stock-market", capability_name: "get_quote", parameters: { symbol: "AAPL" }, depends_on: [], description: "Get current stock quote for AAPL" },
-                    { step_id: "step-2", capability: "stock_trade.execute_trade", service_name: "stock-trade", capability_name: "execute_trade", parameters: { symbol: "AAPL", quantity: 100, action: "buy" }, depends_on: ["step-1"], description: "Execute buy order for 100 shares of AAPL" }
-                ]
-            },
-            completed_steps: [{
-                step_id: "step-1",
-                capability: "stock-market.get_quote",
-                service_name: "stock-market",
-                instruction: "Get the current stock price and trading information for AAPL",
-                success: true,
-                response: { symbol: "AAPL", price: 178.50, change: "+2.35", volume: "45.2M" },
-                response_text: "AAPL is currently trading at $178.50, up $2.35 (+1.33%) today with volume of 45.2M shares.",
-                duration_ms: 234,
-                attempts: 1
-            }],
-            current_step: { step_id: "step-2", capability: "stock_trade.execute_trade", service_name: "stock-trade", capability_name: "execute_trade", instruction: "Execute a market buy order for 100 shares of AAPL at current price", parameters: { symbol: "AAPL", quantity: 100, action: "buy" }, depends_on: ["step-1"], description: "Execute buy order for 100 shares of AAPL" },
-            resolved_parameters: { symbol: "AAPL", quantity: 100, action: "buy", price: 178.50, total: 17850.00 },
-            user_context: { user_id: "user-456", account_type: "premium" }
-        };
-    } else if (checkpointId === 'cp-ghi789-error') {
-        return {
-            ...summary,
-            decision: {
-                should_interrupt: true,
-                reason: "escalation",
-                message: "Payment processing failed after 3 retries - human intervention required",
-                priority: "critical"
-            },
-            plan: {
-                steps: [{ step_id: "step-1", capability: "payment.process_refund", service_name: "payment-gateway", capability_name: "process_refund", parameters: { order_id: "#12345", amount: 99.99 }, depends_on: [], description: "Process refund for the order" }]
-            },
-            completed_steps: [],
-            current_step: { step_id: "step-1", capability: "payment.process_refund", service_name: "payment-gateway", capability_name: "process_refund", parameters: { order_id: "#12345", amount: 99.99 }, description: "Process refund for the order" },
-            current_step_result: { step_id: "step-1", capability: "payment.process_refund", service_name: "payment-gateway", instruction: "Process a refund of $99.99 for order #12345", success: false, error: "Payment gateway timeout after 30s - gateway returned 504", duration_ms: 30234, attempts: 3 },
-            user_context: { user_id: "user-789", order_id: "#12345", customer: "John Doe", email: "john@example.com" }
-        };
-    }
-    return summary;
 }
 
 // ---------------------------------------------------------------------------
@@ -865,6 +715,12 @@ export function init() {
 }
 
 export function destroy() {
+    requestedSelection = null;
+    detailPending = false;
+    listLoad.cancel();
+    detailLoad.cancel();
+    hideLoading(document.getElementById('hitlListPanel'));
+    document.querySelector('.refresh-btn')?.classList.remove('loading');
     // Remove event listeners to avoid leaks if the view is torn down
     const tbody = document.getElementById('hitlTableBody');
     if (tbody) {

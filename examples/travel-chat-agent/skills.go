@@ -22,3 +22,37 @@ func newSkillRegistry(logger core.Logger) (orchestration.SkillRegistry, io.Close
 	}
 	return owned.Backends().SkillRegistry(), owned, nil
 }
+
+// travelSkillConfig supplies optional defaults; configuration resolution still
+// lets deployment settings disable skills or replace the complete binding list.
+func travelSkillConfig() orchestration.SkillConfig {
+	return orchestration.SkillConfig{
+		Enabled: true,
+		Bindings: []orchestration.SkillBinding{
+			{
+				Namespace: "travel", Name: "action-verification", Version: "published",
+				Activation: orchestration.SkillActivationAlways,
+			},
+			{
+				Namespace: "travel", Name: "devops-delegation", Version: "published",
+				Activation: orchestration.SkillActivationAlways,
+			},
+			{
+				Namespace: "travel", Name: "travel-search-preparation", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+			{
+				Namespace: "travel", Name: "currency-conversion", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+			{
+				Namespace: "travel", Name: "travel-readiness-assessment", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+			{
+				Namespace: "travel", Name: "weather-assessment", Version: "published",
+				Activation: orchestration.SkillActivationAuto,
+			},
+		},
+	}
+}

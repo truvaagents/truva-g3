@@ -987,6 +987,8 @@ playwright-tool/
 
 ## Troubleshooting
 
+The optional Redis result/script metadata store retries a failed startup connection after 30 seconds, then serially every 30 seconds until installed or cancelled. An operation uses its starting store snapshot; skipped indexing is not backfilled. Recovery does not repair S3, restore expired data, replace go-redis reconnection after installation, or remove Redis service-discovery startup requirements. Framework shutdown remains bounded: the existing Redis constructor cannot be interrupted and may outlast the runnable drain when its configured dial timeout is longer. A late result is rejected and closed when the constructor returns, provided the process remains alive. HTTP drain timeout can leave active metadata operations using a client that cleanup closes; it does not promise every operation completed.
+
 ### Common Issues
 
 **1. Tool not appearing in discovery**

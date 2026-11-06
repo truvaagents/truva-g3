@@ -897,3 +897,16 @@ open http://registry.localhost
 - [agentic-memory-tool](../agentic-memory-tool/) - Cross-agent memory access
 
 For infrastructure setup details, see [k8-deployment/README.md](../k8-deployment/README.md).
+
+
+### Streaming connection lifecycle
+
+Established SSE responses send an initial comment heartbeat and another every
+20 seconds during quiet work. Comments keep the transport active without adding
+chat events. Frame writes are serialized; a write/flush failure cancels the
+request, and request cleanup stops and joins the heartbeat worker. Heartbeats do
+not extend execution deadlines or guarantee recovery from a blocked network write.
+Resumed approval streams retain terminal notifications until durable
+finalization. A final delivery failure after completed effects does not make the
+approved work automatically executable again. Validation/claim rejection before
+stream establishment still returns its ordinary JSON HTTP error.

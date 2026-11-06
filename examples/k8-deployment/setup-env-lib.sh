@@ -247,6 +247,35 @@ _truvag3_read_published_skill() {
         "${api_base}/${skill_namespace}/${skill_name}"
 }
 
+# Select one complete semantic revision token from the final HTTP header block.
+# A present but malformed standard ETag fails instead of falling back to a mirror.
+_truvag3_skill_revision_header() {
+    awk '
+        /^HTTP\// { standard = ""; mirror = ""; ns = 0; nm = 0; sf = 0; mf = 0; selected = 0; next }
+        {
+            sub(/\r$/, "")
+            if ($0 ~ /^[ \t]/ && selected == 1) sf = 1
+            if ($0 ~ /^[ \t]/ && selected == 2) mf = 1
+            selected = 0
+            split($0, parts, ":")
+            name = tolower(parts[1])
+            if (name == "etag" || name == "x-truvag3-skill-etag") {
+                value = substr($0, index($0, ":") + 1)
+                sub(/^[ \t]+/, "", value); sub(/[ \t]+$/, "", value)
+                if (name == "etag") { standard = value; ns++; selected = 1 }
+                else { mirror = value; nm++; selected = 2 }
+            }
+        }
+        END {
+            value = ns ? standard : mirror
+            count = ns ? ns : nm
+            folded = ns ? sf : mf
+            if (folded || count != 1 || value !~ /^"[^"[:cntrl:]]+"$/) exit 1
+            print value
+        }
+    ' "$1"
+}
+
 # Validate the provider-neutral published representation, require its ETag, and
 # extract the resubmittable package for semantic comparison.
 _truvag3_extract_published_skill() {
@@ -275,8 +304,7 @@ _truvag3_extract_published_skill() {
     ' "$response_file" >/dev/null 2>&1; then
         return 1
     fi
-    etag=$(awk 'tolower($1) == "etag:" {print $2}' "$headers_file" | tr -d '\r' | tail -1)
-    if [ -z "$etag" ]; then
+    if ! etag=$(_truvag3_skill_revision_header "$headers_file"); then
         return 1
     fi
     jq '.package' "$response_file" > "$published_file"
@@ -381,8 +409,7 @@ truvag3_sync_skill_package() {
             _truvag3_log_success "Skill $skill_namespace/$skill_name already matches Git (published version $version)"
             return 0
         fi
-        etag=$(awk 'tolower($1) == "etag:" {print $2}' "$headers_file" | tr -d '\r' | tail -1)
-        if [ -z "$etag" ]; then
+        if ! etag=$(_truvag3_skill_revision_header "$headers_file"); then
             rm -f "$normalized_file" "$headers_file" "$response_file" "$published_file"
             _truvag3_log_skill_failure "Skills API did not return an ETag for $skill_namespace/$skill_name"
             return 1

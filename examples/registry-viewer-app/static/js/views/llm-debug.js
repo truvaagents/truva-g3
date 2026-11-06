@@ -2,8 +2,8 @@
  * LLM Debug View.
  *
  * Displays LLM interaction records with filtering, detail views,
- * and request-lineage grouping. Falls back to mock data when the API
- * is unavailable (e.g., local development without a running backend).
+ * and request-lineage grouping. API failures remain visible; sample data
+ * is available only through the backend's explicit mock mode.
  */
 
 import {
@@ -20,6 +20,7 @@ import {
     copyToClipboard,
 } from '../utils/format.js';
 import { fetchAPI } from '../api.js';
+import { createLoadGuard } from '../utils/load-guard.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
 import {
     getLLMInteractionContent,
@@ -35,8 +36,12 @@ import {
 // Module state
 // ---------------------------------------------------------------------------
 
+const listLoad = createLoadGuard();
+const detailLoad = createLoadGuard();
 let records = [];
 let selected = null;
+let requestedSelection = null;
+let detailPending = false;
 let activeTab = 'interactions';
 let typeFilter = 'all';
 let expandedInteractions = new Set();
@@ -59,6 +64,14 @@ export function refresh() {
 let boundListeners = [];
 
 export function destroy() {
+    requestedSelection = null;
+    detailPending = false;
+    listLoad.cancel();
+    cancelDetailLoad();
+    hideLoading(document.getElementById('llmDebugListPanel'));
+    document.querySelector('.refresh-btn')?.classList.remove('loading');
+    records = [];
+    selected = null;
     expandedInteractions = new Set();
     lineageFilter = null;
     // Remove all event listeners added by setupEventDelegation
@@ -325,37 +338,40 @@ function renderLLMTable(list) {
 // Record selection
 // ---------------------------------------------------------------------------
 
+function cancelDetailLoad() {
+    detailLoad.cancel();
+    detailPending = false;
+    hideLoading(document.getElementById('llmDebugDetailPanel'));
+}
+
+function showLLMError(error) {
+    const message = document.getElementById('llmErrorMessage');
+    if (message) message.textContent = error.message;
+    document.getElementById('llmErrorBanner')?.classList.add('visible');
+}
+
 async function selectLLMRecord(requestId) {
-    // Clear expanded state when switching to a different record
-    if (!selected || selected.request_id !== requestId) {
-        expandedInteractions.clear();
+    requestedSelection = requestId;
+    detailPending = true;
+    const ticket = detailLoad.begin();
+    if (!selected || selected.request_id !== requestId) expandedInteractions.clear();
+    const panel = document.getElementById('llmDebugDetailPanel');
+    showLoading(panel, 'Loading interactions...');
+    try {
+        const { data } = await fetchAPI(`/api/llm-debug/${encodeURIComponent(requestId)}`, { signal: ticket.signal });
+        if (!detailLoad.current(ticket)) return false;
+        selected = data;
+        document.getElementById('llmErrorBanner')?.classList.remove('visible');
+    } catch (error) {
+        if (!detailLoad.current(ticket)) return false;
+        selected = null; showLLMError(error);
+        filterLLMRecords(); renderLLMDetail();
+        return false;
+    } finally {
+        if (detailLoad.current(ticket)) { detailPending = false; hideLoading(panel); }
     }
-
-    const detailPanel = document.getElementById('llmDebugDetailPanel');
-
-    // Check if we already have the full record (with interactions)
-    const summaryRecord = records.find(r => r.request_id === requestId);
-    if (summaryRecord && summaryRecord.interactions) {
-        // Already have full record (from mock data)
-        selected = summaryRecord;
-    } else {
-        // Need to fetch full record from API
-        showLoading(detailPanel, 'Loading interactions...');
-        try {
-            const { data } = await fetchAPI(`/api/llm-debug/${encodeURIComponent(requestId)}`);
-            selected = data;
-        } catch (error) {
-            console.error('Failed to fetch LLM record:', error);
-            // Fallback: use summary record or mock data
-            const mockRecord = getMockLLMDebugRecord(requestId);
-            selected = summaryRecord || mockRecord || null;
-        } finally {
-            hideLoading(detailPanel);
-        }
-    }
-
-    filterLLMRecords();
-    renderLLMDetail();
+    filterLLMRecords(); renderLLMDetail();
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +458,12 @@ function renderLLMInteractionsView(record) {
         'user_memory_reconciliation_skip',
         'user_memory_remember', 'user_memory_summary_remember',
     ]);
-    const interactions = (record.interactions || []).filter(i => !hookTypes.has(i.type));
+    // Card actions index the original recorded array. Preserve that identity
+    // when hiding hooks so Copy and expansion still target the displayed call.
+    const visibleInteractions = (record.interactions || [])
+        .map((interaction, index) => ({ interaction, index }))
+        .filter(({ interaction }) => !hookTypes.has(interaction.type));
+    const interactions = visibleInteractions.map(({ interaction }) => interaction);
 
     // Extract unique models and providers from interactions
     const models = [...new Set(interactions.map(i => i.model).filter(Boolean))];
@@ -504,7 +525,7 @@ function renderLLMInteractionsView(record) {
             </span>
         </div>`;
 
-    interactions.forEach((interaction, index) => {
+    visibleInteractions.forEach(({ interaction, index }) => {
         const promptPreview = truncateText(interaction.prompt, 80);
         const isExpanded = expandedInteractions.has(index);
         const noteState = getInteractionNoteState(interaction);
@@ -527,7 +548,7 @@ function renderLLMInteractionsView(record) {
             // .interaction-body { display: block; }. Earlier this body had an
             // inline `style="display: block;"` that overrode the CSS,
             // forcing these cards always-expanded.
-            html += `<div class="interaction-card${isExpanded ? ' expanded' : ''}" data-index="${index}" id="interaction-${index}" style="border-color: rgba(${_rgb}, 0.22); box-shadow: ${_baseShadow};" onmouseenter="this.style.boxShadow='${_hoverShadow}'; this.style.borderColor='rgba(${_rgb}, 0.38)';" onmouseleave="this.style.boxShadow='${_baseShadow}'; this.style.borderColor='rgba(${_rgb}, 0.22)';">
+            html += `<div class="interaction-card csp-hover-card${isExpanded ? ' expanded' : ''}" data-index="${index}" id="interaction-${index}" style="--card-border: rgba(${_rgb}, 0.22); --card-hover-border: rgba(${_rgb}, 0.38); --card-shadow: ${_baseShadow}; --card-hover-shadow: ${_hoverShadow}; border-color: var(--active-card-border); box-shadow: var(--active-card-shadow);">
                 <div class="interaction-header">
                     <div class="interaction-type-row">
                         <span class="type-badge ${interaction.type}" style="${_badgeStyle}">${interactionLabel}</span>
@@ -551,7 +572,7 @@ function renderLLMInteractionsView(record) {
             </div>`;
             return;
         }
-        html += `<div class="interaction-card${isExpanded ? ' expanded' : ''}" data-index="${index}" id="interaction-${index}" style="border-color: rgba(${_rgb}, 0.25); box-shadow: ${_baseShadow};" onmouseenter="this.style.boxShadow='${_hoverShadow}'; this.style.borderColor='rgba(${_rgb}, 0.4)';" onmouseleave="this.style.boxShadow='${_baseShadow}'; this.style.borderColor='rgba(${_rgb}, 0.25)';">
+        html += `<div class="interaction-card csp-hover-card${isExpanded ? ' expanded' : ''}" data-index="${index}" id="interaction-${index}" style="--card-border: rgba(${_rgb}, 0.25); --card-hover-border: rgba(${_rgb}, 0.4); --card-shadow: ${_baseShadow}; --card-hover-shadow: ${_hoverShadow}; border-color: var(--active-card-border); box-shadow: var(--active-card-shadow);">
             <div class="interaction-header">
                 <div class="interaction-type-row">
                     <span class="type-badge ${interaction.type}" style="${_badgeStyle}">${interactionLabel}</span>
@@ -735,240 +756,44 @@ function copyTextWithFeedback(text, btn) {
 // ---------------------------------------------------------------------------
 
 async function fetchLLMRecords() {
+    const ticket = listLoad.begin();
     const refreshBtn = document.querySelector('.refresh-btn');
-    const errorBanner = document.getElementById('llmErrorBanner');
     const listPanel = document.getElementById('llmDebugListPanel');
-    if (refreshBtn) refreshBtn.classList.add('loading');
+    refreshBtn?.classList.add('loading');
     showLoading(listPanel, 'Loading LLM records...');
-
     try {
-        // Try to fetch from API, fallback to mock data
-        let data;
-        let isFromAPI = false;
-        try {
-            const response = await fetch('/api/llm-debug');
-            if (response.ok) {
-                data = await response.json();
-                isFromAPI = true;
-            } else {
-                throw new Error('API not available');
-            }
-        } catch {
-            // Use mock data for development
-            data = getMockLLMDebugData();
-        }
-
-        // Calculate total tokens - handle both summary format and full format
-        const totalTokens = data.records.reduce((sum, r) => {
-            // Summary format has total_tokens directly
-            if (r.total_tokens !== undefined) return sum + r.total_tokens;
-            // Full format needs to sum from interactions
-            if (r.interactions) return sum + r.interactions.reduce((s, i) => s + (i.total_tokens || 0), 0);
-            return sum;
-        }, 0);
-
-        const recordCountEl = document.getElementById('recordCount');
-        const tokenCountEl = document.getElementById('tokenCount');
-        if (recordCountEl) recordCountEl.textContent = data.records.length;
-        if (tokenCountEl) tokenCountEl.textContent = formatTokens(totalTokens);
-
-        records = data.records.sort((a, b) =>
-            new Date(b.created_at) - new Date(a.created_at)
-        );
-
+        const { data } = await fetchAPI('/api/llm-debug', { signal: ticket.signal });
+        if (!listLoad.current(ticket)) return;
+        records = data.records.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        const total = records.reduce((sum, r) => sum + (r.total_tokens ?? r.interactions?.reduce((n, i) => n + (i.total_tokens || 0), 0) ?? 0), 0);
+        const count = document.getElementById('recordCount');
+        const tokens = document.getElementById('tokenCount');
+        if (count) count.textContent = records.length;
+        if (tokens) tokens.textContent = formatTokens(total);
         filterLLMRecords();
-
-        // If we have a selected record, refresh its data
-        if (selected && isFromAPI) {
-            // Re-fetch full record to get latest data
-            await selectLLMRecord(selected.request_id);
-        } else if (selected) {
-            const updated = records.find(r => r.request_id === selected.request_id);
-            if (updated) { selected = updated; renderLLMDetail(); }
-        }
-
-        const lastUpdatedEl = document.getElementById('llmLastUpdated');
-        if (lastUpdatedEl) lastUpdatedEl.textContent = `Last updated: ${formatDateTime(new Date())}`;
-        if (errorBanner) errorBanner.classList.remove('visible');
-    } catch (error) {
-        console.error('Failed to fetch LLM records:', error);
-        const msgEl = document.getElementById('llmErrorMessage');
-        if (msgEl) msgEl.textContent = error.message;
-        if (errorBanner) errorBanner.classList.add('visible');
-    } finally {
-        if (refreshBtn) refreshBtn.classList.remove('loading');
-        hideLoading(listPanel);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Mock data (used when the API is unavailable)
-// ---------------------------------------------------------------------------
-
-function getMockLLMDebugRecord(requestId) {
-    const mockData = getMockLLMDebugData();
-    return mockData.records.find(r => r.request_id === requestId) || null;
-}
-
-function getMockLLMDebugData() {
-    const now = new Date();
-    return {
-        records: [
-            {
-                request_id: "debug-1736621234567-1",
-                original_request_id: "debug-1736621234567-1",
-                trace_id: "369fecb4e3156c34e0950c61f1f99d62",
-                created_at: new Date(now - 60000).toISOString(),
-                updated_at: new Date(now - 58000).toISOString(),
-                interactions: [
-                    {
-                        type: "plan_generation",
-                        timestamp: new Date(now - 60000).toISOString(),
-                        duration_ms: 1523,
-                        prompt: `You are an intelligent orchestrator for the TruvaG3 framework.\n\nGiven the user request and available capabilities, generate an execution plan.\n\nUSER REQUEST: "What's the weather like in Tokyo and what are some good restaurants there?"\n\nAVAILABLE CAPABILITIES:\n1. weather-service.get_weather - Get current weather for a location\n   Parameters: location (string, required)\n\n2. restaurant-finder.search_restaurants - Find restaurants in a city\n   Parameters: city (string, required), cuisine (string, optional)\n\nGenerate a JSON execution plan with steps to fulfill this request.`,
-                        response: `{\n  "routing_plan": {\n    "steps": [\n      {\n        "step_id": "step-1",\n        "capability": "weather-service.get_weather",\n        "parameters": {"location": "Tokyo, Japan"},\n        "depends_on": []\n      },\n      {\n        "step_id": "step-2",\n        "capability": "restaurant-finder.search_restaurants",\n        "parameters": {"city": "Tokyo"},\n        "depends_on": []\n      }\n    ],\n    "synthesis_strategy": "llm"\n  }\n}`,
-                        temperature: 0.3,
-                        max_tokens: 2000,
-                        model: "gpt-4o-mini",
-                        provider: "openai",
-                        prompt_tokens: 247,
-                        completion_tokens: 156,
-                        total_tokens: 403,
-                        success: true,
-                        attempt: 1
-                    },
-                    {
-                        type: "synthesis",
-                        timestamp: new Date(now - 58000).toISOString(),
-                        duration_ms: 892,
-                        prompt: `Synthesize the following tool results into a coherent, user-friendly response.\n\nUSER QUERY: "What's the weather like in Tokyo and what are some good restaurants there?"\n\nTOOL RESULTS:\n1. weather-service.get_weather:\n   {"temperature": 22, "condition": "Partly Cloudy", "humidity": 65}\n\n2. restaurant-finder.search_restaurants:\n   {"restaurants": [{"name": "Sukiyabashi Jiro", "cuisine": "Sushi", "rating": 4.9}, {"name": "Narisawa", "cuisine": "French-Japanese", "rating": 4.8}]}\n\nCreate a natural, helpful response that combines this information.`,
-                        response: `Based on the current conditions in Tokyo:\n\n**Weather in Tokyo:**\nThe weather is pleasant at 22°C (72°F) with partly cloudy skies and 65% humidity - perfect weather for exploring the city!\n\n**Top Restaurant Recommendations:**\nHere are some excellent dining options:\n\n1. **Sukiyabashi Jiro** ⭐ 4.9\n   - Cuisine: Sushi\n   - World-renowned sushi restaurant featured in "Jiro Dreams of Sushi"\n\n2. **Narisawa** ⭐ 4.8\n   - Cuisine: French-Japanese Fusion\n   - Innovative dining experience blending French techniques with Japanese ingredients\n\nBoth restaurants are highly acclaimed and would make for a memorable dining experience during your visit!`,
-                        temperature: 0.5,
-                        max_tokens: 1500,
-                        model: "gpt-4o-mini",
-                        provider: "openai",
-                        prompt_tokens: 312,
-                        completion_tokens: 198,
-                        total_tokens: 510,
-                        success: true,
-                        attempt: 1
-                    }
-                ]
-            },
-            {
-                request_id: "debug-1736621200000-2",
-                original_request_id: "debug-1736621234567-1",
-                trace_id: "abc123def456789012345678901234ab",
-                created_at: new Date(now - 300000).toISOString(),
-                updated_at: new Date(now - 298000).toISOString(),
-                interactions: [
-                    {
-                        type: "plan_generation",
-                        timestamp: new Date(now - 300000).toISOString(),
-                        duration_ms: 1234,
-                        prompt: `You are an intelligent orchestrator for the TruvaG3 framework.\n\nUSER REQUEST: "Convert 100 USD to EUR"\n\nAVAILABLE CAPABILITIES:\n1. currency-tool.convert - Convert between currencies\n   Parameters: amount (number, required), from (string, required), to (string, required)\n\nGenerate a JSON execution plan.`,
-                        response: `{\n  "routing_plan": {\n    "steps": [\n      {\n        "step_id": "step-1",\n        "capability": "currency-tool.convert",\n        "parameters": {"amount": 100, "from": "USD", "to": "EUR"},\n        "depends_on": []\n      }\n    ],\n    "synthesis_strategy": "simple"\n  }\n}`,
-                        temperature: 0.3,
-                        max_tokens: 2000,
-                        model: "gpt-4o-mini",
-                        provider: "openai",
-                        prompt_tokens: 156,
-                        completion_tokens: 89,
-                        total_tokens: 245,
-                        success: true,
-                        attempt: 1
-                    }
-                ]
-            },
-            {
-                request_id: "debug-1736620900000-3",
-                original_request_id: "debug-1736620900000-3",
-                trace_id: "error123trace456",
-                created_at: new Date(now - 600000).toISOString(),
-                updated_at: new Date(now - 598000).toISOString(),
-                interactions: [
-                    {
-                        type: "plan_generation",
-                        timestamp: new Date(now - 600000).toISOString(),
-                        duration_ms: 2100,
-                        prompt: `You are an intelligent orchestrator...\n\nUSER REQUEST: "Book a flight to Mars"\n\nAVAILABLE CAPABILITIES:\n1. flight-search.search - Search for flights\n   Parameters: from (string), to (string), date (string)`,
-                        success: false,
-                        error: "LLM rate limit exceeded. Please retry after 60 seconds.",
-                        attempt: 1
-                    },
-                    {
-                        type: "plan_generation",
-                        timestamp: new Date(now - 598000).toISOString(),
-                        duration_ms: 1456,
-                        prompt: `You are an intelligent orchestrator...\n\nUSER REQUEST: "Book a flight to Mars"\n\nAVAILABLE CAPABILITIES:\n1. flight-search.search - Search for flights\n   Parameters: from (string), to (string), date (string)`,
-                        response: `{\n  "routing_plan": {\n    "steps": [],\n    "error": "No capability available for interplanetary travel"\n  }\n}`,
-                        temperature: 0.3,
-                        max_tokens: 2000,
-                        model: "gpt-4o",
-                        provider: "openai",
-                        prompt_tokens: 134,
-                        completion_tokens: 45,
-                        total_tokens: 179,
-                        success: true,
-                        attempt: 2
-                    }
-                ]
-            },
-            {
-                request_id: "micro-1736620500000-4",
-                original_request_id: "debug-1736620900000-3",
-                source_components: ["research-assistant"],
-                created_at: new Date(now - 900000).toISOString(),
-                updated_at: new Date(now - 898000).toISOString(),
-                interactions: [
-                    {
-                        type: "micro_resolution",
-                        source_component: "research-assistant",
-                        timestamp: new Date(now - 900000).toISOString(),
-                        duration_ms: 456,
-                        prompt: `Extract the "city" parameter for the restaurant-finder.search_restaurants capability.\n\nSOURCE DATA:\n{\n  "weather_result": {"location": "Paris, France", "temp": 18}\n}\n\nUSER QUERY: "Find restaurants near where I checked the weather"\n\nThe city parameter should be extracted from the context. Return JSON with the resolved value.`,
-                        response: `{"city": "Paris"}`,
-                        temperature: 0.0,
-                        max_tokens: 500,
-                        model: "gpt-4o-mini",
-                        provider: "openai",
-                        prompt_tokens: 89,
-                        completion_tokens: 12,
-                        total_tokens: 101,
-                        success: true,
-                        attempt: 1,
-                        step_id: "step-2"
-                    }
-                ]
-            },
-            {
-                request_id: "reresolver-1736620000000-5",
-                original_request_id: "reresolver-1736620000000-5",
-                source_components: ["travel-agent", "research-assistant"],
-                created_at: new Date(now - 1200000).toISOString(),
-                updated_at: new Date(now - 1198000).toISOString(),
-                interactions: [
-                    {
-                        type: "semantic_retry",
-                        source_component: "travel-agent",
-                        timestamp: new Date(now - 1200000).toISOString(),
-                        duration_ms: 789,
-                        prompt: `TASK: Re-resolve parameters after execution failure\n\nUSER REQUEST: "Get stock price for Apple"\n\nSOURCE DATA FROM PREVIOUS STEPS:\n{}\n\nFAILED ATTEMPT:\n- Capability: stock-market-tool.get_price\n- Parameters sent: {"symbol": "Apple"}\n- Error received: "Invalid symbol format. Expected ticker symbol like 'AAPL'"\n- HTTP Status: 400\n\nTARGET CAPABILITY SCHEMA:\n- symbol (string, required): Stock ticker symbol (e.g., AAPL, GOOGL)\n\nINSTRUCTIONS:\nAnalyze the error and provide corrected parameters.`,
-                        response: `{\n  "should_retry": true,\n  "analysis": "The user said 'Apple' but the API requires the ticker symbol. Apple Inc's ticker is 'AAPL'.",\n  "corrected_parameters": {\n    "symbol": "AAPL"\n  }\n}`,
-                        temperature: 0.0,
-                        max_tokens: 1000,
-                        model: "gpt-4o-mini",
-                        provider: "openai",
-                        prompt_tokens: 178,
-                        completion_tokens: 67,
-                        total_tokens: 245,
-                        success: true,
-                        attempt: 1,
-                        step_id: "step-1"
-                    }
-                ]
+        let detailOK = true;
+        const wanted = requestedSelection ?? selected?.request_id;
+        if (wanted) {
+            if (!records.some(r => r.request_id === wanted)) {
+                cancelDetailLoad(); requestedSelection = null;
+                selected = null; renderLLMDetail();
+            } else if (!detailPending) {
+                detailOK = await selectLLMRecord(wanted);
             }
-        ],
-        timestamp: new Date().toISOString()
-    };
+        }
+        if (!listLoad.current(ticket)) return;
+        const updated = document.getElementById('llmLastUpdated');
+        if (updated) updated.textContent = `Last updated: ${formatDateTime(new Date())}`;
+        if (detailOK) document.getElementById('llmErrorBanner')?.classList.remove('visible');
+    } catch (error) {
+        if (!listLoad.current(ticket)) return;
+        cancelDetailLoad(); requestedSelection = null; records = []; selected = null;
+        for (const id of ['recordCount', 'tokenCount']) {
+            const element = document.getElementById(id);
+            if (element) element.textContent = 'Unavailable';
+        }
+        filterLLMRecords(); renderLLMDetail(); showLLMError(error);
+    } finally {
+        if (listLoad.current(ticket)) { refreshBtn?.classList.remove('loading'); hideLoading(listPanel); }
+    }
 }

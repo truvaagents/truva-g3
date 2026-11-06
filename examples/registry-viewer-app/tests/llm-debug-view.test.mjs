@@ -19,7 +19,7 @@ globalThis.fetch = () => { throw new Error('Rendering must not fetch'); };
 const moduleURL = new URL('../static/js/views/llm-debug.js', import.meta.url);
 let source = await readFile(moduleURL, 'utf8');
 source = source.replace(/from '(\.\.[^']+)'/g, (_, path) => `from '${new URL(path, moduleURL).href}'`);
-source += '\nexport { renderLLMInteractionsView };\nexport function testSetRecords(value) { records = value; }';
+source += '\nexport { renderLLMInteractionsView, copyLLMInteractionContent, toggleInteraction, expandAllInteractions, collapseAllInteractions };\nexport function testSetRecords(value) { records = value; }\nexport function testSetSelected(value) { selected = value; expandedInteractions.clear(); }';
 const view = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 const interaction = values => ({
@@ -74,4 +74,80 @@ html = view.renderLLMInteractionsView(record({ trace_id: '', interactions: [] })
 assert.doesNotMatch(html, />Debug record trace</, 'an absent aggregate trace is not invented');
 assert.match(html, /Open execution DAG/, 'execution navigation is available even without interaction details');
 
-console.log('All standalone LLM-debug trace attribution tests passed.');
+// Use the indexes emitted by the real renderer to drive the real Copy helper.
+// Hook entries before/between visible calls must not change their source identity.
+const repeatedCall = interaction({
+    system_prompt: 'System\nPreserve *pointers* and <tags> exactly.',
+    prompt: 'User\n```go\nvar values = []int{1, 2}\n```\n日本語 🌍',
+    response: '  Response\nKeep leading/trailing whitespace.\t\n',
+});
+assert.ok(repeatedCall.prompt.includes('\n```go\n'), 'fixture contains real newlines');
+assert.ok(repeatedCall.response.endsWith('\t\n'), 'fixture contains a real trailing tab and newline');
+const filteredRecord = record({ interactions: [
+    interaction({ type: 'user_memory_recall_identity', system_prompt: 'HOOK_SYSTEM', prompt: 'HOOK_PROMPT', response: 'HOOK_RESPONSE' }),
+    repeatedCall,
+    interaction({ type: 'user_memory_summary_remember', prompt: 'SECOND_HOOK_PROMPT' }),
+    interaction({ type: 'synthesis', system_prompt: 'Synthesis system', prompt: 'Synthesis user', response: 'Synthesis response' }),
+    repeatedCall,
+] });
+const cards = new Map();
+document.getElementById = id => cards.get(id) || null;
+document.querySelectorAll = selector => selector === '.interaction-card' ? [...cards.values()] : [];
+const clipboard = [];
+const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { clipboard: { writeText: async text => { clipboard.push(text); } } },
+});
+const originalSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = () => 0; // Feedback timers are unrelated to clipboard selection.
+try {
+    for (const candidate of [filteredRecord, record({ interactions: [repeatedCall] })]) {
+        view.testSetSelected(candidate);
+        const snapshot = JSON.stringify(candidate);
+        html = view.renderLLMInteractionsView(candidate);
+        const expectedIndexes = candidate === filteredRecord ? [1, 3, 4] : [0];
+        const displayedCalls = expectedIndexes.map(index => candidate.interactions[index]);
+        const renderedIndexes = [...html.matchAll(/class="interaction-card[^\"]*" data-index="(\d+)" id="interaction-\d+"/g)].map(match => Number(match[1]));
+        const buttons = [...html.matchAll(/data-copy-index="(\d+)" data-copy-type="([^\"]+)"/g)];
+        assert.equal(buttons.length, expectedIndexes.length * 3, 'every visible call has system, user and response Copy controls');
+        for (const [buttonNumber, [, indexText, type]] of buttons.entries()) {
+            const index = Number(indexText);
+            const button = { textContent: 'Copy', classList: { add() {}, remove() {} } };
+            const beforeCopy = clipboard.length;
+            view.copyLLMInteractionContent(index, type, { target: button });
+            await Promise.resolve();
+            assert.equal(clipboard.length, beforeCopy + 1, 'Copy writes exactly one value');
+            assert.equal(clipboard.at(-1), displayedCalls[Math.floor(buttonNumber / 3)][type], `${type} is copied byte-for-byte from the displayed interaction`);
+        }
+        assert.deepEqual(renderedIndexes, expectedIndexes, 'visible cards retain original record indexes, including repeated object references');
+
+        cards.clear();
+        for (const index of renderedIndexes) {
+            const classes = new Set();
+            cards.set(`interaction-${index}`, {
+                dataset: { index: String(index) },
+                classList: {
+                    add: value => classes.add(value), remove: value => classes.delete(value),
+                    contains: value => classes.has(value),
+                    toggle(value) { if (classes.has(value)) classes.delete(value); else classes.add(value); },
+                },
+            });
+        }
+        view.toggleInteraction(expectedIndexes[0]);
+        html = view.renderLLMInteractionsView(candidate);
+        assert.match(html, new RegExp(`class="interaction-card[^\"]* expanded" data-index="${expectedIndexes[0]}"`), 'individual expansion survives rerender with source indexes');
+        view.expandAllInteractions();
+        html = view.renderLLMInteractionsView(candidate);
+        assert.equal((html.match(/class="interaction-card[^\"]* expanded"/g) || []).length, expectedIndexes.length, 'Expand All covers every visible source index');
+        view.collapseAllInteractions();
+        assert.doesNotMatch(view.renderLLMInteractionsView(candidate), /class="interaction-card[^\"]* expanded"/, 'Collapse All clears source-index expansion state');
+        assert.equal(JSON.stringify(candidate), snapshot, 'rendering, expansion and copying leave the raw record unchanged');
+    }
+} finally {
+    globalThis.setTimeout = originalSetTimeout;
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else delete globalThis.navigator;
+}
+
+console.log('All standalone LLM-debug trace attribution and filtered-copy tests passed.');

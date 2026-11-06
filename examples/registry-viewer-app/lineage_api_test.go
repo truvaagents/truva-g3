@@ -217,9 +217,10 @@ func TestExecutionLineageMissingCorruptAndStaleAreReadOnly(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			server, client := newConversationAPIRedis(t)
 			indexLineageRecords(t, client, []StoredExecution{{RequestID: "child", ParentRequestID: "parent"}})
-			if state == "corrupt" {
+			switch state {
+			case "corrupt":
 				server.Set(viewerExecutionKeys.Record("parent"), "{broken")
-			} else if state == "mismatched-id" {
+			case "mismatched-id":
 				server.Set(viewerExecutionKeys.Record("parent"), `{"request_id":"another-record"}`)
 			}
 			if err := client.ZAdd(t.Context(), viewerExecutionKeys.RecentIndex(), redis.Z{Member: "parent", Score: 3}).Err(); err != nil {
@@ -269,9 +270,10 @@ func TestExecutionLineagePreservesSelectedAndAncestorsOnBackendFailureOrCancella
 				t.Fatalf("response=%+v err=%v", response, err)
 			}
 			want := "backend_read"
-			if mode == "cancelled" {
+			switch mode {
+			case "cancelled":
 				want = "cancelled"
-			} else if mode == "deadline" {
+			case "deadline":
 				want = "lookup_deadline"
 			}
 			if !containsString(response.Reasons, want) {
@@ -488,9 +490,10 @@ func TestExecutionLineageSelectedReadFailuresAreErrors(t *testing.T) {
 			server, client := newConversationAPIRedis(t)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			if mode == "corrupt" {
+			switch mode {
+			case "corrupt":
 				server.Set(viewerExecutionKeys.Record("selected"), "not-json")
-			} else if mode == "cancelled" {
+			case "cancelled":
 				cancel()
 			}
 			hook := &lineageReadOnlyHook{}
@@ -603,7 +606,8 @@ func BenchmarkExecutionLineageBusyHistory(b *testing.B) {
 			var responseBytes int
 			b.ResetTimer()
 			for range b.N {
-				if mode == "lineage-two-views" {
+				switch mode {
+				case "lineage-two-views":
 					errs := make(chan error, 2)
 					for range 2 {
 						go func() {
@@ -616,7 +620,7 @@ func BenchmarkExecutionLineageBusyHistory(b *testing.B) {
 							b.Fatal(err)
 						}
 					}
-				} else if mode == "lineage" {
+				case "lineage":
 					response, err := loadExecutionLineageWithClient(ctx, client, "request-00001")
 					if err != nil || len(response.Executions) != 2 {
 						b.Fatalf("lineage err=%v", err)
@@ -626,8 +630,8 @@ func BenchmarkExecutionLineageBusyHistory(b *testing.B) {
 						b.Fatal(err)
 					}
 					responseBytes = len(data)
-				} else {
-					ids, err := client.ZRevRange(ctx, viewerExecutionKeys.RecentIndex(), 0, viewerGlobalExecutionScanLimit-1).Result()
+				default:
+					ids, err := client.ZRangeArgs(ctx, redis.ZRangeArgs{Key: viewerExecutionKeys.RecentIndex(), Start: 0, Stop: viewerGlobalExecutionScanLimit - 1, Rev: true}).Result()
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -644,7 +648,8 @@ func BenchmarkExecutionLineageBusyHistory(b *testing.B) {
 			b.ReportMetric(float64(before.HeapAlloc), "fixture-heap-B")
 			b.ReportMetric(float64(peak-before.HeapAlloc), "additional-peak-heap-B")
 			views := 1
-			if mode == "lineage-two-views" {
+			switch mode {
+			case "lineage-two-views":
 				views = 2
 			}
 			b.ReportMetric(float64(decodedBytes)*float64(views), "decoded-B/op")

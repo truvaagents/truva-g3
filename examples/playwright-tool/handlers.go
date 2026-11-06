@@ -200,6 +200,7 @@ func (t *PlaywrightTool) handleExplorePage(rw http.ResponseWriter, r *http.Reque
 // --- Handler: run_tests ---
 
 func (t *PlaywrightTool) handleRunTests(rw http.ResponseWriter, r *http.Request) {
+	store := t.testStore()
 	startTime := time.Now()
 	ctx := r.Context()
 
@@ -361,14 +362,14 @@ func (t *PlaywrightTool) handleRunTests(rw http.ResponseWriter, r *http.Request)
 	}
 
 	// Update script run status in Redis (for lookup_scripts metadata)
-	if t.store != nil && result.ScriptName != "" {
+	if store != nil && result.ScriptName != "" {
 		runStatus := "passed"
 		if result.Summary.Failed > 0 && result.Summary.Passed > 0 {
 			runStatus = "mixed"
 		} else if result.Summary.Failed > 0 {
 			runStatus = "failed"
 		}
-		t.store.UpdateScriptRunStatus(ctx, site, result.ScriptName, runStatus,
+		store.UpdateScriptRunStatus(ctx, site, result.ScriptName, runStatus,
 			time.Now().UTC().Format("2006-01-02"))
 	}
 
@@ -408,6 +409,7 @@ func (t *PlaywrightTool) handleRunTests(rw http.ResponseWriter, r *http.Request)
 
 // uploadAndIndex handles S3 upload and Redis indexing for test results
 func (t *PlaywrightTool) uploadAndIndex(ctx context.Context, result *TestRunResult, script, site, requestID string) {
+	store := t.testStore()
 	// S3 path: {hostname}/runs/{YYYY}/{MM}/{DD}/{requestID}
 	now := time.Now().UTC()
 	s3Prefix := fmt.Sprintf("%s/runs/%s/%s",
@@ -498,8 +500,8 @@ func (t *PlaywrightTool) uploadAndIndex(ctx context.Context, result *TestRunResu
 			// Get version from Redis
 			version := 1
 			var existingTestNames []string
-			if t.store != nil {
-				if existing, err := t.store.GetScriptRef(ctx, site, result.ScriptName); err == nil {
+			if store != nil {
+				if existing, err := store.GetScriptRef(ctx, site, result.ScriptName); err == nil {
 					version = existing.Version + 1
 					existingTestNames = existing.TestNames
 				}
@@ -518,7 +520,7 @@ func (t *PlaywrightTool) uploadAndIndex(ctx context.Context, result *TestRunResu
 					runStatus = "failed"
 				}
 
-				t.store.SaveScriptRef(ctx, site, ScriptMetadata{
+				store.SaveScriptRef(ctx, site, ScriptMetadata{
 					Name:          result.ScriptName,
 					S3Path:        scriptKey,
 					Version:       version,
@@ -536,7 +538,7 @@ func (t *PlaywrightTool) uploadAndIndex(ctx context.Context, result *TestRunResu
 	}
 
 	// Index run in Redis
-	if t.store != nil {
+	if store != nil {
 		status := "passed"
 		if result.Summary.Failed > 0 && result.Summary.Passed > 0 {
 			status = "mixed"
@@ -544,7 +546,7 @@ func (t *PlaywrightTool) uploadAndIndex(ctx context.Context, result *TestRunResu
 			status = "failed"
 		}
 
-		t.store.IndexRun(ctx, RunMetadata{
+		store.IndexRun(ctx, RunMetadata{
 			RunID:      result.RunID,
 			TargetURL:  result.TargetURL,
 			Site:       site,
@@ -560,6 +562,7 @@ func (t *PlaywrightTool) uploadAndIndex(ctx context.Context, result *TestRunResu
 // --- Handler: get_results ---
 
 func (t *PlaywrightTool) handleGetResults(rw http.ResponseWriter, r *http.Request) {
+	store := t.testStore()
 	startTime := time.Now()
 	ctx := r.Context()
 
@@ -607,7 +610,7 @@ func (t *PlaywrightTool) handleGetResults(rw http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if t.store == nil {
+	if store == nil {
 		t.sendError(rw, "Test result store not available (Redis not configured)", http.StatusServiceUnavailable, "STORE_UNAVAILABLE")
 		return
 	}
@@ -618,7 +621,7 @@ func (t *PlaywrightTool) handleGetResults(rw http.ResponseWriter, r *http.Reques
 		attribute.String("status_filter", req.Status),
 	)
 
-	results, err := t.store.QueryRuns(ctx, RunFilter{
+	results, err := store.QueryRuns(ctx, RunFilter{
 		Site:     req.Site,
 		Status:   req.Status,
 		FromDate: req.FromDate,
@@ -682,6 +685,7 @@ func (t *PlaywrightTool) handleGetResults(rw http.ResponseWriter, r *http.Reques
 // --- Handler: get_artifacts ---
 
 func (t *PlaywrightTool) handleGetArtifacts(rw http.ResponseWriter, r *http.Request) {
+	store := t.testStore()
 	startTime := time.Now()
 	ctx := r.Context()
 
@@ -754,8 +758,8 @@ func (t *PlaywrightTool) handleGetArtifacts(rw http.ResponseWriter, r *http.Requ
 	// Look up run metadata from Redis to get the correct S3 prefix and target URL
 	var s3Prefix string
 	var targetURL string
-	if t.store != nil {
-		if meta, err := t.store.GetRunMetadata(ctx, req.RunID); err == nil {
+	if store != nil {
+		if meta, err := store.GetRunMetadata(ctx, req.RunID); err == nil {
 			s3Prefix = meta.S3Prefix
 			targetURL = meta.TargetURL
 		}
@@ -830,6 +834,7 @@ func (t *PlaywrightTool) handleGetArtifacts(rw http.ResponseWriter, r *http.Requ
 // --- Handler: lookup_scripts ---
 
 func (t *PlaywrightTool) handleLookupScripts(rw http.ResponseWriter, r *http.Request) {
+	store := t.testStore()
 	startTime := time.Now()
 	ctx := r.Context()
 
@@ -874,7 +879,7 @@ func (t *PlaywrightTool) handleLookupScripts(rw http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if t.store == nil {
+	if store == nil {
 		t.sendError(rw, "Script store not available (Redis not configured)", http.StatusServiceUnavailable, "STORE_UNAVAILABLE")
 		return
 	}
@@ -883,7 +888,7 @@ func (t *PlaywrightTool) handleLookupScripts(rw http.ResponseWriter, r *http.Req
 		attribute.String("lookup.hostname", req.Hostname),
 	)
 
-	scripts, err := t.store.ListScripts(ctx, req.Hostname)
+	scripts, err := store.ListScripts(ctx, req.Hostname)
 	if err != nil {
 		telemetry.RecordSpanError(ctx, err)
 		if t.Logger != nil {
@@ -1471,15 +1476,16 @@ func (t *PlaywrightTool) handleBrowserTest(w http.ResponseWriter, r *http.Reques
 
 // resolveReusableScript fetches a stored script from S3 by name
 func (t *PlaywrightTool) resolveReusableScript(ctx context.Context, site, scriptName string) (string, error) {
+	store := t.testStore()
 	if !t.s3Ready {
 		return "", fmt.Errorf("S3 not available")
 	}
 
-	if t.store == nil {
+	if store == nil {
 		return "", fmt.Errorf("script store not available")
 	}
 
-	meta, err := t.store.GetScriptRef(ctx, site, scriptName)
+	meta, err := store.GetScriptRef(ctx, site, scriptName)
 	if err != nil {
 		return "", err
 	}

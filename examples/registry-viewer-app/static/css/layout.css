@@ -3138,3 +3138,13 @@ tr.expandable td:nth-child(2)::before {
 }
 
 .hidden { display: none !important; }
+
+/* Colour-aware card feedback without inline JavaScript (script-src self). */
+.csp-hover-card {
+    --active-card-border: var(--card-border);
+    --active-card-shadow: var(--card-shadow);
+}
+.csp-hover-card:hover {
+    --active-card-border: var(--card-hover-border);
+    --active-card-shadow: var(--card-hover-shadow);
+}

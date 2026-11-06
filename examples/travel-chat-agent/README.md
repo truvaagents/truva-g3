@@ -222,7 +222,18 @@ These extend the agent's reach beyond the prompt's explicit instructions.
 
 ### Sibling Agent (DevOps Delegation)
 
-The travel-chat-agent's prompt instructs it to delegate any Kubernetes / cluster / DevOps query to the `devops_operations` capability exposed by [devops-chat-agent](../devops-chat-agent/README.md). This is purely an opportunistic delegation — if the devops-chat-agent isn't deployed, those queries simply fail; travel-related queries are unaffected.
+The optional `travel/devops-delegation` skill guides Kubernetes, infrastructure,
+and DevOps work toward the currently discovered `devops_operations` capability
+of [devops-chat-agent](../devops-chat-agent/README.md). It passes the complete
+request in `query` and omits `session_id` unless a real DevOps session is
+available. If that capability is absent, the guidance asks the planner to report
+unavailable delegation and incomplete work. Ordinary travel requests keep their
+travel workflow.
+
+This is planner guidance, not enforced routing, a permission grant, or a network
+restriction. Downstream approval requests, failures, and unverified outcomes
+remain visible. Existing request and step deadlines still apply; the skill
+cannot guarantee that nested human approval finishes before them.
 
 ### Related Agents
 
@@ -424,10 +435,12 @@ List available tools discovered by the orchestrator.
 
 ### Agent Skills
 
-The agent code explicitly binds five reusable packages:
+The agent code explicitly binds six reusable packages:
 
 - `travel/action-verification` — `always`; verify live sources before acting
   on travel information.
+- `travel/devops-delegation` — `always`; guide DevOps work through the
+  discovered sibling agent while preserving its approval and verification status.
 - `travel/travel-search-preparation` — `auto`; prepare live travel searches
   without hardcoding capability names.
 - `travel/currency-conversion` — `auto`; guide exchange-rate and conversion
@@ -465,6 +478,15 @@ reach that API. This skips only automatic deployment synchronization;
 failure or drift.
 Agent replicas do not receive mutable binding API calls: code owns the default
 list, and `TRUVAG3_SKILL_BINDINGS_JSON` can replace it for the whole deployment.
+All six defaults are optional (`required: false`). `always` activates guidance
+only after successful package resolution and admission; unavailable publication,
+disabled skills, or a replacement binding list can remove the delegation
+guidance. Activation examples are evaluation inputs, so negative examples do not
+deactivate an `always` binding.
+
+After changing Go binding or persona code, use `./setup.sh rebuild` when
+deploying the agent. A package-only update needs `./setup.sh skills-sync`,
+followed by `./setup.sh skills-check`; it does not need an image rebuild.
 
 At request start, all bindings resolve in one Redis-backed batch and exact
 versions are pinned. A newly published version therefore appears on the next
@@ -770,3 +792,16 @@ kubectl exec -n truvag3-examples deploy/redis -- redis-cli -n 0 \
 - [scheduler-tool](../scheduler-tool/) - Schedules recurring queries via `/api/v1/scheduled`
 
 For infrastructure setup details, see [k8-deployment/README.md](../k8-deployment/README.md).
+
+
+### Streaming connection lifecycle
+
+Established SSE responses send an initial comment heartbeat and another every
+20 seconds during quiet work. Comments keep the transport active without adding
+chat events. Frame writes are serialized; a write/flush failure cancels the
+request, and request cleanup stops and joins the heartbeat worker. Heartbeats do
+not extend execution deadlines or guarantee recovery from a blocked network write.
+An incomplete framework stream is reported as `stream_incomplete` with
+`retryable:false`, retaining partial output and avoiding automatic repetition of
+completed tool effects. Complete generated content is retained in history even
+when its final network delivery fails; that failure is not logged as success.

@@ -162,6 +162,19 @@ build_app() {
     echo ""
 }
 
+# Build the independent released-module image without contacting Kubernetes.
+build_docker_standalone() {
+    if [ "$DOCKER_AVAILABLE" != true ]; then
+        log_error "A container runtime is required for building images"
+        return 1
+    fi
+    local no_cache_flag=""
+    if [ "$DOCKER_NO_CACHE" = "true" ]; then no_cache_flag="--no-cache"; fi
+    "${TRUVAG3_CONTAINER_RUNTIME:-docker}" build $no_cache_flag \
+        -f "$SCRIPT_DIR/Dockerfile" -t registry-viewer-standalone:local "$SCRIPT_DIR"
+    log_success "Standalone image built: registry-viewer-standalone:local"
+}
+
 # Build Docker image using Dockerfile.workspace from truvag3 root
 build_docker() {
     log_info "Building Docker image..."
@@ -638,7 +651,8 @@ Local Development:
   status        Show status of local/docker/k8s resources
 
 Docker:
-  docker             Build Docker image
+  docker             Build image from local framework source
+  docker-standalone  Build released-module image only (no deployment)
   docker-run         Run Docker container locally with mock data
   docker-run redis   Run Docker container with URL or structured Redis configuration
 
@@ -819,6 +833,10 @@ case "${1:-help}" in
     docker)
         check_prerequisites
         build_docker
+        ;;
+    docker-standalone)
+        check_prerequisites
+        build_docker_standalone
         ;;
     docker-run)
         check_prerequisites

@@ -499,24 +499,7 @@ func (t *DevOpsChatAgent) processWithStreamingExecution(ctx context.Context, ses
 
 	// Pass raw query + metadata (history auto-promoted to enrichments by orchestrator)
 	result, execution, err := orch.ProcessRequestStreamingWithExecution(ctx, query, metadata, func(chunk core.StreamChunk) error {
-		// Phase-complete chunks are transient progress indicators, not response content.
-		// Send them as status events so the UI shows them temporarily during processing
-		// rather than accumulating them into the final response text.
-		if chunk.Metadata != nil && chunk.Metadata["type"] == "phase_complete" {
-			phaseNum, _ := chunk.Metadata["phase"].(int)
-			callback.SendStatus("phase_complete", fmt.Sprintf("Phase %d complete. Planning next phase...", phaseNum))
-			return nil
-		}
-		// Forward content chunks to SSE callback
-		if chunk.Content != "" {
-			callback.SendChunk(chunk.Content)
-		}
-		if delivery, ok := callback.(interface{ Err() error }); ok {
-			if err := delivery.Err(); err != nil {
-				return err
-			}
-		}
-		return ctx.Err()
+		return forwardStreamChunk(ctx, callback, chunk)
 	})
 	if err != nil {
 		// Check for HITL interrupt — execution paused for human approval

@@ -1,8 +1,5 @@
-# Dockerfile for a source-level registry-viewer-app checkout.
-# In the TruvaG3 repository, use setup.sh and Dockerfile.workspace; this file
-# requires the go.mod replace directives to resolve to released or copied
-# framework modules before it can be built outside the workspace.
-# Usage after that preparation: docker build -t registry-viewer:latest .
+# Standalone Viewer build using the released framework versions in go.mod.
+# Run ./setup.sh docker-standalone; ./setup.sh docker uses local framework code.
 
 FROM golang:1.27.3-alpine AS builder
 
@@ -10,6 +7,7 @@ FROM golang:1.27.3-alpine AS builder
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /app
+ENV GOWORK=off
 
 # Copy go mod files first for better caching
 COPY go.mod go.sum ./
