@@ -1709,6 +1709,15 @@ skills does not introduce a new resume protocol or guaranteed escalation.
 
 #### Model plan intent and correction budgets
 
+Executable steps for the built-in HTTP executor require
+`metadata.capability` as a nonblank string naming the intended capability.
+Plan validation rejects a missing, null, wrongly typed or blank value with the
+step ID and field name in the feedback. Initial and continuation model plans use
+their existing bounded correction paths; the framework does not infer a missing
+capability name. Omitted parameters remain valid for zero-argument capabilities.
+Direct executor calls enforce capability identity again before dispatch;
+hook-mutated plans retain the hook's validation and failure policy.
+
 Fresh model plan JSON must establish routing intent: use nonempty `steps` for
 intended work, explicit `terminal:true` for a finished/no-further-action plan,
 or a `needs_user_input` object with a nonblank `question` for clarification.
