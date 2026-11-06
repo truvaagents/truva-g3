@@ -589,6 +589,7 @@ func (o *AIOrchestrator) runRequest(ctx context.Context, input requestRunInput) 
 		)
 		return nil, newSkillDomainError(ErrSkillUnavailable, "resume with skills disabled", SkillRef{})
 	}
+	state.Context = withResumeStateCapture(state.Context, state.SkillState != nil)
 	decision, err := o.runBeforePlanningHooks(
 		state.Context,
 		state.Pipeline,
