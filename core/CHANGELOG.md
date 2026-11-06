@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.6.2
+
+Requires Go 1.27.3 or newer. See the [root changelog](../CHANGELOG.md)
+for coordinated module versions and adoption requirements.
 
 - Add validated `IncomingCall` context helpers and automatic header capture in
   agent/tool HTTP servers. Incoming caller request/step/root facts remain

@@ -1,6 +1,47 @@
 # Changelog
 
-## Unreleased
+## v0.6.2
+
+All seven Go modules are co-versioned and require Go 1.27.3 or newer. Update
+first-party module requirements together to v0.6.2. Memory and resilience have
+dependency/toolchain updates without module-specific source changes.
+
+### Execution, delegation and observability
+
+- **Core:** add validated `IncomingCall` context helpers and automatic caller
+  request/step/root capture in framework HTTP servers. Incoming caller facts
+  stay separate from the receiver's own execution identity.
+- **Orchestration:** record immediate parent request/step links on managed
+  executions and checkpoints, preserve checkpoint-owned lineage across resume,
+  and isolate child request/step/phase/plan context. Retain observed step results
+  when cancellation/deadline errors return, while keeping aggregate failure and
+  existing finalization ownership.
+- **Delegated results:** retain readable answers, questions and factual child
+  outcomes from registered framework envelopes in bounded continuation views.
+  Encode structured clarification fields consistently in synthesis prompts;
+  adapters explicitly forward their optional structured response field.
+- **LLM debug and tracing:** preserve per-interaction trace IDs and stable record
+  trace references, including linked background work and baggage-capacity
+  fallback. Keep bounded span previews on valid UTF-8 boundaries. Raw payloads,
+  trace ancestry and retention contracts are preserved.
+- **Tool selection:** correct invalid full tool IDs within the existing attempt
+  budget and frozen catalog, recording each selector call. Expose the existing
+  regeneration-feedback byte limit through the direct provider setter.
+
+### AI behavior and defaults
+
+- OpenRouter's built-in `default` alias now selects
+  `deepseek/deepseek-v4.1-flash`, and `smart` selects `z-ai/glm-5.3`. `fast`
+  remains `openai/gpt-6-luna`. Declare JSON-object support for the exact GLM
+  model and allow stable cache identity for eligible concrete default/smart
+  routes; explicit overrides and router/fallback eligibility remain authoritative.
+- Reject ambiguous buffered Bedrock Converse content when SDK union decoding
+  reuses a text block after an unrecognized or null-valued member. Preserve
+  distinct equal-text blocks and failure evidence. Advance the adapter cache
+  fingerprint to `bedrock-converse-v6`.
+- Raise the base per-call tiered tool-selection output allowance from 2,000 to
+  20,000 tokens. Existing overrides, provider reasoning headroom and reviewed
+  output ceilings still apply. Skill-selection budgets are unchanged.
 
 ### Security
 
@@ -8,6 +49,32 @@
   `crypto/x509` fix for GO-2026-6809. Align dependent example module minimums,
   container compiler images, and generated workspaces with the patched version.
   Rebuild deployed binaries to receive the standard-library fix.
+
+- Refresh framework dependencies, including the AWS SDK, Qdrant client,
+  OpenTelemetry protocol/gRPC dependencies and test libraries. See each module's
+  dependency manifest for the resolved versions.
+
+### Adoption
+
+- Rebuild and upgrade both callers and delegated agents to receive the new
+  parent-link recording. Custom HTTP hosts use the incoming-call middleware
+  contract. A shared trace/root alone is not an immediate-parent pointer, and
+  historical records are not backfilled.
+- Clarification ends a turn. This release does not add durable waiting,
+  automatic resumption or automatic child-to-root question escalation. Earlier
+  failed steps remain failed; preserve structured outcomes in application
+  JSON/SSE adapters.
+- Review the higher selector allowance and changed OpenRouter aliases when
+  budgeting deployments. Use `TRUVAG3_TIERED_SELECTION_MAX_TOKENS` to override the
+  selector allowance and provider-specific model overrides to retain a chosen
+  route. Invalid-selector correction can add calls within its existing budget.
+- Reference-example and external application version pins are updated after
+  module publication. Workspace validation alone does not establish that
+  published v0.6.2 modules are independently consumable.
+
+See the [core](core/CHANGELOG.md), [telemetry](telemetry/CHANGELOG.md),
+[AI](ai/CHANGELOG.md), [orchestration](orchestration/CHANGELOG.md) and
+[memory](memory/CHANGELOG.md) changelogs for details.
 
 ## v0.6.1
 
