@@ -38,14 +38,21 @@ import {
 
 const listLoad = createLoadGuard();
 const detailLoad = createLoadGuard();
+const summaryLoad = createLoadGuard();
+const SUMMARY_BATCH_SIZE = 5;
 let records = [];
 let selected = null;
 let requestedSelection = null;
+let selectionVersion = 0;
 let detailPending = false;
+let detailError = null;
 let activeTab = 'interactions';
 let typeFilter = 'all';
 let expandedInteractions = new Set();
 let lineageFilter = null;
+let listCursor = '';
+let nextCursor = '';
+let cursorHistory = [];
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -53,20 +60,30 @@ let lineageFilter = null;
 
 export function init() {
     setupEventDelegation();
+    setupMetadataPagination();
     fetchLLMRecords();
 }
 
-export function refresh() {
-    fetchLLMRecords();
+export async function refresh({ manual = false } = {}) {
+    const wanted = requestedSelection ?? selected?.request_id;
+    const version = selectionVersion;
+    const listLoaded = await fetchLLMRecords();
+    // A refreshed list does not own a selection made while it was loading.
+    // Destruction also revokes this intent, including transports that ignore
+    // cancellation and finish after the operator leaves this view.
+    if (manual && wanted && listLoaded && version === selectionVersion) await selectLLMRecord(wanted);
 }
 
 // Track bound listeners for cleanup
 let boundListeners = [];
 
 export function destroy() {
+    selectionVersion++;
     requestedSelection = null;
     detailPending = false;
+    detailError = null;
     listLoad.cancel();
+    summaryLoad.cancel();
     cancelDetailLoad();
     hideLoading(document.getElementById('llmDebugListPanel'));
     document.querySelector('.refresh-btn')?.classList.remove('loading');
@@ -74,6 +91,10 @@ export function destroy() {
     selected = null;
     expandedInteractions = new Set();
     lineageFilter = null;
+    listCursor = '';
+    nextCursor = '';
+    cursorHistory = [];
+    renderLLMDetail();
     // Remove all event listeners added by setupEventDelegation
     boundListeners.forEach(({ el, type, fn }) => el.removeEventListener(type, fn));
     boundListeners = [];
@@ -124,7 +145,14 @@ function setupEventDelegation() {
         // Search input
         const searchInput = filterContainer.querySelector('#llmSearchInput');
         if (searchInput) {
+            searchInput.placeholder = 'Filter this page; Enter opens an exact request ID';
             addTrackedListener(searchInput, 'input', () => filterLLMRecords());
+            addTrackedListener(searchInput, 'keydown', event => {
+                if (event.key === 'Enter' && searchInput.value.trim()) {
+                    event.preventDefault();
+                    void selectLLMRecord(searchInput.value.trim());
+                }
+            });
         }
     }
 
@@ -186,11 +214,8 @@ function setupEventDelegation() {
         });
     }
 
-    // Refresh button
-    const refreshBtn = document.querySelector('.refresh-btn');
-    if (refreshBtn) {
-        addTrackedListener(refreshBtn, 'click', () => fetchLLMRecords());
-    }
+    // app.js owns the shared Refresh button and calls refresh({ manual: true }).
+    // A second listener here would abort that owned list request.
 }
 
 // ---------------------------------------------------------------------------
@@ -221,8 +246,8 @@ function filterLLMRecords() {
 
         const matchesFilter = typeFilter === 'all' ||
             typeFilter === 'grouped' || // grouped mode shows all, but sorted
-            (typeFilter === 'success' && !hasErrors) ||
-            (typeFilter === 'error' && hasErrors);
+            (typeFilter === 'success' && !record.summary_pending && !hasErrors) ||
+            (typeFilter === 'error' && !record.summary_pending && hasErrors);
         const matchesSearch = !searchTerm ||
             record.request_id.toLowerCase().includes(searchTerm) ||
             (origReqId && origReqId.toLowerCase().includes(searchTerm)) ||
@@ -281,7 +306,7 @@ function renderSourceBadges(sourceComponents) {
         return '<span class="source-badge orchestrator">orchestrator</span>';
     }
     return sourceComponents.map(src =>
-        `<span class="source-badge agent">${src}</span>`
+        `<span class="source-badge agent">${escapeHtml(src)}</span>`
     ).join(' ');
 }
 
@@ -292,8 +317,9 @@ function renderSourceBadges(sourceComponents) {
 // orchestrator-fallback badge — originator IS an orchestrator (or background job).
 function renderSourceCell(record) {
     if (record.originating_agent) {
-        return `<span class="source-badge orchestrator">${record.originating_agent}</span>`;
+        return `<span class="source-badge orchestrator">${escapeHtml(record.originating_agent)}</span>`;
     }
+    if (record.summary_pending) return '<span class="source-badge">Unknown</span>';
     return renderSourceBadges(record.source_components);
 }
 
@@ -305,6 +331,7 @@ function renderLLMTable(list) {
         return;
     }
     tbody.innerHTML = list.map(record => {
+        const pending = record.summary_pending === true;
         // Support both summary format and full format
         const totalTokens = record.total_tokens !== undefined ? record.total_tokens :
             (record.interactions ? record.interactions.reduce((sum, i) => sum + (i.total_tokens || 0), 0) : 0);
@@ -317,19 +344,21 @@ function renderLLMTable(list) {
         const isResumed = origReqId !== record.request_id;
         // Check whether this request lineage has linked records.
         const hasLinkedRecords = countLineageRecords(origReqId) > 1;
+        const requestAttribute = escapeHtml(record.request_id).replaceAll('"', '&quot;');
+        const rootAttribute = escapeHtml(origReqId).replaceAll('"', '&quot;');
         return `
-        <tr data-request-id="${record.request_id}" class="${selected?.request_id === record.request_id ? 'selected' : ''}">
-            <td><span class="request-id" title="${record.request_id}">${record.request_id}</span></td>
+        <tr data-request-id="${requestAttribute}" class="${selected?.request_id === record.request_id ? 'selected' : ''}">
+            <td><span class="request-id" title="${requestAttribute}">${escapeHtml(record.request_id)}</span></td>
             <td>
-                <span class="request-id" title="${origReqId}${hasLinkedRecords ? ' (click to filter linked records)' : ''}" style="${hasLinkedRecords ? 'cursor: pointer; text-decoration: underline; text-decoration-style: dotted;' : ''}" ${hasLinkedRecords ? `data-lineage-request-id="${origReqId}"` : ''}>
-                    ${isResumed ? '🔗 ' : ''}${origReqId}
+                <span class="request-id" title="${rootAttribute}${hasLinkedRecords ? ' (click to filter linked records)' : ''}" style="${hasLinkedRecords ? 'cursor: pointer; text-decoration: underline; text-decoration-style: dotted;' : ''}" ${hasLinkedRecords ? `data-lineage-request-id="${rootAttribute}"` : ''}>
+                    ${isResumed ? '🔗 ' : ''}${escapeHtml(origReqId)}
                 </span>
             </td>
             <td>${renderSourceCell(record)}</td>
-            <td>${interactionCount}</td>
-            <td>${formatTokens(totalTokens)}</td>
-            <td><span class="status-badge ${hasErrors ? 'error' : 'success'}">${hasErrors ? '⚠ Has Errors' : '✓ Success'}</span></td>
-            <td><span class="time-ago">${formatTimeAgo(record.created_at)}</span></td>
+            <td title="${pending ? (record.summary_error ? 'Summary unavailable; open the record for details' : 'Loading call totals…') : 'Deduplicated interactions'}">${pending ? '—' : interactionCount}</td>
+            <td>${pending ? '—' : formatTokens(totalTokens)}</td>
+            <td>${pending ? `<span class="status-badge">${record.summary_error ? 'Unavailable' : 'Loading…'}</span>` : `<span class="status-badge ${hasErrors ? 'error' : 'success'}" title="Outcomes of the recorded interactions; this is not the overall execution status">${hasErrors ? '⚠ Has Errors' : '✓ No Errors'}</span>`}</td>
+            <td><span class="time-ago">${record.created_at ? formatTimeAgo(record.created_at) : 'Unknown'}</span></td>
         </tr>
     `}).join('');
 }
@@ -351,6 +380,7 @@ function showLLMError(error) {
 }
 
 async function selectLLMRecord(requestId) {
+    selectionVersion++;
     requestedSelection = requestId;
     detailPending = true;
     const ticket = detailLoad.begin();
@@ -358,20 +388,82 @@ async function selectLLMRecord(requestId) {
     const panel = document.getElementById('llmDebugDetailPanel');
     showLoading(panel, 'Loading interactions...');
     try {
-        const { data } = await fetchAPI(`/api/llm-debug/${encodeURIComponent(requestId)}`, { signal: ticket.signal });
+        const { data } = await fetchAPI(`/api/llm-debug/${encodeURIComponent(requestId)}`, { signal: ticket.signal, cache: false });
         if (!detailLoad.current(ticket)) return false;
         selected = data;
+        detailError = null;
+        const rowIndex = records.findIndex(record => record.request_id === requestId);
+        if (rowIndex >= 0) records[rowIndex] = {
+            ...records[rowIndex], summary_pending: false, summary_error: false,
+            interaction_count: data.interactions?.length || 0,
+            total_tokens: data.interactions?.reduce((sum, call) => sum + (call.total_tokens || 0), 0) || 0,
+            has_errors: data.interactions?.some(call => !call.success) || false,
+        };
         document.getElementById('llmErrorBanner')?.classList.remove('visible');
     } catch (error) {
         if (!detailLoad.current(ticket)) return false;
-        selected = null; showLLMError(error);
+        selected = null; detailError = error; showLLMError(error);
         filterLLMRecords(); renderLLMDetail();
         return false;
     } finally {
         if (detailLoad.current(ticket)) { detailPending = false; hideLoading(panel); }
     }
-    filterLLMRecords(); renderLLMDetail();
+    updateLLMListCounts(); filterLLMRecords(); renderLLMDetail();
     return true;
+}
+
+function updateLLMListCounts() {
+    const count = document.getElementById('recordCount');
+    const tokens = document.getElementById('tokenCount');
+    if (count) count.textContent = records.length;
+    if (!tokens) return;
+    const loaded = records.filter(record => !record.summary_pending);
+    const total = loaded.reduce((sum, record) => sum + (record.total_tokens ?? record.interactions?.reduce((n, call) => n + (call.total_tokens || 0), 0) ?? 0), 0);
+    const pending = records.some(record => record.summary_pending && !record.summary_error);
+    tokens.textContent = loaded.length ? `${formatTokens(total)}${loaded.length < records.length ? '+' : ''}` : pending ? 'Loading…' : records.length ? 'Unavailable' : '0';
+    tokens.title = `${total.toLocaleString('en-US')} tokens for ${loaded.length} of ${records.length} records on this page; this is not a backend-wide total`;
+}
+
+async function loadLLMRowSummaries(pageTicket) {
+    const ticket = summaryLoad.begin();
+    const pending = records.filter(record => record.summary_pending).map(record => record.request_id);
+    const current = () => summaryLoad.current(ticket) && listLoad.current(pageTicket);
+    for (let offset = 0; offset < pending.length && current(); offset += SUMMARY_BATCH_SIZE) {
+        const ids = pending.slice(offset, offset + SUMMARY_BATCH_SIZE);
+        try {
+            const query = new URLSearchParams();
+            ids.forEach(id => query.append('request_id', id));
+            const { data } = await fetchAPI(`/api/llm-debug/summaries?${query}`, { signal: ticket.signal, cache: false });
+            if (!current()) return;
+            const summaries = new Map((data.records || []).map(row => [row.request_id, row]));
+            records = records.map(record => {
+                // A detail response may have provided newer facts while the
+                // background summary was in flight. It owns those row values.
+                if (!ids.includes(record.request_id) || !record.summary_pending) return record;
+                const row = summaries.get(record.request_id);
+                if (row?.state !== 'ready' || !Number.isSafeInteger(row.interaction_count) || row.interaction_count < 0 || !Number.isSafeInteger(row.total_tokens) || row.total_tokens < 0 || typeof row.has_errors !== 'boolean') {
+                    return { ...record, summary_error: true };
+                }
+                return { ...record, summary_pending: false, summary_error: false, interaction_count: row.interaction_count, total_tokens: row.total_tokens, has_errors: row.has_errors };
+            });
+        } catch (error) {
+            if (!current()) return;
+            if (error.status === 401 || error.status === 403 || error.code === 'REFRESH_REQUIRED') {
+                summaryLoad.cancel(); listLoad.cancel(); cancelDetailLoad();
+                requestedSelection = null; selected = null; records = [];
+                for (const id of ['recordCount', 'tokenCount']) {
+                    const element = document.getElementById(id);
+                    if (element) element.textContent = 'Unavailable';
+                }
+                filterLLMRecords(); renderLLMDetail(); showLLMError(error);
+                return;
+            }
+            records = records.map(record => ids.includes(record.request_id) && record.summary_pending ? { ...record, summary_error: true } : record);
+        }
+        if (!current()) return;
+        updateLLMListCounts();
+        filterLLMRecords();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -755,44 +847,74 @@ function copyTextWithFeedback(text, btn) {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchLLMRecords() {
+function setupMetadataPagination() {
+    const panel = document.getElementById('llmDebugListPanel');
+    if (!panel) return;
+    if (!document.getElementById('llmMetadataPagination')) {
+        const footer = document.getElementById('llmLastUpdated');
+        footer?.insertAdjacentHTML('beforebegin', '<div id="llmMetadataPagination" class="dag-list-toolbar"><button type="button" class="dag-mode-btn hidden" data-llm-previous-page>← Previous page</button><span class="dag-grouping-hint">30 records per page · summaries load automatically</span><button type="button" class="dag-mode-btn hidden" data-llm-next-page>Next page →</button></div>');
+    }
+    // The controls survive view changes; tracked listeners are removed on
+    // destroy, so register the handler on every initialization.
+    addTrackedListener(panel, 'click', event => {
+        if (event.target.closest('[data-llm-next-page]') && nextCursor) void fetchLLMRecords({ cursor: nextCursor, navigation: 'next' });
+        if (event.target.closest('[data-llm-previous-page]') && cursorHistory.length) void fetchLLMRecords({ cursor: cursorHistory.at(-1), navigation: 'previous' });
+    });
+    panel.querySelectorAll('[data-filter="success"], [data-filter="error"]').forEach(button => {
+        button.title = 'Filters records with loaded summaries on this page';
+    });
+}
+
+function updateMetadataPagination() {
+    document.querySelector('[data-llm-next-page]')?.classList.toggle('hidden', !nextCursor);
+    document.querySelector('[data-llm-previous-page]')?.classList.toggle('hidden', !cursorHistory.length);
+}
+
+async function fetchLLMRecords({ cursor = listCursor, navigation = '' } = {}) {
+    summaryLoad.cancel();
     const ticket = listLoad.begin();
     const refreshBtn = document.querySelector('.refresh-btn');
     const listPanel = document.getElementById('llmDebugListPanel');
     refreshBtn?.classList.add('loading');
     showLoading(listPanel, 'Loading LLM records...');
     try {
-        const { data } = await fetchAPI('/api/llm-debug', { signal: ticket.signal });
-        if (!listLoad.current(ticket)) return;
+        const query = new URLSearchParams({ summary_only: 'true', limit: '30' });
+        if (cursor) query.set('cursor', cursor);
+        const { data } = await fetchAPI(`/api/llm-debug?${query}`, { signal: ticket.signal });
+        if (!listLoad.current(ticket)) return false;
+        if (navigation === 'next') {
+            cursorHistory.push(listCursor);
+            if (cursorHistory.length > 50) cursorHistory.shift();
+        } else if (navigation === 'previous') cursorHistory.pop();
+        listCursor = cursor;
+        nextCursor = data.next_cursor || '';
         records = data.records.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        const total = records.reduce((sum, r) => sum + (r.total_tokens ?? r.interactions?.reduce((n, i) => n + (i.total_tokens || 0), 0) ?? 0), 0);
-        const count = document.getElementById('recordCount');
-        const tokens = document.getElementById('tokenCount');
-        if (count) count.textContent = records.length;
-        if (tokens) tokens.textContent = formatTokens(total);
+        updateLLMListCounts();
+        updateMetadataPagination();
         filterLLMRecords();
-        let detailOK = true;
-        const wanted = requestedSelection ?? selected?.request_id;
-        if (wanted) {
-            if (!records.some(r => r.request_id === wanted)) {
-                cancelDetailLoad(); requestedSelection = null;
-                selected = null; renderLLMDetail();
-            } else if (!detailPending) {
-                detailOK = await selectLLMRecord(wanted);
-            }
-        }
-        if (!listLoad.current(ticket)) return;
+        if (!listLoad.current(ticket)) return false;
         const updated = document.getElementById('llmLastUpdated');
         if (updated) updated.textContent = `Last updated: ${formatDateTime(new Date())}`;
-        if (detailOK) document.getElementById('llmErrorBanner')?.classList.remove('visible');
+        if (detailError) showLLMError(detailError);
+        else document.getElementById('llmErrorBanner')?.classList.remove('visible');
+        void loadLLMRowSummaries(ticket);
+        return true;
     } catch (error) {
-        if (!listLoad.current(ticket)) return;
+        if (!listLoad.current(ticket)) return false;
+        if (error.status === 409) {
+            listCursor = '';
+            nextCursor = '';
+            cursorHistory = [];
+            updateMetadataPagination();
+            error.message = 'This page moved or expired. Refresh to restart from the latest LLM records.';
+        }
         cancelDetailLoad(); requestedSelection = null; records = []; selected = null;
         for (const id of ['recordCount', 'tokenCount']) {
             const element = document.getElementById(id);
             if (element) element.textContent = 'Unavailable';
         }
         filterLLMRecords(); renderLLMDetail(); showLLMError(error);
+        return false;
     } finally {
         if (listLoad.current(ticket)) { refreshBtn?.classList.remove('loading'); hideLoading(listPanel); }
     }

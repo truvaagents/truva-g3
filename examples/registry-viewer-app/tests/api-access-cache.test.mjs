@@ -63,3 +63,79 @@ for (const [headers, expected] of [
 globalThis.fetch = async () => json({ message: 'conflict', code: 'REVISION_CONFLICT' }, 409);
 await assert.rejects(requestJSON('/skills', { method: 'PUT', body: {} }), error => error.status === 409 && error.code === 'REVISION_CONFLICT');
 console.log('API cache/access/revision tests passed.');
+
+// Long browsing sessions retain a bounded recent working set of responses.
+invalidateCache();
+globalThis.fetch = async url => json({ url }, 200, { ETag: '"bounded"' });
+for (let index = 0; index < 40; index++) await fetchAPI(`/bounded/${index}`);
+await fetchAPI('/bounded/0'); // Touch the oldest entry before inserting another.
+await fetchAPI('/bounded/40');
+globalThis.fetch = async (_url, options) => {
+    assert.equal(options.headers['If-None-Match'], undefined, 'least recently used entry must be evicted');
+    return json({ reloaded: true });
+};
+await fetchAPI('/bounded/1');
+globalThis.fetch = async (_url, options) => {
+    assert.equal(options.headers['If-None-Match'], '"bounded"', 'recently used entry should remain');
+    return new Response(null, { status: 304 });
+};
+await fetchAPI('/bounded/0');
+
+invalidateCache();
+globalThis.fetch = async () => json({ text: 'x'.repeat(450 * 1024) }, 200, { ETag: '"medium"' });
+for (let index = 0; index < 10; index++) await fetchAPI(`/byte-budget/${index}`);
+globalThis.fetch = async (_url, options) => {
+    assert.equal(options.headers['If-None-Match'], undefined, 'total serialized-byte budget must evict old entries');
+    return json({ reloaded: true });
+};
+await fetchAPI('/byte-budget/0');
+
+invalidateCache();
+globalThis.fetch = async () => json({ text: 'x'.repeat(600 * 1024) }, 200, { ETag: '"large"' });
+await fetchAPI('/large-detail');
+globalThis.fetch = async (_url, options) => {
+    assert.equal(options.headers['If-None-Match'], undefined, 'large detail bodies should not enter the shared cache');
+    return json({ reloaded: true });
+};
+await fetchAPI('/large-detail');
+
+invalidateCache();
+const realNow = Date.now;
+let clock = realNow();
+try {
+    Date.now = () => clock;
+    globalThis.fetch = async () => json({ value: 'expires' }, 200, { ETag: '"timed"' });
+    await fetchAPI('/expires');
+    clock += 60_001;
+    globalThis.fetch = async (_url, options) => {
+        assert.equal(options.headers['If-None-Match'], undefined, 'expired entry must not be reused');
+        return json({ fresh: true });
+    };
+    await fetchAPI('/expires');
+} finally {
+    Date.now = realNow;
+}
+
+invalidateCache();
+globalThis.fetch = async () => json({ value: 'old' }, 200, { ETag: '"old"' });
+await fetchAPI('/on-demand');
+globalThis.fetch = async (_url, options) => {
+    assert.equal(options.headers['If-None-Match'], undefined);
+    assert.equal(options.cache, 'no-store');
+    return json({ value: 'requested detail' }, 200, { ETag: '"new"' });
+};
+await fetchAPI('/on-demand', { cache: false });
+globalThis.fetch = async (_url, options) => {
+    assert.equal(options.headers['If-None-Match'], undefined, 'explicit no-cache request leaves no reusable body');
+    return json({ fresh: true });
+};
+await fetchAPI('/on-demand');
+
+invalidateCache();
+const beforeGenerationReset = deferred();
+globalThis.fetch = () => beforeGenerationReset.promise;
+const invalidated = assert.rejects(fetchAPI('/generation-reset'), rejectCode('REFRESH_REQUIRED'));
+for (let index = 0; index < 161; index++) invalidateCache(`/invalidated/${index}`);
+beforeGenerationReset.resolve(json({ old: true }, 200, { ETag: '"old"' }));
+await invalidated;
+console.log('Bounded cache and on-demand bypass tests passed.');

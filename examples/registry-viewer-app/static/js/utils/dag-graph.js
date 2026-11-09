@@ -273,6 +273,79 @@ export function filterInteractionsWithRenderedParent(interactions, stepIDs) {
 }
 
 /**
+ * Place recorded skill selectors immediately before their observed consumer.
+ * These are orchestration calls, not pipeline hooks. Phase and timing metadata
+ * establish placement; prompt bodies, response values and array adjacency do
+ * not. The optional phase map supplies the Viewer's already-observed ownership
+ * for consumers such as synthesis whose older records omit phase_number.
+ * Ambiguous calls remain visible as unplaced evidence rather than a false edge.
+ */
+export function assignSkillCallsToConsumers(interactions, consumers, consumerPhases = new Map()) {
+    const isSkill = call => call?.type === 'skill_activation_selection' || call?.type === 'skill_resource_selection';
+    const phase = value => value === undefined || value === 0 ? 1
+        : Number.isInteger(value) && value > 0 ? value : null;
+    const timed = call => {
+        const start = typeof call?.timestamp === 'string' ? Date.parse(call.timestamp) : NaN;
+        const duration = call?.duration_ms === undefined ? 0 : call.duration_ms;
+        return Number.isFinite(start) && start !== goZeroTimestamp && Number.isFinite(duration) && duration >= 0 && Number.isFinite(start + duration)
+            ? { start, end: start + duration } : null;
+    };
+    const skillCalls = (interactions || []).filter(isSkill).map((call, index) => ({ call, index, phase: phase(call.phase_number), time: timed(call) }));
+    const candidateCalls = (consumers || []).filter(call => !isSkill(call));
+    const multiPhase = [...skillCalls.map(item => item.phase), ...candidateCalls.map(call => phase(call.phase_number)), ...consumerPhases.values()]
+        .some(value => Number.isInteger(value) && value > 1);
+    const consumerEvidence = candidateCalls.map(call => {
+        const mapped = consumerPhases.get(call);
+        const unphased = call.phase_number === undefined || call.phase_number === 0;
+        const recordedPhase = Number.isInteger(call.phase_number) && call.phase_number > 0 ? call.phase_number : null;
+        const isUnphasedSynthesis = (call.type === 'synthesis' || call.type === 'synthesis_streaming')
+            && unphased;
+        const mappedPhase = Number.isInteger(mapped) && mapped > 0 ? mapped : null;
+        return {
+            call,
+            phase: recordedPhase ?? (!unphased ? null : mapped !== undefined ? mappedPhase : isUnphasedSynthesis && multiPhase ? null : 1),
+            time: timed(call),
+        };
+    });
+    const assigned = new Map();
+    const unplaced = new Set();
+    for (const skill of skillCalls) {
+        if (!skill.time || skill.phase === null || consumerEvidence.some(consumer => consumer.phase === skill.phase && !consumer.time)) {
+            unplaced.add(skill);
+            continue;
+        }
+        const overlapping = consumerEvidence.some(consumer => consumer.time && (
+            consumer.time.start === skill.time.start
+            || consumer.time.start < skill.time.end && consumer.time.end > skill.time.start
+        ));
+        const following = consumerEvidence.filter(consumer => consumer.time && consumer.time.start > skill.time.start && consumer.time.start >= skill.time.end)
+            .sort((left, right) => left.time.start - right.time.start);
+        const consumer = following[0];
+        if (overlapping || !consumer || consumer.phase !== skill.phase || following[1]?.time.start === consumer.time.start) {
+            unplaced.add(skill);
+            continue;
+        }
+        if (!assigned.has(consumer.call)) assigned.set(consumer.call, []);
+        assigned.get(consumer.call).push(skill);
+    }
+    const beforeCall = new Map();
+    for (const [consumer, selectors] of assigned) {
+        selectors.sort((left, right) => left.time.start - right.time.start || left.index - right.index);
+        let previous = selectors[0];
+        for (const next of selectors.slice(1)) {
+            if (previous.time.start === next.time.start || previous.time.end > next.time.start) {
+                unplaced.add(previous);
+                unplaced.add(next);
+            }
+            if (next.time.end >= previous.time.end) previous = next;
+        }
+        const placed = selectors.filter(selector => !unplaced.has(selector)).map(selector => selector.call);
+        if (placed.length) beforeCall.set(consumer, placed);
+    }
+    return { beforeCall, unplacedCalls: skillCalls.filter(selector => unplaced.has(selector)).map(selector => selector.call) };
+}
+
+/**
  * A relationship branch is meaningful only when its owner is present in the
  * rendered execution group. Orphan rows retain lineage text for audit, but a
  * branch glyph or connector would falsely imply a visible parent.
@@ -284,13 +357,27 @@ export function hasVisibleRelationOwner(execution, orphan = false) {
 }
 
 /**
- * Count the distinct steps completed before a HITL resume. These steps belong
- * to the same logical workflow, so the resume must continue their visible
- * numbering instead of restarting at one.
+ * Count completed steps outside the displayed resume plans. Restored steps
+ * retained in the original interrupted plan already occupy visible indexes.
+ * Null means the offset has not been observed; callers label their fallback
+ * as invocation-local rather than guessing a workflow-wide ordinal.
  */
 export function hitlContinuationStepOffset(execution) {
+    const numbering = execution?.resume_step_numbering;
+    if (numbering) {
+        const count = numbering.completed_step_count;
+        if (!Number.isSafeInteger(count) || count < 0) return null;
+        if (numbering.display_step_offset !== undefined) {
+            const offset = numbering.display_step_offset;
+            return Number.isSafeInteger(offset) && offset >= 0 && offset <= count ? offset : null;
+        }
+        // Count-only responses from an older Viewer cannot establish overlap
+        // with a visible plan. An empty plan has no overlap; zero remains zero.
+        if (count === 0 || displayedResumeSteps(execution).length === 0) return count;
+        return null;
+    }
     const lifecycle = execution?.hitl_lifecycle;
-    if (!lifecycle?.is_resume) return 0;
+    if (!lifecycle?.is_resume) return execution?.metadata?.resume_checkpoint_id ? null : 0;
 
     const completedSteps = lifecycle.current_checkpoint?.completed_steps;
     let stepIDs = [];
@@ -299,9 +386,17 @@ export function hitlContinuationStepOffset(execution) {
         stepIDs = completedSteps.map(step => step?.step_id);
     } else if (completedSteps && typeof completedSteps === 'object') {
         stepIDs = Object.keys(completedSteps);
-    }
+    } else return null;
 
-    return new Set(stepIDs.filter(Boolean)).size;
+    const completedIDs = new Set(stepIDs.filter(Boolean));
+    for (const step of displayedResumeSteps(execution)) completedIDs.delete(step?.step_id);
+    return completedIDs.size;
+}
+
+function displayedResumeSteps(execution) {
+    return execution?.phase_plans?.length > 1
+        ? execution.phase_plans.flatMap(plan => plan?.steps || [])
+        : execution?.plan?.steps || [];
 }
 
 /**
@@ -311,7 +406,20 @@ export function hitlContinuationStepOffset(execution) {
  */
 export function executionDisplayStepNumber(index, execution) {
     if (!Number.isInteger(index) || index < 0) return null;
-    return hitlContinuationStepOffset(execution) + index + 1;
+    return (hitlContinuationStepOffset(execution) ?? 0) + index + 1;
+}
+
+/** A missing resume offset is distinct from an observed zero-step checkpoint. */
+export function executionDisplayStepLabel(index, execution) {
+    const number = executionDisplayStepNumber(index, execution);
+    if (number === null) return '';
+    return `${hitlContinuationStepOffset(execution) === null ? 'Resume step' : 'Step'} ${number}`;
+}
+
+export function executionStepNumberingNote(execution) {
+    return hitlContinuationStepOffset(execution) === null
+        ? 'Numbered within this execution; workflow-wide numbering is unavailable. Open HITL to load checkpoint evidence.'
+        : '';
 }
 
 const preExecutionHookPhases = new Set(['before_planning', 'after_planning']);

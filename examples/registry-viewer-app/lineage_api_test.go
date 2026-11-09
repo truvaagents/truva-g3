@@ -286,9 +286,9 @@ func TestExecutionLineagePreservesSelectedAndAncestorsOnBackendFailureOrCancella
 
 func TestExecutionLineageSharesExactBudgetAcrossAncestorDepths(t *testing.T) {
 	_, client := newConversationAPIRedis(t)
-	for index := 0; index <= viewerExactOwnerHydrationLimit; index++ {
+	for index := 0; index <= lineageExactOwnerReadLimit; index++ {
 		parent := ""
-		if index < viewerExactOwnerHydrationLimit {
+		if index < lineageExactOwnerReadLimit {
 			parent = fmt.Sprintf("node-%04d", index+1)
 		}
 		storeViewerExecution(t, client, StoredExecution{RequestID: fmt.Sprintf("node-%04d", index), ParentRequestID: parent})
@@ -299,13 +299,21 @@ func TestExecutionLineageSharesExactBudgetAcrossAncestorDepths(t *testing.T) {
 	if err != nil || !response.Partial || !containsString(response.Reasons, "exact_hydration_limit") {
 		t.Fatalf("response=%+v err=%v", response, err)
 	}
-	if len(response.Executions) != viewerExactOwnerHydrationLimit || len(hook.getCounts) != viewerExactOwnerHydrationLimit {
+	if len(response.Executions) != lineageExactOwnerReadLimit || len(hook.getCounts) != lineageExactOwnerReadLimit {
 		t.Fatalf("executions=%d reads=%d", len(response.Executions), len(hook.getCounts))
 	}
+	limitedParent := fmt.Sprintf("node-%04d", lineageExactOwnerReadLimit)
+	foundLimit := false
 	for _, lookup := range response.ParentLookups {
-		if lookup.ParentRequestID == "node-1000" && (lookup.Status != "unknown" || lookup.Reason != "exact_hydration_limit") {
-			t.Fatalf("limited lookup=%+v", lookup)
+		if lookup.ParentRequestID == limitedParent {
+			foundLimit = true
+			if lookup.Status != "unknown" || lookup.Reason != "exact_hydration_limit" {
+				t.Fatalf("limited lookup=%+v", lookup)
+			}
 		}
+	}
+	if !foundLimit {
+		t.Fatal("ancestor limit was not disclosed in the parent lookup")
 	}
 	hook.assertReadOnly(t)
 }
@@ -313,13 +321,13 @@ func TestExecutionLineageSharesExactBudgetAcrossAncestorDepths(t *testing.T) {
 func TestExecutionLineageTruncatedRecentAndConversationPages(t *testing.T) {
 	server, client := newConversationAPIRedis(t)
 	indexLineageRecords(t, client, []StoredExecution{{RequestID: "selected", Metadata: map[string]string{orchestration.MetadataConversationID: "current"}}})
-	for index := 0; index <= viewerGlobalExecutionScanLimit; index++ {
+	for index := 0; index <= lineageCandidateReadLimit; index++ {
 		id := fmt.Sprintf("unrelated-%05d", index)
 		server.Set(viewerExecutionKeys.Record(id), fmt.Sprintf(`{"request_id":%q}`, id))
 		if err := client.ZAdd(t.Context(), viewerExecutionKeys.RecentIndex(), redis.Z{Member: id, Score: float64(index + 1)}).Err(); err != nil {
 			t.Fatal(err)
 		}
-		if index <= viewerConversationMemberReadLimit {
+		if index <= lineageCandidateReadLimit {
 			if err := client.ZAdd(t.Context(), viewerConversationIndexKey("current"), redis.Z{Member: id, Score: float64(index + 1)}).Err(); err != nil {
 				t.Fatal(err)
 			}
@@ -336,7 +344,7 @@ func TestExecutionLineageTruncatedRecentAndConversationPages(t *testing.T) {
 			t.Fatalf("reasons=%v missing=%s", response.Reasons, reason)
 		}
 	}
-	if len(hook.getCounts) > viewerExecutionHydrationLimit+1 {
+	if len(hook.getCounts) > lineageCandidateReadLimit*2+1 {
 		t.Fatalf("ordinary hydration budget exceeded: %d", len(hook.getCounts))
 	}
 	if hook.maxGetPipeline > lineageHydrationBatchSize {

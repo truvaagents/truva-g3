@@ -52,8 +52,8 @@
                     <div class="stat"><span>Critical</span><span class="stat-value" style="color: var(--accent-red);" id="criticalCount">-</span></div>
                 </div>
                 <div class="stats hidden" id="dagStats">
-                    <div class="stat"><span>Executions</span><span class="stat-value" style="color: var(--accent-teal);" id="executionCount">-</span></div>
-                    <div class="stat" title="Request lifecycle completion, not application disposition. Legacy/unknown records remain in the denominator."><span>Completed Requests</span><span class="stat-value" style="color: var(--accent-green);" id="successRate">-</span></div>
+                    <div class="stat"><span>Loaded page</span><span class="stat-value" style="color: var(--accent-teal);" id="executionCount">-</span></div>
+                    <div class="stat" title="Lifecycle completion within the loaded page, not global history or application disposition. Legacy/unknown records remain in the denominator."><span>Page completed</span><span class="stat-value" style="color: var(--accent-green);" id="successRate">-</span></div>
                 </div>
                 <div class="stats hidden" id="skillsStats">
                     <div class="stat"><span>Published</span><span class="stat-value" style="color: var(--accent-purple);" id="skillsCount">-</span></div>
@@ -247,10 +247,27 @@
                         <button class="filter-btn" data-filter="interrupted">Interrupted</button>
                     </div>
                     <div class="dag-list-toolbar">
-                        <div class="dag-grouping-hint" id="dagGroupingHint">Conversations stay together · sorted by latest turn</div>
-                        <div class="dag-mode-toggle" role="group" aria-label="Execution list grouping">
-                            <button class="dag-mode-btn active" type="button" data-grouping-mode="grouped" aria-pressed="true">Grouped</button>
-                            <button class="dag-mode-btn" type="button" data-grouping-mode="flat" aria-pressed="false">Flat</button>
+                        <div class="dag-grouping-hint" id="dagGroupingHint">30 execution summaries per page</div>
+                        <div class="dag-list-controls">
+                            <label class="dag-time-window" for="dagTimeRange" title="Execution time window">
+                                <svg class="dag-time-window-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <circle cx="12" cy="12" r="9"></circle>
+                                    <path d="M12 7v5l3 2"></path>
+                                </svg>
+                                <select id="dagTimeRange" class="dag-time-range" aria-label="Execution time window">
+                                    <option value="1h">Last hour</option>
+                                    <option value="24h" selected>Last 24 hours</option>
+                                    <option value="72h">Last 3 days</option>
+                                    <option value="all">All retained</option>
+                                </select>
+                                <svg class="dag-time-window-chevron" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="m4 6 4 4 4-4"></path>
+                                </svg>
+                            </label>
+                            <div class="dag-mode-toggle" role="group" aria-label="Execution list grouping">
+                                <button class="dag-mode-btn" type="button" data-grouping-mode="grouped" aria-pressed="false">Grouped</button>
+                                <button class="dag-mode-btn active" type="button" data-grouping-mode="flat" aria-pressed="true">Flat</button>
+                            </div>
                         </div>
                     </div>
                     <div class="dag-list-diagnostic hidden" id="dagListDiagnostic" role="status" aria-live="polite"></div>
@@ -269,7 +286,18 @@
                         </table>
                     </div>
                     <div class="dag-list-footer">
-                        <button class="dag-load-more hidden" id="dagLoadMore" type="button" data-load-more-groups>Load more groups</button>
+                        <nav class="dag-pagination" aria-label="Execution pages">
+                            <select class="dag-page-jump" id="dagPageJump" aria-label="Jump to a visited execution page" title="Jump to a visited page" disabled>
+                                <option value="1">Page 1</option>
+                            </select>
+                            <button class="dag-page-arrow hidden" id="dagPreviousPage" type="button" data-previous-execution-page aria-label="Previous page" title="Previous page">
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 3-5 5 5 5"></path></svg>
+                            </button>
+                            <div class="dag-page-numbers" id="dagPageNumbers"></div>
+                            <button class="dag-page-arrow hidden" id="dagLoadMore" type="button" data-load-more-groups aria-label="Next page" title="Next page">
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5"></path></svg>
+                            </button>
+                        </nav>
                         <div class="last-updated" id="dagLastUpdated">Loading...</div>
                     </div>
                 </div>

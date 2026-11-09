@@ -33,10 +33,14 @@ type ParentLookup struct {
 
 var errLineageExecutionNotFound = errors.New("selected execution not found")
 
-// This is wire batching, not a read/coverage allowance: every candidate still
-// uses the existing shared ordinary budget. Releasing response buffers between
-// batches keeps a cold lookup from retaining thousands of unrelated payloads.
-const lineageHydrationBatchSize = 128
+// Family lookup is an explicit bounded view, not an exhaustive history query.
+// Small wire batches release unrelated payloads while exact ancestor reads
+// retain their own budget. Coverage reasons disclose either bound.
+const (
+	lineageHydrationBatchSize  = 8
+	lineageCandidateReadLimit  = 120
+	lineageExactOwnerReadLimit = 20
+)
 
 func handleExecutionLineage(w http.ResponseWriter, r *http.Request, requestID string) {
 	if r.Method != http.MethodGet {
@@ -149,9 +153,15 @@ func loadExecutionLineageWithClient(ctx context.Context, client redis.UniversalC
 			if len(ids) == 0 {
 				return
 			}
-			limited, err := cache.loadExactOwners(ctx, client, ids)
+			remaining := lineageExactOwnerReadLimit - cache.exactHydrated
+			if remaining <= 0 {
+				addReason("exact_hydration_limit")
+				return
+			}
+			loaded, limited, err := cache.loadWithBudget(ctx, client, ids, remaining, nil)
+			cache.exactHydrated += loaded
 			if limited && err == nil {
-				if cache.exactHydrated >= viewerExactOwnerHydrationLimit {
+				if cache.exactHydrated >= lineageExactOwnerReadLimit {
 					addReason("exact_hydration_limit")
 				} else {
 					addReason("record_unreadable")
@@ -179,12 +189,12 @@ func loadExecutionLineageWithClient(ctx context.Context, client redis.UniversalC
 	loadAncestors()
 	var globalIDs, reverseIDs []string
 	if ctx.Err() == nil {
-		rows, err := client.ZRevRangeWithScores(ctx, viewerExecutionKeys.RecentIndex(), 0, viewerGlobalExecutionScanLimit).Result()
+		rows, err := client.ZRevRangeWithScores(ctx, viewerExecutionKeys.RecentIndex(), 0, lineageCandidateReadLimit).Result()
 		if err != nil {
 			addReason(readFailure(err))
 		} else {
-			if len(rows) > viewerGlobalExecutionScanLimit {
-				rows = rows[:viewerGlobalExecutionScanLimit]
+			if len(rows) > lineageCandidateReadLimit {
+				rows = rows[:lineageCandidateReadLimit]
 				addReason("recent_index_limit")
 			}
 			for _, row := range rows {
@@ -198,12 +208,12 @@ func loadExecutionLineageWithClient(ctx context.Context, client redis.UniversalC
 	}
 	conversationID := selected.Metadata[orchestration.MetadataConversationID]
 	if conversationID != "" && core.ValidateConversationID(conversationID) == core.ConversationIDValidationNone && ctx.Err() == nil {
-		ids, err := client.ZRange(ctx, viewerConversationIndexKey(conversationID), 0, viewerConversationMemberReadLimit).Result()
+		ids, err := client.ZRevRange(ctx, viewerConversationIndexKey(conversationID), 0, lineageCandidateReadLimit).Result()
 		if err != nil {
 			addReason(readFailure(err))
 		} else {
-			if len(ids) > viewerConversationMemberReadLimit {
-				ids = ids[:viewerConversationMemberReadLimit]
+			if len(ids) > lineageCandidateReadLimit {
+				ids = ids[:lineageCandidateReadLimit]
 				addReason("conversation_index_limit")
 			}
 			reverseIDs = ids
@@ -326,7 +336,7 @@ func loadExecutionLineageWithClient(ctx context.Context, client redis.UniversalC
 			lookup.Reason = "record_unreadable"
 		case ctx.Err() != nil:
 			lookup.Reason = readFailure(ctx.Err())
-		case cache.exactHydrated >= viewerExactOwnerHydrationLimit:
+		case cache.exactHydrated >= lineageExactOwnerReadLimit:
 			lookup.Reason = "exact_hydration_limit"
 		default:
 			lookup.Reason = "backend_read"

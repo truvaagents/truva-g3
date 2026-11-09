@@ -153,7 +153,7 @@ function handleRefresh() {
 
     if (activeViewModule && activeViewModule.refresh) {
         // refresh() is async in most views — wait for it, then remove loading
-        Promise.resolve(activeViewModule.refresh()).finally(() => {
+        Promise.resolve(activeViewModule.refresh({ manual: true })).finally(() => {
             refreshBtn.classList.remove('loading');
         });
     } else {

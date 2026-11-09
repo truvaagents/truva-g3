@@ -167,6 +167,10 @@
     background: rgba(0, 0, 0, 0.14);
 }
 
+.dag-list-toolbar {
+    flex-wrap: wrap;
+}
+
 .dag-list-footer {
     flex-wrap: wrap;
     border-top: 1px solid var(--border-subtle);
@@ -180,11 +184,167 @@
     background: transparent;
 }
 
+.dag-pagination {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    min-width: 0;
+    padding: 3px;
+    border: 1px solid var(--glass-border-light);
+    border-radius: var(--radius-pill);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+}
+
+.dag-page-jump {
+    flex: 0 0 auto;
+    max-width: 100px;
+    height: 26px;
+    padding: 0 5px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    color: var(--text-secondary);
+    background: transparent;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    color-scheme: dark;
+}
+
+.dag-page-jump option {
+    color: var(--text-primary);
+    background: #171722;
+}
+
+.dag-page-numbers {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.dag-page-number,
+.dag-page-arrow {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 6px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    color: var(--text-secondary);
+    background: transparent;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.dag-page-number:hover:not(:disabled),
+.dag-page-arrow:hover:not(:disabled),
+.dag-page-jump:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.dag-page-number.active {
+    color: white;
+    background: rgba(10, 132, 255, 0.72);
+}
+
+.dag-page-number:focus-visible,
+.dag-page-arrow:focus-visible,
+.dag-page-jump:focus-visible {
+    outline: 2px solid var(--accent-teal);
+    outline-offset: 1px;
+}
+
+.dag-page-number:disabled,
+.dag-page-arrow:disabled,
+.dag-page-jump:disabled {
+    cursor: default;
+}
+
+.dag-page-gap {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
 .dag-grouping-hint {
     color: var(--text-muted);
     font-size: 11px;
     line-height: 1.35;
 }
+
+.dag-list-toolbar > .dag-grouping-hint {
+    flex: 1 1 160px;
+}
+
+.dag-list-controls {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: var(--space-sm);
+    margin-left: auto;
+}
+
+.dag-time-window {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--glass-border-light);
+    border-radius: var(--radius-pill);
+    color: var(--text-secondary);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.dag-time-window:hover {
+    border-color: rgba(255, 255, 255, 0.24);
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.dag-time-window:focus-within {
+    outline: 2px solid var(--accent-teal);
+    outline-offset: 2px;
+}
+
+.dag-time-range {
+    appearance: none;
+    -webkit-appearance: none;
+    height: 30px;
+    padding: 0 24px 0 30px;
+    border: 0;
+    border-radius: inherit;
+    outline: none;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 550;
+    cursor: pointer;
+    color-scheme: dark;
+}
+
+.dag-time-range option {
+    color: var(--text-primary);
+    background: #171722;
+}
+
+.dag-time-window-icon,
+.dag-time-window-chevron {
+    position: absolute;
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.dag-time-window-icon { left: 10px; }
+.dag-time-window-chevron { right: 9px; }
 
 .dag-mode-toggle {
     display: inline-flex;
@@ -482,10 +642,160 @@
     color: var(--accent-green);
 }
 
-.dag-detail-heading {
-    display: flex;
+/* Keep the title and evidence tabs on one compact row. Tabs scroll horizontally
+   instead of wrapping and taking vertical space away from the canvas. */
+#dagDetailPanel > .detail-header {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 12px;
     min-width: 0;
-    flex: 1;
+}
+
+#dagDetailPanel .dag-detail-heading {
+    display: flex;
+    flex: 0 1 220px;
+    min-width: 0;
+    max-width: 25%;
+}
+
+#dagDetailPanel .detail-title {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#dagDetailPanel > .detail-header > .detail-tabs {
+    flex: 0 1 auto;
+    margin-left: auto;
+    flex-wrap: nowrap;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+}
+
+#dagDetailPanel .detail-tabs .detail-tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.dag-llm-call-card,
+.pipeline-hook-card {
+    scroll-margin-top: 12px;
+}
+
+.dag-popup-detail-link {
+    display: block;
+    margin-top: 12px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--accent-blue);
+    font: inherit;
+    cursor: pointer;
+}
+
+.dag-llm-call-card:focus,
+.pipeline-hook-card:focus {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+
+.dag-hook-popup-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.dag-hook-popup-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.dag-hook-popup-name {
+    min-width: 0;
+    color: var(--accent-teal);
+    font-weight: 600;
+}
+
+.dag-hook-popup-heading .dag-step-status {
+    flex: 0 0 auto;
+    padding: 4px 8px;
+    font-size: 10px;
+    line-height: 1.3;
+    -webkit-backdrop-filter: blur(8px);
+}
+
+.dag-hook-popup-label {
+    margin-bottom: 6px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.dag-hook-popup-stage {
+    display: inline-flex;
+    padding: 4px 10px;
+    border: 1px solid rgba(100, 210, 255, 0.35);
+    border-radius: 6px;
+    background: linear-gradient(135deg, rgba(100, 210, 255, 0.16), rgba(100, 210, 255, 0.06));
+    color: var(--accent-teal);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+
+.dag-hook-popup-outcome {
+    color: var(--text-primary);
+}
+
+.dag-hook-popup-metrics {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: var(--radius-md);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.dag-hook-popup-order,
+.dag-hook-popup-phase {
+    padding: 3px 6px;
+    border-radius: 6px;
+    background: rgba(100, 210, 255, 0.12);
+    color: var(--accent-teal);
+}
+
+.dag-hook-popup-phase {
+    background: rgba(218, 143, 255, 0.12);
+    color: var(--accent-purple);
+}
+
+.dag-hook-popup-effect-count {
+    flex-basis: 100%;
+    font-size: 10px;
+}
+
+.dag-hook-popup-effect-count.has-failure {
+    color: var(--accent-orange);
+}
+
+.dag-hook-popup-group-item + .dag-hook-popup-group-item {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-subtle);
 }
 
 .dag-conversation-timeline-mode {
@@ -1105,6 +1415,8 @@
         transform: none;
     }
     .dag-mode-btn,
+    .dag-page-number,
+    .dag-page-arrow,
     .dag-load-more,
     .dag-open-timeline-btn,
     .dag-back-btn,
