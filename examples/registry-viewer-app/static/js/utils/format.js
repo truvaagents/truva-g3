@@ -41,13 +41,19 @@ export function formatDuration(ms) {
     return `${(ms / 1000).toFixed(2)}s`;
 }
 
+const compactTokenFormat = new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+});
+
 /**
- * Format a token count with K suffix for large numbers.
+ * Format a token count with K, M, B or T suffixes for large numbers.
  * @param {number} count
  * @returns {string}
  */
 export function formatTokens(count) {
-    if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+    if (count >= 1000) return compactTokenFormat.format(count);
     return count.toString();
 }
 
@@ -110,28 +116,78 @@ export function escapeHtml(text) {
 export function syntaxHighlightJson(json) {
     if (typeof json !== 'string') json = JSON.stringify(json, null, 2);
     json = json.trim();
-    // HTML-escape < > & so raw HTML in JSON values doesn't break the DOM
-    json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return json.replace(
-        /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
-        function (match) {
-            let cls = 'json-number';
-            if (/^"/.test(match)) {
-                if (/:$/.test(match)) {
-                    cls = 'json-key';
-                    match = match.slice(0, -1) + '</span>:';
-                    return '<span class="' + cls + '">' + match;
-                } else {
-                    cls = 'json-string';
-                }
-            } else if (/true|false/.test(match)) {
-                cls = 'json-boolean';
-            } else if (/null/.test(match)) {
-                cls = 'json-null';
+    const parts = [];
+    for (const token of jsonTextTokens(json)) {
+        let cls = '';
+        if (token.type === 'string') {
+            let next = token.end;
+            while (next < json.length && isJsonWhitespace(json[next])) next++;
+            cls = json[next] === ':' ? 'json-key' : 'json-string';
+        } else if (token.text === 'true' || token.text === 'false') cls = 'json-boolean';
+        else if (token.text === 'null') cls = 'json-null';
+        else if (token.type === 'literal' && /^-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?$/.test(token.text)) cls = 'json-number';
+        // Escape source text before adding our own trusted highlighting markup.
+        const escaped = token.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        parts.push(cls ? `<span class="${cls}">${escaped}</span>` : escaped);
+    }
+    return parts.join('');
+}
+
+function isJsonWhitespace(char) {
+    return char === ' ' || char === '\t' || char === '\r' || char === '\n';
+}
+
+// Iterate rather than matching a repeated string regex: multi-megabyte JSON
+// strings can exhaust the regexp engine's stack. Tokens retain source slices,
+// including every escape sequence, number literal and duplicate key.
+function* jsonTextTokens(text) {
+    let index = 0;
+    while (index < text.length) {
+        const start = index;
+        const char = text[index++];
+        let type = 'literal';
+        if (char === '"') {
+            type = 'string';
+            while (index < text.length) {
+                const next = text[index++];
+                if (next === '\\') index = Math.min(index + 1, text.length);
+                else if (next === '"') break;
             }
-            return '<span class="' + cls + '">' + match + '</span>';
+        } else if (isJsonWhitespace(char)) {
+            type = 'whitespace';
+            while (index < text.length && isJsonWhitespace(text[index])) index++;
+        } else if ('{}[],:'.includes(char)) {
+            type = 'structure';
+        } else {
+            while (index < text.length && !isJsonWhitespace(text[index])
+                && text[index] !== '"' && !'{}[],:'.includes(text[index])) index++;
         }
-    );
+        yield { type, text: text.slice(start, index), end: index };
+    }
+}
+
+/**
+ * Indent valid JSON text without parsing its values. Raw execution records can
+ * contain large integer literals or duplicate keys that JSON.parse/stringify
+ * would change. Only whitespace outside strings is replaced for display.
+ */
+export function prettyPrintJsonText(text) {
+    const parts = [];
+    let depth = 0;
+    let previous = '';
+    for (const { type, text: token } of jsonTextTokens(text)) {
+        if (type === 'whitespace') continue;
+        if (token === '}' || token === ']') {
+            depth--;
+            if (previous !== '{' && previous !== '[') parts.push('\n', '  '.repeat(depth));
+        } else if (previous === '{' || previous === '[' || previous === ',') {
+            parts.push('\n', '  '.repeat(depth));
+        }
+        parts.push(token === ':' ? ': ' : token);
+        if (token === '{' || token === '[') depth++;
+        previous = token;
+    }
+    return parts.join('');
 }
 
 /**

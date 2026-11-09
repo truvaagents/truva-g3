@@ -16,12 +16,14 @@ import {
     truncateText,
     escapeHtml,
     syntaxHighlightJson,
+    prettyPrintJsonText,
     formatResponseJson,
     copyToClipboard,
     formatConversationRequest,
 } from '../utils/format.js';
 import { fetchAPI } from '../api.js';
-import { executionStatus, matchesExecutionStatus, executionFailureNotice } from '../utils/execution-lifecycle.js';
+import { createLoadGuard } from '../utils/load-guard.js';
+import { executionStatus, executionFailureNotice } from '../utils/execution-lifecycle.js';
 import { showLoading, hideLoading } from '../utils/dom.js';
 import {
     getLLMInteractionContent,
@@ -35,13 +37,15 @@ import {
 } from '../llm-types.js';
 import {
     assignAfterPlanningHooksToPhases,
+    assignSkillCallsToConsumers,
     buildObservedPhases,
     buildExecutionHierarchy,
     createExecutionLineageLoader,
     executionLineageSummary,
     executionDeepLinkRequestID,
     executionSnapshotTimestamp,
-    executionDisplayStepNumber,
+    executionDisplayStepLabel,
+    executionStepNumberingNote,
     filterInteractionsWithRenderedParent,
     filterRenderableEdges,
     findDelegatedExecutions,
@@ -59,7 +63,6 @@ import {
 let executions = [];
 let selected = null;
 let selectionVersion = 0;
-let detailRefreshPending = false;
 let activeTab = 'dag-viz';
 let filter = 'all';
 let cyInstance = null;
@@ -67,18 +70,34 @@ let viewMode = 'full';
 let sortColumn = 'created_at';
 let sortDirection = 'desc';
 
-const DAG_GROUP_PAGE_SIZE = 50;
+const DAG_GROUP_PAGE_SIZE = 30;
+const CONVERSATION_PAGE_SIZE = 5;
+const CONVERSATION_CACHE_MAX = 10;
+const CURSOR_HISTORY_MAX = 100;
+const listLoad = createLoadGuard();
+const detailLoad = createLoadGuard();
+const sectionLoad = createLoadGuard();
+const timelineLoad = createLoadGuard();
+let listPageCursor = '';
+let listPageNumber = 1;
+const listPageCursors = new Map();
+let listQueryKey = '';
+let listTimeRange = '24h';
+let listWindowFrom = '';
+let listWindowTo = '';
+let selectedOverview = null;
+let selectedSection = 'overview';
+let sectionPending = false;
+let sectionError = '';
+let llmCardBatch = null;
 const DAG_GROUPING_STORAGE_KEY = 'truvag3.dag.groupingMode';
 
 let groupingMode = readGroupingPreference();
 let groupedExecutionGroups = [];
 let groupedNextCursor = '';
-let groupedQueryFingerprint = '';
-let groupedResponsePartial = false;
-let groupedRequestVersion = 0;
 let groupedLoading = false;
 let expandedGroupKeys = new Set();
-let pendingAutoExpandRequestID = '';
+let groupMatchPages = new Map();
 let conversationCache = new Map();
 let activeConversationID = '';
 let listPanelMode = 'list';
@@ -92,9 +111,13 @@ let parentExecutionLookup = null;
 const lineageLoader = createExecutionLineageLoader(async (requestID, signal) => {
     // The generic API cache retains every ETag response. Family discovery has
     // its own one-family lifetime and must not accumulate there.
-    const response = await fetch(`/api/executions/${encodeURIComponent(requestID)}/lineage`, { signal, cache: 'no-store' });
-    if (!response.ok) throw new Error('lineage_unavailable');
-    return response.json();
+    try {
+        const { data } = await fetchAPI(`/api/executions/${encodeURIComponent(requestID)}/lineage`, { signal, cache: false });
+        return data;
+    } catch (error) {
+        if (isDagAccessDenied(error)) clearDagAccessState(error);
+        throw error;
+    }
 });
 
 function selectedLineageSnapshot() {
@@ -191,9 +214,12 @@ function lastSnapshotLabel(execution, relative = false) {
 function renderDelegatedExecutionLinks(stepID, summaries = selectedFamilySummaries()) {
     const children = findDelegatedExecutions(summaries, selected?.request_id, stepID);
     if (!children.length) return '';
-    return `<div class="dag-row-meta">${children.map(child => lineageNavigationButton(
-        child.request_id, `${child.metadata?.resume_checkpoint_id ? 'Resume' : 'Agent execution'}: ${child.agent_name || child.request_id}`,
-    )).join(' ')}<span>Each execution retains its own DAG and LLM records.</span></div>`;
+    return children.map((child, index) => {
+        const kind = child.metadata?.resume_checkpoint_id ? 'resumed execution' : 'agent execution';
+        const label = `View ${kind}${children.length > 1 ? ` ${index + 1}` : ''} →`;
+        const title = `${child.agent_name || 'Agent'} · ${child.request_id}`;
+        return `<button type="button" class="dag-popup-detail-link" data-lineage-execution="${escapeHtmlAttribute(child.request_id)}" title="${escapeHtmlAttribute(title)}">${label}</button>`;
+    }).join('');
 }
 
 function renderExecutionLineageNavigation(summaries = selectedFamilySummaries(), expanded = false) {
@@ -259,18 +285,16 @@ function loadParentExecution({ force = false } = {}) {
     // or its relatives. Keep one view-local record and discard it on selection.
     void (async () => {
         try {
-            const response = await fetch(`/api/executions/${encodeURIComponent(lookup.parentID)}`,
-                { signal: lookup.controller.signal, cache: 'no-store' });
-            if (response.status === 404 || response.status === 410) lookup.state = 'unavailable';
-            else {
-                if (!response.ok) throw new Error('parent_lookup_failed');
-                const data = await response.json();
-                if (data?.request_id !== lookup.parentID) throw new Error('parent_identity_mismatch');
-                lookup.data = data;
-                lookup.state = 'available';
+            const { data } = await fetchAPI(`/api/executions/${encodeURIComponent(lookup.parentID)}/unified?section=overview`, { signal: lookup.controller.signal, cache: false });
+            if (data?.request_id !== lookup.parentID) throw new Error('parent_identity_mismatch');
+            lookup.data = data;
+            lookup.state = 'available';
+        } catch (error) {
+            if (isDagAccessDenied(error)) {
+                clearDagAccessState(error);
+                return;
             }
-        } catch (_) {
-            lookup.state = 'unknown';
+            lookup.state = error.status === 404 || error.status === 410 ? 'unavailable' : 'unknown';
         }
         if (parentExecutionLookup === lookup && selected?.request_id === lookup.childID &&
             selected.parent_request_id === lookup.parentID && activeTab === 'dag-parent') {
@@ -325,7 +349,7 @@ function renderParentExecution(container) {
             ${parent ? `<div class="status-badge ${executionStatus(parent).css}">${executionStatus(parent).label}</div><div class="dag-parent-field-label">Parent request</div><div class="dag-parent-request">${escapeHtml(executionRequestText(parent))}</div>` : ''}
             <div class="dag-parent-actions">${lineageNavigationButton(parentID, 'Open parent execution →')}
                 <button type="button" class="dag-open-timeline-btn" data-refresh-parent-execution ${state === 'loading' ? 'disabled' : ''}>Refresh parent record</button></div>
-            <div role="status" class="dag-parent-field-label">${state === 'loading' ? 'Loading exact parent record…' : state === 'unavailable' ? 'Parent record unavailable or expired.' : state === 'unknown' ? 'Parent lookup failed; availability is unknown.' : 'Parent record loaded on demand.'}</div>
+            <div role="status" class="dag-parent-field-label">${state === 'loading' ? 'Loading exact parent record…' : state === 'unavailable' ? 'Parent record unavailable or expired.' : state === 'unknown' ? 'Parent lookup failed; availability is unknown.' : 'Parent overview loaded. Open the parent step for exact evidence.'}</div>
         </section>
         <section class="dag-parent-card">
             <h3>Invoking step${stepID ? ` · ${escapeHtml(stepID)}` : ''}</h3>
@@ -404,11 +428,11 @@ function updateInvocationNodes() {
 
 function readGroupingPreference() {
     try {
-        return sessionStorage.getItem(DAG_GROUPING_STORAGE_KEY) === 'flat'
-            ? 'flat'
-            : 'grouped';
+        return sessionStorage.getItem(DAG_GROUPING_STORAGE_KEY) === 'grouped'
+            ? 'grouped'
+            : 'flat';
     } catch (_) {
-        return 'grouped';
+        return 'flat';
     }
 }
 
@@ -551,6 +575,38 @@ function renderPipelineHookEffects(effects) {
     </div>`;
 }
 
+function pipelineHookIdentity(hook) {
+    return JSON.stringify([hook.hook_name, hook.phase, hook.sequence, hook.plan_phase, hook.started_at]);
+}
+
+function pipelineHookDetailTab(hook) {
+    return isPreExecutionHook(hook) ? 'dag-pre' : isPostExecutionHook(hook) ? 'dag-post' : 'dag-raw';
+}
+
+async function openHookDetails(target, requestID, version) {
+    const ownsView = () => selected?.request_id === requestID && selectionVersion === version;
+    if (!ownsView()) return false;
+    if (!await setDagDetailTab(target.tab) || !ownsView() || activeTab !== target.tab) return false;
+    if (target.tab === 'dag-raw') return true;
+    const hooks = (selected.pipeline_hooks || []).filter(target.tab === 'dag-pre' ? isPreExecutionHook : isPostExecutionHook);
+    const matches = hooks.map((hook, index) => ({ hook, index }))
+        .filter(({ hook }) => pipelineHookIdentity(hook) === target.identity);
+    if (matches.length !== 1) {
+        const notice = document.createElement('div');
+        notice.className = 'dag-data-warning';
+        notice.setAttribute('role', 'status');
+        notice.textContent = matches.length ? 'This hook invocation cannot be distinguished from another retained record.'
+            : 'This hook invocation is unavailable in the latest retained evidence.';
+        document.getElementById('dagDetailContent').prepend(notice);
+        return false;
+    }
+    const card = document.getElementById(`dag-hook-details-${matches[0].index}`);
+    if (!card) return false;
+    card.focus({ preventScroll: true });
+    card.scrollIntoView({ block: 'start' });
+    return true;
+}
+
 function pipelineHookNodeData(hook, id) {
     const phase = pipelineHookPhaseLabel(hook.phase);
     const hookName = hook.hook_name || 'Unknown hook';
@@ -565,11 +621,44 @@ function pipelineHookNodeData(hook, id) {
         sequence: hook.sequence || 0,
         planPhase: hook.plan_phase || 0,
         startedAt: hook.started_at || '',
-        error: hook.error || '',
-        effects: hook.effects || [],
-        hookDecision: hook.decision || null,
+        effectCount: hook.effects?.length || 0,
+        failedEffectCount: (hook.effects || []).filter(effect => effect.status === 'failed').length,
+        hookDecision: hook.decision ? {
+            action: hook.decision.action,
+            reason: hook.decision.reason,
+            failure_policy: hook.decision.failure_policy,
+        } : null,
         hookAction: pipelineHookConsequence(hook).action,
+        hookIdentity: pipelineHookIdentity(hook),
+        hookDetailTab: pipelineHookDetailTab(hook),
     };
+}
+
+function renderHookPopupSummary(data) {
+    const status = pipelineHookStatus(data.hookStatus);
+    const consequence = pipelineHookConsequence({ status: data.hookStatus, decision: data.hookDecision });
+    const statusText = { completed: '✓ Succeeded', failed: '✗ Failed', skipped: '– Skipped', pending: '? Unknown' }[status.css];
+    const order = Number.isInteger(data.sequence) && data.sequence > 0 ? `#${data.sequence} in this stage` : 'Order not recorded';
+    return `<div class="dag-hook-popup-summary">
+        <div class="dag-hook-popup-heading">
+            <span class="dag-hook-popup-name">🪝 ${escapeHtml(truncateText(data.hookName || 'Unknown hook', 96))}</span>
+            <span class="dag-step-status ${status.css}" aria-label="${escapeHtmlAttribute(status.label)}" title="${escapeHtmlAttribute(status.label)}">${statusText}</span>
+        </div>
+        <div class="dag-hook-popup-field">
+            <div class="dag-hook-popup-label">Stage</div>
+            <span class="dag-hook-popup-stage">${escapeHtml(pipelineHookPhaseLabel(data.hookPhase).replace(/([a-z])([A-Z])/g, '$1 $2'))}</span>
+        </div>
+        <div class="dag-hook-popup-field">
+            <div class="dag-hook-popup-label">Pipeline outcome</div>
+            <div class="dag-hook-popup-outcome">${escapeHtml(consequence.summary)}</div>
+        </div>
+        <div class="dag-hook-popup-metrics">
+            <span title="Invocation duration">⏱ ${formatPipelineHookDuration(data.durationNS)}</span>
+            <span class="dag-hook-popup-order">${order}</span>
+            ${data.planPhase ? `<span class="dag-hook-popup-phase">Plan phase ${Number(data.planPhase)}</span>` : ''}
+            ${data.effectCount ? `<span class="dag-hook-popup-effect-count${data.failedEffectCount ? ' has-failure' : ''}">${data.effectCount} reported effect${data.effectCount === 1 ? '' : 's'}${data.failedEffectCount ? ` · ${data.failedEffectCount} reported failure${data.failedEffectCount === 1 ? '' : 's'}` : ''}</span>` : ''}
+        </div>
+    </div>`;
 }
 
 function renderPipelineHookDecision(hook) {
@@ -597,7 +686,7 @@ function renderPipelineHookObservations(hooks) {
                 <span class="pipeline-hook-section-count">${hooks.length} recorded invocation${hooks.length === 1 ? '' : 's'}</span>
             </div>
             <div class="pipeline-hook-card-list">
-                ${hooks.map(hook => {
+                ${hooks.map((hook, index) => {
                     const status = pipelineHookStatus(hook.status);
                     const startedAt = hook.started_at ? formatDateTime(hook.started_at) : 'Unavailable';
                     const sequence = Number(hook.sequence);
@@ -611,7 +700,7 @@ function renderPipelineHookObservations(hooks) {
                         ? `<span class="dag-step-label">Failure</span><span class="dag-step-value pipeline-hook-error">${escapeHtml(hook.error)}</span>`
                         : '';
                     return `
-                        <article class="dag-step-card pipeline-hook-card ${status.css}">
+                        <article id="dag-hook-details-${index}" tabindex="-1" class="dag-step-card pipeline-hook-card ${status.css}">
                             <div class="dag-step-header">
                                 <div class="dag-step-title pipeline-hook-title">
                                     <span class="pipeline-hook-kind">🪝 Hook</span>
@@ -655,8 +744,8 @@ function renderPipelineHookObservations(hooks) {
 //   error_analysis · step-3              → step-scoped (DAG llm_step nodes)
 //   user_memory_extraction · post        → hook-phase without phase_number
 //
-// No DOM ids, no click-to-scroll — identifier-only per the agreed scope.
-// If linking is ever added later, the label is a ready-made stable string.
+// This is a display label; navigation uses recorded call facts separately so
+// a changed array order cannot send an operator to a different call.
 function callLabel(i) {
     if (!i || !i.type) return '';
     const parts = [i.type];
@@ -665,6 +754,46 @@ function callLabel(i) {
     if (i.attempt && i.attempt > 1) parts.push(`retry-${i.attempt}`);
     if (i.hook_phase && !i.phase_number) parts.push(i.hook_phase);
     return parts.join(' · ');
+}
+
+function llmCallIdentity(call) {
+    if (!call) return '';
+    // Exact recorded boundary facts, not an array position or display label.
+    // If legacy records collide, navigation reports ambiguity instead of
+    // selecting another call. Prompt/response payloads stay out of graph data.
+    return JSON.stringify([call.timestamp, call.type, call.trace_id, call.step_id,
+        call.phase_number, call.attempt, call.source_component, call.hook_phase,
+        call.model, call.provider]);
+}
+
+function llmCallDetailTab(call, interactions = selected?.llm_interactions || []) {
+    const { isPreHook, isPostHook } = classifyInteractions(interactions);
+    return isPreHook(call) ? 'dag-pre' : isPostHook(call) ? 'dag-post' : 'dag-llm';
+}
+
+async function openLLMCallDetails(target, requestID, version) {
+    const ownsView = () => selected?.request_id === requestID && selectionVersion === version;
+    if (!ownsView()) return false;
+    if (!await setDagDetailTab(target.tab) || !ownsView() || activeTab !== target.tab) return false;
+    const matches = (selected.llm_interactions || []).map((call, index) => ({ call, index }))
+        .filter(({ call }) => llmCallIdentity(call) === target.identity && llmCallDetailTab(call) === target.tab);
+    if (matches.length !== 1) {
+        const message = matches.length ? 'This call cannot be distinguished from another retained LLM record.'
+            : 'This LLM call is unavailable in the latest retained evidence.';
+        const notice = document.createElement('div');
+        notice.className = 'dag-data-warning';
+        notice.setAttribute('role', 'status');
+        notice.textContent = message;
+        document.getElementById('dagDetailContent').prepend(notice);
+        return false;
+    }
+    const index = matches[0].index;
+    llmCardBatch?.reveal(index);
+    const card = document.getElementById(`dag-llm-call-${index}`);
+    if (!card) return false;
+    card.focus({ preventScroll: true });
+    card.scrollIntoView({ block: 'start' });
+    return true;
 }
 
 // Shared constructor for the `data` payload of any DAG node backed by an
@@ -685,6 +814,8 @@ function buildLLMBackedNodeData(call, extras) {
         model: call.model || '',
         duration: call.duration_ms || 0,
         tokens: (call.prompt_tokens || 0) + (call.completion_tokens || 0),
+        llmCallIdentity: llmCallIdentity(call),
+        llmDetailTab: llmCallDetailTab(call),
     }, extras || {});
 }
 
@@ -759,7 +890,6 @@ export function init() {
     updateGroupingModeControls();
     showExecutionListMode();
     bindDelegatedEvents();
-    refreshInvocationServices();
     fetchExecutions();
 }
 
@@ -783,23 +913,111 @@ function updateExecutionDeepLink(requestID) {
     }
 }
 
-export function refresh() {
-    refreshInvocationServices();
-    fetchExecutions({ preserveExpansion: true });
-    if (selected && !detailRefreshPending) {
-        void selectExecution(selected.request_id, { background: true });
+export async function refresh({ manual = false } = {}) {
+    // Timer refresh is summary-only. Explicit operator refresh may reload the
+    // currently requested evidence and current conversation page.
+    const tasks = [];
+    if (listPanelMode === 'list' && !groupedLoading) tasks.push(fetchExecutions({ preserveExpansion: true }));
+    if (manual && selected) tasks.push(selectExecution(selected.request_id, { restoreTab: activeTab, restoreViewMode: viewMode }));
+    if (manual && listPanelMode === 'timeline' && activeConversationID) {
+        tasks.push(loadConversationTimeline(activeConversationID, selected?.request_id, { force: true }));
     }
-    if (listPanelMode === 'timeline' && activeConversationID) {
-        void loadConversationTimeline(activeConversationID, selected?.request_id, { force: true });
+    await Promise.all(tasks);
+}
+
+function isDagAccessDenied(error) {
+    return error?.status === 401 || error?.status === 403;
+}
+
+function clearDagAccessState(error) {
+    llmCardBatch?.dispose();
+    llmCardBatch = null;
+    selectionVersion++;
+    listLoad.cancel();
+    detailLoad.cancel();
+    sectionLoad.cancel();
+    timelineLoad.cancel();
+    lineageLoader.destroy();
+    resetParentExecutionLookup();
+    selected = null;
+    selectedOverview = null;
+    selectedSection = 'overview';
+    sectionPending = false;
+    sectionError = '';
+    invokingStepTarget = null;
+    executions = [];
+    groupedExecutionGroups = [];
+    groupedNextCursor = '';
+    groupedLoading = false;
+    listPageCursor = '';
+    listPageNumber = 1;
+    listPageCursors.clear();
+    listQueryKey = '';
+    expandedGroupKeys.clear();
+    groupMatchPages.clear();
+    conversationCache.clear();
+    invocationServicesVersion++;
+    invocationServices = [];
+    invocationServicesPending = null;
+    for (const entry of dagCache.values()) {
+        entry.cy.destroy();
+        if (entry.container.parentNode) entry.container.parentNode.removeChild(entry.container);
     }
+    dagCache.clear();
+    cyInstance = null;
+    document.querySelectorAll('.node-popup').forEach(popup => popup.remove());
+    const message = error.message || 'Execution data access is unavailable.';
+    const detail = document.getElementById('dagDetailContent');
+    if (detail) detail.innerHTML = `<div class="empty-detail" role="alert">${escapeHtml(message)}</div>`;
+    const title = document.getElementById('dagDetailTitle');
+    if (title) title.textContent = 'Execution access unavailable';
+    const timeline = document.getElementById('dagTimelineContent');
+    if (timeline) timeline.innerHTML = `<div class="empty-detail" role="alert">${escapeHtml(message)}</div>`;
+    const conversationID = document.getElementById('dagTimelineConversationID');
+    if (conversationID) conversationID.textContent = '';
+    const timelineSummary = document.getElementById('dagTimelineSummary');
+    if (timelineSummary) timelineSummary.textContent = 'Conversation access unavailable';
+    for (const id of ['dagTimelinePrevious', 'dagTimelineNext']) {
+        const button = document.getElementById(id);
+        if (button) button.disabled = true;
+    }
+    renderExecutionList();
+    updateDagStats([]);
+    updateGroupedLoadMoreControl();
+    updateDetailTabs();
+    setDagListDiagnostic(message, 'error');
+    setTimelineDiagnostic(message);
+    hideLoading(document.getElementById('dagDetailPanel'));
+    hideLoading(document.getElementById('dagListPanel'));
 }
 
 export function destroy() {
+    llmCardBatch?.dispose();
+    llmCardBatch = null;
     selectionVersion++;
+    listLoad.cancel();
+    detailLoad.cancel();
+    sectionLoad.cancel();
+    timelineLoad.cancel();
+    selectedOverview = null;
+    selectedSection = 'overview';
+    sectionPending = false;
+    sectionError = '';
+    listPageCursor = '';
+    listPageNumber = 1;
+    listPageCursors.clear();
+    listQueryKey = '';
+    groupMatchPages.clear();
+    listWindowFrom = '';
+    listWindowTo = '';
     lineageLoader.destroy();
     invokingStepTarget = null;
     resetParentExecutionLookup();
     selected = null;
+    const detailContent = document.getElementById('dagDetailContent');
+    if (detailContent) detailContent.innerHTML = '<div class="empty-detail"><div class="empty-detail-icon">🔀</div><div>Select an execution to view its overview.</div></div>';
+    const detailTitle = document.getElementById('dagDetailTitle');
+    if (detailTitle) detailTitle.textContent = 'Select an execution';
     invocationServicesVersion++;
     invocationServices = [];
     invocationServicesPending = null;
@@ -816,14 +1034,10 @@ export function destroy() {
         clearTimeout(dagSearchTimer);
         dagSearchTimer = null;
     }
-    groupedRequestVersion++;
     groupedExecutionGroups = [];
     groupedNextCursor = '';
-    groupedQueryFingerprint = '';
-    groupedResponsePartial = false;
     groupedLoading = false;
     expandedGroupKeys.clear();
-    pendingAutoExpandRequestID = '';
     conversationCache.clear();
     activeConversationID = '';
     listPanelMode = 'list';
@@ -870,6 +1084,11 @@ function handleDagListPanelClick(e) {
         );
         return;
     }
+    const matchPage = e.target.closest('[data-conversation-matches-page]');
+    if (matchPage) {
+        navigateConversationMatches(matchPage.dataset.conversationMatchesPage, matchPage.dataset.groupKey);
+        return;
+    }
     const openTimeline = e.target.closest('[data-open-conversation]');
     if (openTimeline) {
         openConversationTimeline(
@@ -883,9 +1102,18 @@ function handleDagListPanelClick(e) {
         closeConversationTimeline();
         return;
     }
+    if (e.target.closest('[data-previous-execution-page]')) {
+        if (!groupedLoading) void navigateExecutionPage('previous');
+        return;
+    }
+    const pageButton = e.target.closest('[data-execution-page]');
+    if (pageButton) {
+        void jumpToExecutionPage(Number(pageButton.dataset.executionPage));
+        return;
+    }
     const loadMore = e.target.closest('[data-load-more-groups]');
     if (loadMore) {
-        if (!groupedLoading) void loadExecutionGroups({ reset: false });
+        if (!groupedLoading && groupedNextCursor) void navigateExecutionPage('next');
         return;
     }
     const timelineExecution = e.target.closest('[data-view-timeline-execution]');
@@ -894,6 +1122,11 @@ function handleDagListPanelClick(e) {
             timelineExecution.dataset.viewTimelineExecution,
             { restoreTimelineActionFocus: true },
         );
+        return;
+    }
+    const conversationPage = e.target.closest('[data-conversation-page]');
+    if (conversationPage) {
+        void navigateConversationPage(conversationPage.dataset.conversationPage, conversationPage.dataset.conversationId);
         return;
     }
     const timelineNav = e.target.closest('[data-timeline-nav]');
@@ -973,6 +1206,14 @@ function handleLineageAction(e) {
 
 function handleDagDetailContentClick(e) {
     if (handleLineageAction(e)) return;
+    if (e.target.closest('[data-retry-execution-section]')) {
+        void loadSelectedSection(activeDetailSection(), { force: true });
+        return;
+    }
+    if (e.target.closest('[data-refresh-execution-overview]')) {
+        if (selected) void selectExecution(selected.request_id);
+        return;
+    }
     // Toggle "Show more" on long step instructions
     const instrBtn = e.target.closest('[data-toggle-instruction]');
     if (instrBtn) {
@@ -1023,11 +1264,7 @@ function handleDagSearchInput() {
     if (dagSearchTimer) clearTimeout(dagSearchTimer);
     dagSearchTimer = setTimeout(() => {
         dagSearchTimer = null;
-        if (groupingMode === 'grouped') {
-            void loadExecutionGroups({ reset: true });
-        } else {
-            renderExecutionList();
-        }
+        void fetchExecutions();
     }, 250);
 }
 
@@ -1038,6 +1275,13 @@ function bindDelegatedEvents() {
     addTrackedListener(document.getElementById('dagDetailPanel'), 'click', handleDagDetailPanelClick);
     addTrackedListener(document.getElementById('dagDetailContent'), 'click', handleDagDetailContentClick);
     addTrackedListener(document.getElementById('dagSearchInput'), 'input', handleDagSearchInput);
+    addTrackedListener(document.getElementById('dagTimeRange'), 'change', () => {
+        listTimeRange = document.getElementById('dagTimeRange').value;
+        void fetchExecutions();
+    });
+    addTrackedListener(document.getElementById('dagPageJump'), 'change', event => {
+        void jumpToExecutionPage(Number(event.target.value));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,144 +1289,182 @@ function bindDelegatedEvents() {
 // ---------------------------------------------------------------------------
 
 async function fetchExecutions({ preserveExpansion = false } = {}) {
-    if (groupingMode === 'grouped') {
-        await loadExecutionGroups({
-            reset: true,
-            preserveExpansion,
-            withLoadingOverlay: listPanelMode === 'list',
-        });
-        return;
-    }
-    await loadFlatExecutions({ withLoadingOverlay: listPanelMode === 'list' });
+    await loadExecutionPage({ reset: !preserveExpansion, preserveExpansion });
 }
 
 async function loadFlatExecutions({ withLoadingOverlay = true } = {}) {
-    const listPanel = document.getElementById('dagListPanel');
-    const requestVersion = ++groupedRequestVersion;
-    if (withLoadingOverlay) showLoading(listPanel, 'Loading executions...');
-    try {
-        const { data } = await fetchAPI('/api/executions?limit=50');
-        if (requestVersion !== groupedRequestVersion || groupingMode !== 'flat') return;
-        executions = data.executions || [];
-        setDagListDiagnostic('');
-        renderExecutionList();
-        updateDagStats();
-        updateDagLastUpdated(data.timestamp);
-    } catch (error) {
-        if (requestVersion !== groupedRequestVersion) return;
-        console.error('Failed to fetch executions:', error);
-        setDagListDiagnostic(
-            'The execution list could not be loaded. Refresh to try again.',
-            'error',
-        );
-    } finally {
-        if (requestVersion === groupedRequestVersion && withLoadingOverlay) {
-            hideLoading(listPanel);
-        }
-    }
+    return loadExecutionPage({ reset: true, withLoadingOverlay });
 }
 
-async function loadExecutionGroups({
-    reset,
-    withLoadingOverlay = true,
-    preserveExpansion = false,
-}) {
+async function loadExecutionGroups({ reset = true, preserveExpansion = false, withLoadingOverlay = true } = {}) {
+    if (!reset) return navigateExecutionPage('next');
+    return loadExecutionPage({ reset, preserveExpansion, withLoadingOverlay });
+}
+
+async function navigateExecutionPage(direction) {
+    if (groupedLoading) return;
+    if (direction === 'previous') return jumpToExecutionPage(listPageNumber - 1);
+    if (direction !== 'next' || !groupedNextCursor) return;
+    await loadExecutionPage({ cursor: groupedNextCursor, navigation: 'next', targetPage: listPageNumber + 1 });
+}
+
+async function jumpToExecutionPage(pageNumber) {
+    if (groupedLoading || !Number.isSafeInteger(pageNumber) || pageNumber === listPageNumber || !listPageCursors.has(pageNumber)) return;
+    await loadExecutionPage({ cursor: listPageCursors.get(pageNumber), navigation: 'jump', targetPage: pageNumber });
+}
+
+async function loadExecutionPage({ reset = false, preserveExpansion = false, cursor = listPageCursor, navigation = '', targetPage = listPageNumber, withLoadingOverlay = listPanelMode === 'list' } = {}) {
     const listPanel = document.getElementById('dagListPanel');
-    const requestVersion = ++groupedRequestVersion;
-    if (reset && !preserveExpansion) {
-        requestSelectedGroupAutoExpansion();
+    const paginationHadFocus = !!document.activeElement?.closest?.('.dag-pagination');
+    const ticket = listLoad.begin();
+    const mode = groupingMode;
+    const search = document.getElementById('dagSearchInput')?.value.trim() || '';
+    const queryKey = JSON.stringify([mode, search, filter, sortDirection, listTimeRange]);
+    // Query controls may change before a debounced search starts. A timer or
+    // retry must never combine those controls with the previous query's cursor.
+    if (queryKey !== listQueryKey) {
+        reset = true;
+        navigation = '';
+        preserveExpansion = false;
+    }
+    listQueryKey = queryKey;
+    if (reset) {
+        cursor = '';
+        listPageCursor = '';
+        listPageNumber = 1;
+        targetPage = 1;
+        listPageCursors.clear();
+        groupedNextCursor = '';
+        executions = [];
+        groupedExecutionGroups = [];
+        groupMatchPages.clear();
+        if (!preserveExpansion) expandedGroupKeys.clear();
+        renderExecutionList();
+        updateDagStats([]);
+    }
+    if (!cursor && !navigation) targetPage = 1;
+    // Keep a refresh's proposed bounds private until its page succeeds. The
+    // retained page's cursor is bound to its existing window on the backend.
+    let windowFrom = listWindowFrom;
+    let windowTo = listWindowTo;
+    if (reset || (!cursor && !navigation)) {
+        const hours = { '1h': 1, '24h': 24, '72h': 72 }[listTimeRange];
+        const now = Date.now();
+        windowFrom = hours ? new Date(now - hours * 3600000).toISOString() : '';
+        windowTo = hours ? new Date(now).toISOString() : '';
     }
     groupedLoading = true;
     updateGroupedLoadMoreControl();
-    if (withLoadingOverlay && reset) showLoading(listPanel, 'Loading conversation groups...');
-
+    if (withLoadingOverlay) showLoading(listPanel, 'Loading execution summaries…');
     const query = new URLSearchParams({
-        group_conversations: 'true',
-        q: document.getElementById('dagSearchInput')?.value.trim() || '',
-        status: filter,
-        sort: sortColumn,
-        direction: sortDirection,
         limit: String(DAG_GROUP_PAGE_SIZE),
+        q: search,
+        status: filter,
+        sort: 'created_at',
+        direction: sortDirection,
     });
-    if (!reset && groupedNextCursor) query.set('cursor', groupedNextCursor);
-
+    if (windowFrom) query.set('from', windowFrom);
+    if (windowTo) query.set('to', windowTo);
+    if (mode === 'grouped') query.set('group_conversations', 'true');
+    if (cursor) query.set('cursor', cursor);
     try {
-        const { data } = await fetchAPI(`/api/executions?${query.toString()}`);
-        if (requestVersion !== groupedRequestVersion || groupingMode !== 'grouped') return;
-
-        if (!Array.isArray(data.groups)) {
-            setDagListDiagnostic(
-                'This Registry Viewer server does not support conversation grouping, so the flat list is shown.',
-                'warning',
-                false,
-            );
-            groupedExecutionGroups = [];
-            groupedNextCursor = '';
-            pendingAutoExpandRequestID = '';
-            groupingMode = 'flat';
-            updateGroupingModeControls();
-            executions = Array.isArray(data.executions) ? data.executions : [];
-            renderExecutionList();
-            updateDagStats(executions);
-            updateDagLastUpdated(data.timestamp);
-            return;
+        const { data } = await fetchAPI(`/api/executions?${query.toString()}`, { signal: ticket.signal });
+        if (!listLoad.current(ticket) || mode !== groupingMode) return;
+        if (mode === 'grouped' && !Array.isArray(data.groups)) throw new Error('This server does not support bounded conversation grouping.');
+        const nextGroups = mode === 'grouped' ? data.groups : [];
+        const nextExecutions = mode === 'grouped' ? flattenGroupedExecutions(nextGroups)
+            : Array.isArray(data.executions) ? data.executions : [];
+        // Page numbers belong to this query and time window. Publish them only
+        // after a successful read; failed navigation retains the displayed page.
+        if (windowFrom !== listWindowFrom || windowTo !== listWindowTo) listPageCursors.clear();
+        const nextCursor = data.next_cursor || '';
+        if (!nextCursor || (listPageCursors.has(targetPage + 1) && listPageCursors.get(targetPage + 1) !== nextCursor)) {
+            // Snapshot updates may change a page boundary. Later visited pages
+            // must be rediscovered rather than offered with stale positions.
+            for (const page of listPageCursors.keys()) if (page > targetPage) listPageCursors.delete(page);
         }
-
-        if (reset) {
-            groupedExecutionGroups = data.groups;
-            if (!preserveExpansion) {
-                expandedGroupKeys.clear();
-            }
-        } else if (
-            !groupedQueryFingerprint ||
-            groupedQueryFingerprint === data.query_fingerprint
-        ) {
-            groupedExecutionGroups = groupedExecutionGroups.concat(data.groups);
-        } else {
-            throw new Error('grouped response fingerprint changed during pagination');
+        listWindowFrom = windowFrom;
+        listWindowTo = windowTo;
+        listPageNumber = targetPage;
+        listPageCursors.set(targetPage, cursor);
+        if (listPageCursors.size > CURSOR_HISTORY_MAX) listPageCursors.delete(Math.min(...listPageCursors.keys()));
+        listPageCursor = cursor;
+        if (!preserveExpansion) {
+            expandedGroupKeys.clear();
+            groupMatchPages.clear();
         }
-
-        groupedQueryFingerprint = data.query_fingerprint || '';
-        groupedNextCursor = data.next_cursor || '';
-        groupedResponsePartial = Boolean(data.partial);
-        applyPendingSelectedGroupAutoExpansion();
+        groupedNextCursor = nextCursor;
+        groupedExecutionGroups = nextGroups;
+        executions = nextExecutions;
+        if (mode === 'grouped') {
+            const activeGroups = new Set(groupedExecutionGroups.map(group => group.group_key));
+            for (const key of groupMatchPages.keys()) if (!activeGroups.has(key)) groupMatchPages.delete(key);
+        }
         renderExecutionList();
-
-        const materialized = flattenGroupedExecutions(groupedExecutionGroups);
-        executions = materialized;
-        updateDagStats(materialized);
+        updateDagStats(executions);
         updateDagLastUpdated(data.timestamp);
-        updateGroupedDiagnostics(data);
+        const messages = [];
+        if (!executions.length && groupedNextCursor) messages.push('No matches in this scanned page. Continue search to inspect the next page.');
+        if (data.partial) messages.push('This page has partial backend coverage; retained evidence is still available by request ID.');
+        setDagListDiagnostic(messages.join(' '), data.partial ? 'warning' : 'info');
     } catch (error) {
-        if (requestVersion !== groupedRequestVersion) return;
-        console.error('Failed to fetch conversation groups:', error);
-        if (reset && !preserveExpansion) {
-            groupedExecutionGroups = [];
+        if (isDagAccessDenied(error)) { clearDagAccessState(error); return; }
+        if (!listLoad.current(ticket) || error.name === 'AbortError') return;
+        if (error.status === 409) {
+            listPageCursor = '';
+            listPageCursors.clear();
             groupedNextCursor = '';
-            renderServerExecutionGroups([]);
-        }
-        setDagListDiagnostic(
-            'Conversation grouping is temporarily unavailable. The flat execution list remains available.',
-            'error',
-            true,
-        );
+            setDagListDiagnostic('This page moved or expired. Refresh to restart browsing from the latest summaries.', 'warning');
+        } else setDagListDiagnostic(`Execution summaries could not be loaded. ${error.message || 'Refresh to try again.'}`, 'error');
     } finally {
-        if (requestVersion === groupedRequestVersion) {
+        if (listLoad.current(ticket)) {
             groupedLoading = false;
             updateGroupedLoadMoreControl();
-            if (withLoadingOverlay && reset) hideLoading(listPanel);
+            if (withLoadingOverlay) hideLoading(listPanel);
+            if (paginationHadFocus && document.activeElement === document.body) {
+                // Replacing page buttons may remove the focused control. Keep
+                // keyboard navigation in the footer unless focus moved elsewhere.
+                const control = ['dagPageJump', 'dagLoadMore', 'dagPreviousPage']
+                    .map(id => document.getElementById(id))
+                    .find(element => element && !element.disabled);
+                control?.focus({ preventScroll: true });
+            }
         }
     }
 }
 
 function updateGroupedLoadMoreControl() {
-    const loadMore = document.getElementById('dagLoadMore');
-    if (!loadMore) return;
-    loadMore.disabled =
-        groupedLoading ||
-        !groupedNextCursor ||
-        groupedResponsePartial;
-    loadMore.textContent = groupedLoading ? 'Loading…' : 'Load more groups';
+    const next = document.getElementById('dagLoadMore');
+    const previous = document.getElementById('dagPreviousPage');
+    if (next) {
+        next.classList.toggle('hidden', !groupedNextCursor);
+        next.disabled = groupedLoading || !groupedNextCursor;
+        const label = !executions.length ? 'Continue search' : 'Next page';
+        next.title = label;
+        next.setAttribute('aria-label', label);
+    }
+    if (previous) {
+        const hasPrevious = listPageCursors.has(listPageNumber - 1);
+        previous.classList.toggle('hidden', !hasPrevious);
+        previous.disabled = groupedLoading || !hasPrevious;
+    }
+    const pages = [...listPageCursors.keys()].sort((a, b) => a - b);
+    const jump = document.getElementById('dagPageJump');
+    if (jump) {
+        const choices = pages.length ? pages : [listPageNumber];
+        jump.innerHTML = choices.map(page => `<option value="${page}"${page === listPageNumber ? ' selected' : ''}>Page ${page}</option>`).join('');
+        jump.value = String(listPageNumber);
+        jump.disabled = groupedLoading || pages.length < 2;
+    }
+    const numbers = document.getElementById('dagPageNumbers');
+    if (numbers) {
+        const visible = pages.filter((page, index) => index === 0 || index === pages.length - 1 || Math.abs(page - listPageNumber) <= 1);
+        numbers.innerHTML = visible.map((page, index) => {
+            const gap = index > 0 && page > visible[index - 1] + 1 ? '<span class="dag-page-gap" aria-hidden="true">…</span>' : '';
+            const current = page === listPageNumber;
+            return `${gap}<button class="dag-page-number${current ? ' active' : ''}" type="button" data-execution-page="${page}" aria-label="Page ${page}"${current ? ' aria-current="page"' : ''}${groupedLoading || current ? ' disabled' : ''}>${page}</button>`;
+        }).join('');
+    }
 }
 
 function updateDagStats(sourceExecutions = executions) {
@@ -1261,14 +1543,11 @@ function setDagFilter(f) {
     document.querySelectorAll('#dagListPanel .filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === f);
     });
-    if (groupingMode === 'grouped') {
-        void loadExecutionGroups({ reset: true });
-    } else {
-        renderExecutionList();
-    }
+    void fetchExecutions();
 }
 
 function sortDagTable(column) {
+    if (column !== 'created_at') return;
     // Update sort indicators in the header
     document.querySelectorAll('#dagListPanel th.sortable').forEach(th => {
         th.classList.remove('asc', 'desc');
@@ -1284,11 +1563,7 @@ function sortDagTable(column) {
     const th = document.querySelector(`#dagListPanel th[data-sort="${column}"]`);
     if (th) th.classList.add(sortDirection);
 
-    if (groupingMode === 'grouped') {
-        void loadExecutionGroups({ reset: true });
-    } else {
-        renderExecutionList();
-    }
+    void fetchExecutions();
 }
 
 // ---------------------------------------------------------------------------
@@ -1308,17 +1583,16 @@ function setGroupingMode(mode) {
     if (groupingMode === mode) return;
 
     groupingMode = mode;
+    listLoad.cancel();
+    listPageCursor = '';
+    listPageNumber = 1;
+    listPageCursors.clear();
     storeGroupingPreference(mode);
-    groupedRequestVersion++;
     groupedLoading = false;
     groupedExecutionGroups = [];
     groupedNextCursor = '';
-    groupedQueryFingerprint = '';
-    groupedResponsePartial = false;
     expandedGroupKeys.clear();
-    pendingAutoExpandRequestID = mode === 'grouped'
-        ? (selected?.request_id || '')
-        : '';
+    groupMatchPages.clear();
     setDagListDiagnostic('');
     updateGroupingModeControls();
     showExecutionListMode();
@@ -1334,11 +1608,16 @@ function updateGroupingModeControls() {
     const hint = document.getElementById('dagGroupingHint');
     if (hint) {
         hint.textContent = groupingMode === 'grouped'
-            ? 'Conversations stay together · sorted by latest matching turn'
-            : 'One row per execution · legacy list behavior';
+            ? `Groups from this ${DAG_GROUP_PAGE_SIZE}-execution page · expand matching turns, ${CONVERSATION_PAGE_SIZE} at a time`
+            : `${DAG_GROUP_PAGE_SIZE} execution summaries per page · open a row for details`;
     }
-    const loadMore = document.getElementById('dagLoadMore');
-    if (loadMore && groupingMode === 'flat') loadMore.classList.add('hidden');
+    document.querySelectorAll('#dagListPanel th[data-sort]').forEach(th => {
+        if (th.dataset.sort !== 'created_at') {
+            th.classList.remove('sortable', 'asc', 'desc');
+            th.removeAttribute('data-sort');
+        }
+    });
+    updateGroupedLoadMoreControl();
 }
 
 function showExecutionListMode() {
@@ -1348,7 +1627,6 @@ function showExecutionListMode() {
 }
 
 function toggleConversationGroup(groupKey, triggerKind = 'expand') {
-    if (!groupKey) return;
     if (expandedGroupKeys.has(groupKey)) {
         expandedGroupKeys.delete(groupKey);
     } else {
@@ -1356,46 +1634,33 @@ function toggleConversationGroup(groupKey, triggerKind = 'expand') {
     }
     renderServerExecutionGroups(groupedExecutionGroups);
     requestAnimationFrame(() => {
-        const trigger = Array.from(document.querySelectorAll(
-            '[data-toggle-conversation-group]',
-        )).find(button =>
+        const trigger = Array.from(document.querySelectorAll('[data-toggle-conversation-group]')).find(button =>
             button.dataset.toggleConversationGroup === groupKey &&
-            (triggerKind === 'title'
-                ? button.classList.contains('dag-group-title-btn')
-                : button.classList.contains('dag-group-expand-btn'))
-        );
+            (triggerKind === 'title' ? button.classList.contains('dag-group-title-btn') : button.classList.contains('dag-group-expand-btn')));
         trigger?.focus({ preventScroll: true });
     });
 }
 
-function groupContainsRequest(group, requestID) {
-    if (!requestID) return false;
-    return (group.turns || []).some(turn =>
-        turn.execution?.request_id === requestID ||
-        (turn.related_executions || []).some(item => item.request_id === requestID)
-    ) || (group.orphans || []).some(item => item.request_id === requestID);
+function conversationGroupMatches(group) {
+    return [...(group.turns || []).map(turn => ({ turn })), ...(group.orphans || []).map(execution => ({ execution }))];
 }
 
-function requestSelectedGroupAutoExpansion() {
-    pendingAutoExpandRequestID = selected?.request_id || '';
-}
-
-function applyPendingSelectedGroupAutoExpansion() {
-    if (!pendingAutoExpandRequestID) return;
-    const group = groupedExecutionGroups.find(candidate =>
-        groupContainsRequest(candidate, pendingAutoExpandRequestID)
-    );
+function navigateConversationMatches(direction, groupKey) {
+    const group = groupedExecutionGroups.find(item => item.group_key === groupKey);
     if (!group) return;
-
-    // The selected record is now represented by the current server page, so
-    // this one-shot request has been consumed. Standalone units have nothing
-    // to expand; conversation units open once and can then be collapsed by
-    // the user without a later render overriding that choice.
-    pendingAutoExpandRequestID = '';
-    if (group.conversation_id) {
-        expandedGroupKeys.add(group.group_key);
-    }
+    const count = conversationGroupMatches(group).length;
+    const lastPage = Math.max(0, Math.ceil(count / CONVERSATION_PAGE_SIZE) - 1);
+    const currentPage = groupMatchPages.get(groupKey) || 0;
+    const page = Math.max(0, Math.min(lastPage, currentPage + (direction === 'previous' ? -1 : 1)));
+    groupMatchPages.set(groupKey, page);
+    renderServerExecutionGroups(groupedExecutionGroups);
+    requestAnimationFrame(() => {
+        const controls = Array.from(document.querySelectorAll('[data-conversation-matches-page]'))
+            .filter(button => button.dataset.groupKey === groupKey && !button.disabled);
+        (controls.find(button => button.dataset.conversationMatchesPage === direction) || controls[0])?.focus({ preventScroll: true });
+    });
 }
+
 
 function renderServerExecutionGroups(groups) {
     const container = document.getElementById('dagTableBody');
@@ -1427,26 +1692,36 @@ function renderServerExecutionGroups(groups) {
             rows.push(renderConversationGroupHeader(group, expanded));
             if (!expanded) return;
 
-            (group.turns || []).forEach(turn => {
+            // Expansion keeps the current query's matches. The separate timeline
+            // action loads broader history; it must not replace an older match
+            // with unrelated recent turns simply because the group was expanded.
+            const matches = conversationGroupMatches(group);
+            const lastPage = Math.max(0, Math.ceil(matches.length / CONVERSATION_PAGE_SIZE) - 1);
+            const page = Math.min(groupMatchPages.get(group.group_key) || 0, lastPage);
+            groupMatchPages.set(group.group_key, page);
+            const start = page * CONVERSATION_PAGE_SIZE;
+            const visibleMatches = matches.slice(start, start + CONVERSATION_PAGE_SIZE);
+            visibleMatches.forEach(({ turn }) => {
+                if (!turn) return;
                 rows.push(renderHierarchyGroupedRows([turn.execution, ...(turn.related_executions || [])], turn.execution?.request_id, {
-                    conversationTurn: true,
-                    llmCallCount: turn.llm_call_count,
-                    historyStatus: turn.history_status,
+                    conversationTurn: true, llmCallCount: turn.llm_call_count, historyStatus: turn.history_status,
                 }));
             });
-            rows.push(renderHierarchyGroupedRows(group.orphans || []));
+            // Orphans can still have an immediate parent on this page even
+            // when their common root is absent. Resolve those links together.
+            rows.push(renderHierarchyGroupedRows(visibleMatches.flatMap(item => item.execution ? [item.execution] : [])));
+            if (matches.length > CONVERSATION_PAGE_SIZE) {
+                rows.push(`<tr><td colspan="5"><div class="dag-list-footer">
+                    <button type="button" class="dag-load-more" data-conversation-matches-page="previous" data-group-key="${escapeHtmlAttribute(group.group_key)}" ${page === 0 ? 'disabled' : ''}>← Previous matches</button>
+                    <span>Matches ${start + 1}–${Math.min(start + CONVERSATION_PAGE_SIZE, matches.length)} of ${matches.length} on this page</span>
+                    <button type="button" class="dag-load-more" data-conversation-matches-page="next" data-group-key="${escapeHtmlAttribute(group.group_key)}" ${page === lastPage ? 'disabled' : ''}>Next matches →</button>
+                </div></td></tr>`);
+            }
         });
         container.innerHTML = rows.join('');
     }
 
-    const loadMore = document.getElementById('dagLoadMore');
-    if (loadMore) {
-        loadMore.classList.toggle(
-            'hidden',
-            !groupedNextCursor || groupedResponsePartial,
-        );
-        updateGroupedLoadMoreControl();
-    }
+    updateGroupedLoadMoreControl();
 }
 
 function renderHierarchyGroupedRows(records, primaryID = '', primaryOptions = {}) {
@@ -1484,10 +1759,7 @@ function renderConversationGroupHeader(group, expanded) {
     const statusLabel = uniform ? statuses[0].label : 'Mixed lifecycle states';
     const shortConversationID = truncateText(group.conversation_id, 28);
     const matchingTurnCount = group.matching_turn_count ?? turns.length;
-    const totalTurnCount = group.total_turn_count || turns.length;
-    const turnCountLabel = matchingTurnCount === totalTurnCount
-        ? `${totalTurnCount} turn${totalTurnCount === 1 ? '' : 's'}`
-        : `${matchingTurnCount} matching · ${totalTurnCount} total`;
+    const turnCountLabel = `${matchingTurnCount} matching turn${matchingTurnCount === 1 ? '' : 's'} in this page`;
 
     return `
         <tr class="dag-conversation-group-row ${expanded ? 'expanded' : ''}">
@@ -1587,13 +1859,7 @@ function renderGroupedExecutionRow(exec, options = {}) {
 function renderLegacyExecutionList() {
     const container = document.getElementById('dagTableBody');
     if (!container) return;
-    const searchTerm = document.getElementById('dagSearchInput')?.value.toLowerCase() || '';
-    const filtered = executions.filter(exec =>
-        matchesExecutionStatus(exec, filter) &&
-        (filter !== 'interrupted' || exec.interrupted) &&
-        (!searchTerm || (exec.original_request || '').toLowerCase().includes(searchTerm) ||
-            exec.request_id.toLowerCase().includes(searchTerm))
-    );
+    const filtered = [...executions];
     filtered.sort((a, b) => {
         let left, right;
         if (sortColumn === 'original_request') {
@@ -1645,6 +1911,7 @@ function openConversationTimeline(conversationID, trigger) {
 }
 
 function closeConversationTimeline() {
+    timelineLoad.cancel();
     showExecutionListMode();
     const refreshedGroupTrigger = Array.from(document.querySelectorAll(
         '[data-open-conversation]',
@@ -1678,65 +1945,77 @@ function renderConversationTimelineState(conversationID) {
     }
 }
 
-async function loadConversationTimeline(
-    conversationID,
-    selectedRequestID,
-    { force = false } = {},
-) {
+function rememberConversationPage(conversationID, entry) {
+    conversationCache.delete(conversationID);
+    conversationCache.set(conversationID, entry);
+    while (conversationCache.size > CONVERSATION_CACHE_MAX) conversationCache.delete(conversationCache.keys().next().value);
+}
+
+async function loadConversationTimeline(conversationID, selectedRequestID, { force = false, cursor, navigation = '' } = {}) {
     if (!conversationID) return null;
     const cached = conversationCache.get(conversationID);
-    if (!force && cached?.data) {
-        if (activeConversationID === conversationID && listPanelMode === 'timeline') {
-            renderConversationTimeline(cached.data, selectedRequestID);
-        }
+    const requestedCursor = cursor ?? cached?.cursor ?? '';
+    if (!force && cached?.data && cached.cursor === requestedCursor) {
+        rememberConversationPage(conversationID, cached);
+        if (activeConversationID === conversationID && listPanelMode === 'timeline') renderConversationTimeline(cached.data, selectedRequestID);
         return cached.data;
     }
-    if (!force && cached?.promise) return cached.promise;
+    const ticket = timelineLoad.begin();
+    const entry = { data: cached?.data || null, cursor: cached?.cursor || '', history: [...(cached?.history || [])], pending: true, error: '' };
+    rememberConversationPage(conversationID, entry);
+    const query = new URLSearchParams({ conversation_id: conversationID, limit: String(CONVERSATION_PAGE_SIZE) });
+    if (requestedCursor) query.set('cursor', requestedCursor);
+    try {
+        const { data } = await fetchAPI(`/api/conversations?${query.toString()}`, { signal: ticket.signal, cache: false });
+        if (!timelineLoad.current(ticket)) return null;
+        if (data.conversation_id !== conversationID) throw new Error('Conversation identity changed while loading.');
+        if (navigation === 'next') {
+            entry.history.push(cached?.cursor || '');
+            if (entry.history.length > CURSOR_HISTORY_MAX) entry.history.shift();
+        } else if (navigation === 'previous') entry.history.pop();
+        entry.data = data;
+        entry.cursor = requestedCursor;
+        entry.pending = false;
+        rememberConversationPage(conversationID, entry);
+        if (activeConversationID === conversationID && listPanelMode === 'timeline') renderConversationTimeline(data, selected?.request_id || selectedRequestID);
+        if (groupingMode === 'grouped' && listPanelMode === 'list') renderServerExecutionGroups(groupedExecutionGroups);
+        return data;
+    } catch (error) {
+        if (isDagAccessDenied(error)) { clearDagAccessState(error); return null; }
+        if (conversationCache.get(conversationID) === entry) {
+            entry.pending = false;
+            entry.error = error.status === 409 ? 'This page moved or expired. Reopen the conversation or refresh to start again.' : error.name === 'AbortError' ? 'Load interrupted; reopen to retry.' : error.message;
+            if (error.status === 409) { entry.data = null; entry.cursor = ''; entry.history = []; }
+        }
+        if (!timelineLoad.current(ticket) || error.name === 'AbortError') return null;
+        if (activeConversationID === conversationID && listPanelMode === 'timeline') {
+            if (entry.data) {
+                renderConversationTimeline(entry.data, selected?.request_id);
+                appendTimelineDiagnostic('The requested page could not be loaded. The previous page remains visible.');
+            } else { renderTimelineError(); if (entry.error) appendTimelineDiagnostic(entry.error); }
+        }
+        if (groupingMode === 'grouped' && listPanelMode === 'list') renderServerExecutionGroups(groupedExecutionGroups);
+        return null;
+    }
+}
 
-    const endpoint = `/api/conversations?${new URLSearchParams({
-        conversation_id: conversationID,
-    }).toString()}`;
-    const promise = fetchAPI(endpoint)
-        .then(({ data }) => {
-            conversationCache.set(conversationID, { data });
-            if (activeConversationID === conversationID && listPanelMode === 'timeline') {
-                renderConversationTimeline(
-                    data,
-                    selected?.request_id || selectedRequestID,
-                );
-            }
-            return data;
-        })
-        .catch(error => {
-            console.error('Failed to fetch conversation timeline:', error);
-            if (cached?.data) {
-                conversationCache.set(conversationID, { data: cached.data });
-                if (activeConversationID === conversationID && listPanelMode === 'timeline') {
-                    renderConversationTimeline(cached.data, selected?.request_id);
-                    appendTimelineDiagnostic('The latest refresh failed; showing the cached timeline.');
-                }
-                return cached.data;
-            }
-            conversationCache.set(conversationID, { error });
-            if (activeConversationID === conversationID && listPanelMode === 'timeline') {
-                renderTimelineError();
-            }
-            return null;
-        });
-    conversationCache.set(conversationID, { promise });
-    return promise;
+async function navigateConversationPage(direction, conversationID = activeConversationID) {
+    const page = conversationCache.get(conversationID);
+    if (!page || page.pending) return;
+    const cursor = direction === 'previous' ? page.history.at(-1) : page.data?.next_cursor;
+    if (cursor === undefined || (direction === 'next' && !cursor)) return;
+    await loadConversationTimeline(conversationID, selected?.request_id, { force: true, cursor, navigation: direction });
 }
 
 function renderConversationTimeline(timeline, selectedRequestID = selected?.request_id) {
     if (!timeline || activeConversationID !== timeline.conversation_id) return;
     const turns = timeline.turns || [];
-    const turnCount = timeline.turn_count || turns.length;
     const executionCount = timeline.execution_count || 0;
     const idTarget = document.getElementById('dagTimelineConversationID');
     if (idTarget) idTarget.textContent = timeline.conversation_id;
     const summary = document.getElementById('dagTimelineSummary');
     if (summary) {
-        summary.textContent = `${turnCount} turn${turnCount === 1 ? '' : 's'} · ${executionCount} execution${executionCount === 1 ? '' : 's'} · chronological`;
+        summary.textContent = `${turns.length} turn${turns.length === 1 ? '' : 's'} in this page · ${executionCount} execution summaries · 5 turns per page`;
     }
 
     const diagnosticMessages = [];
@@ -1751,11 +2030,11 @@ function renderConversationTimeline(timeline, selectedRequestID = selected?.requ
     }
     setTimelineDiagnostic(diagnosticMessages.join(' '));
 
-    const currentTurnIndex = findConversationTurnIndex(timeline, selectedRequestID);
+    const page = conversationCache.get(timeline.conversation_id);
     const previous = document.getElementById('dagTimelinePrevious');
     const next = document.getElementById('dagTimelineNext');
-    if (previous) previous.disabled = currentTurnIndex <= 0;
-    if (next) next.disabled = currentTurnIndex < 0 || currentTurnIndex >= turns.length - 1;
+    if (previous) { previous.disabled = !page?.history.length || !!page?.pending; previous.title = 'Previous 5 conversation turns'; previous.setAttribute('aria-label', previous.title); }
+    if (next) { next.disabled = !timeline.next_cursor || !!page?.pending; next.title = 'Next 5 conversation turns'; next.setAttribute('aria-label', next.title); }
 
     const content = document.getElementById('dagTimelineContent');
     if (!content) return;
@@ -1763,7 +2042,7 @@ function renderConversationTimeline(timeline, selectedRequestID = selected?.requ
         content.innerHTML = `
             <div class="empty-detail">
                 <div class="empty-detail-icon">💬</div>
-                <div>No verified executions are available for this conversation.</div>
+                <div>${timeline.next_cursor ? 'No top-level turns in this scanned page. Use the next arrow to continue.' : 'No verified turns are available in this page.'}</div>
             </div>`;
         return;
     }
@@ -1890,15 +2169,7 @@ function findConversationTurnIndex(timeline, requestID) {
 }
 
 function navigateConversationTurn(direction) {
-    const conversationID = listPanelMode === 'timeline'
-        ? activeConversationID
-        : selected?.conversation_id;
-    const timeline = conversationCache.get(conversationID)?.data;
-    if (!timeline) return;
-    const currentIndex = findConversationTurnIndex(timeline, selected?.request_id);
-    const targetIndex = direction === 'previous' ? currentIndex - 1 : currentIndex + 1;
-    const target = timeline.turns?.[targetIndex]?.execution?.request_id;
-    if (target) void selectExecution(target);
+    void navigateConversationPage(direction);
 }
 
 function copyConversationID(button) {
@@ -1940,60 +2211,117 @@ function renderTimelineError() {
 // Execution selection & detail
 // ---------------------------------------------------------------------------
 
-async function selectExecution(
-    requestId,
-    { restoreTimelineActionFocus = false, background = false } = {},
-) {
-    const version = background ? selectionVersion : ++selectionVersion;
-    if (!background) {
-        lineageLoader.select(requestId, loadedLineageSummaries().find(item => item.request_id === requestId));
-        discoverExecutionLineage({ requestID: requestId });
+function normalizeExecutionView(data) {
+    if (data.phase_plans?.length > 1) {
+        return { ...data, plan: { ...(data.plan || {}), steps: data.phase_plans.flatMap(plan => plan.steps || []) } };
     }
-    if (background) detailRefreshPending = true;
-    if (!background) document.querySelectorAll('.node-popup').forEach(p => p.remove());
-    const detailPanel = document.getElementById('dagDetailPanel');
-    if (!background) showLoading(detailPanel, 'Loading execution...');
+    return data;
+}
+
+function sectionAvailable(section) {
+    const available = selectedOverview?.available_sections || selected?.available_sections;
+    return Array.isArray(available) ? available.includes(section) : available?.[section] === true;
+}
+
+function activeDetailSection() {
+    const sections = { 'dag-steps': 'steps', 'dag-llm': 'llm', 'dag-pre': 'pre', 'dag-post': 'post', 'dag-hitl': 'hitl', 'dag-skills': 'skills', 'dag-raw': 'raw' };
+    return activeTab === 'dag-viz' && viewMode === 'full' ? 'flow' : sections[activeTab] || 'overview';
+}
+
+// Keep only the small checkpoint numbering fact across section changes. The
+// checkpoint body remains on demand and belongs to its explicit HITL section.
+function retainObservedResumeNumbering(data) {
+    const previous = selectedOverview?.resume_step_numbering;
+    const incoming = data.resume_step_numbering;
+    if (data.request_id !== selectedOverview?.request_id || !incoming?.checkpoint_id) return data;
+    const hasNumbering = fact => Number.isSafeInteger(fact?.completed_step_count) && fact.completed_step_count >= 0
+        && Number.isSafeInteger(fact?.display_step_offset) && fact.display_step_offset >= 0
+        && fact.display_step_offset <= fact.completed_step_count;
+    const fact = !hasNumbering(incoming) && previous?.checkpoint_id === incoming.checkpoint_id && hasNumbering(previous)
+        ? previous : incoming;
+    selectedOverview = { ...selectedOverview, resume_step_numbering: fact };
+    return { ...data, resume_step_numbering: fact };
+}
+
+async function loadSelectedSection(section = activeDetailSection(), { force = false } = {}) {
+    if (!selected) return false;
+    if (!selectedOverview) selectedOverview = selected;
+    if (section === 'overview') {
+        sectionLoad.cancel();
+        selected = selectedOverview;
+        selectedSection = 'overview';
+        sectionPending = false;
+        sectionError = '';
+        renderExecutionDetail();
+        return true;
+    }
+    if (!force && selectedSection === section && !sectionError) {
+        // Returning to the loaded section also owns the current view. An older
+        // request for another tab must not replace this section when it arrives.
+        sectionLoad.cancel();
+        sectionPending = false;
+        renderExecutionDetail();
+        return true;
+    }
+    const requestID = selected.request_id;
+    const version = selectionVersion;
+    const ticket = sectionLoad.begin();
+    sectionPending = true;
+    sectionError = '';
+    renderExecutionDetail();
     try {
-        // Use unified endpoint to get execution, LLM debug, and HITL data in one call
-        const { data } = await fetchAPI(`/api/executions/${encodeURIComponent(requestId)}/unified`);
-        if (version !== selectionVersion || (background && selected?.request_id !== requestId)) return;
-        if (background && data.record_revision && selected.record_revision > data.record_revision) return;
-        // Hook and LLM debug stores can advance independently of the execution
-        // record revision, so refresh the complete unified view even at equal revision.
-        const viewport = background && cyInstance && !cyInstance.destroyed()
-            ? { zoom: cyInstance.zoom(), pan: { ...cyInstance.pan() } } : null;
-        const selectionChanged = selected?.request_id !== data.request_id;
-        if (parentExecutionLookup && (parentExecutionLookup.childID !== data.request_id ||
-            parentExecutionLookup.parentID !== data.parent_request_id)) resetParentExecutionLookup();
-        selected = data;
-        if (!background) updateExecutionDeepLink(selected.request_id);
-        // Multi-phase support: merge all phase plan steps into plan.steps
-        // so existing rendering code works unchanged
-        if (selected.phase_plans && selected.phase_plans.length > 1) {
-            if (!selected.plan) {
-                selected.plan = { steps: [] };
-            }
-            selected.plan.steps = selected.phase_plans.flatMap(p => p.steps || []);
-        }
-        // Pre-compute traceability labels once, globally across all LLM
-        // interactions. Ensures DAG popups and LLM-call cards show
-        // matching suffixes on iterative call types (tiered_selection,
-        // etc.) where the base label collides across iterations.
+        const { data } = await fetchAPI(`/api/executions/${encodeURIComponent(requestID)}/unified?section=${encodeURIComponent(section)}`, { signal: ticket.signal, cache: false });
+        if (!sectionLoad.current(ticket) || version !== selectionVersion || selected?.request_id !== requestID || section !== activeDetailSection()) return false;
+        if (data.request_id !== requestID) throw new Error('Execution identity changed while loading.');
+        if (section === 'raw' && typeof data.raw_execution_json !== 'string') throw new Error('Raw execution JSON is unavailable.');
+        selected = normalizeExecutionView({ ...selectedOverview, ...retainObservedResumeNumbering(data) });
+        selectedSection = section;
+        sectionPending = false;
         annotateCallLabels(selected.llm_interactions);
-        if (selectionChanged) {
-            requestSelectedGroupAutoExpansion();
-        }
-        applyPendingSelectedGroupAutoExpansion();
+        updateDetailTabs();
+        renderExecutionDetail();
+        return true;
+    } catch (error) {
+        if (isDagAccessDenied(error)) { clearDagAccessState(error); return false; }
+        if (!sectionLoad.current(ticket) || error.name === 'AbortError') return false;
+        sectionPending = false;
+        sectionError = error.message || 'Evidence could not be loaded.';
+        renderExecutionDetail();
+        return false;
+    }
+}
+
+async function selectExecution(requestId, { restoreTimelineActionFocus = false, restoreTab = '', restoreViewMode = 'full' } = {}) {
+    const version = ++selectionVersion;
+    const ticket = detailLoad.begin();
+    sectionLoad.cancel();
+    sectionPending = false;
+    sectionError = '';
+    const knownSummary = loadedLineageSummaries().find(item => item.request_id === requestId);
+    document.querySelectorAll('.node-popup').forEach(p => p.remove());
+    const detailPanel = document.getElementById('dagDetailPanel');
+    showLoading(detailPanel, 'Loading execution overview…');
+    try {
+        const { data } = await fetchAPI(`/api/executions/${encodeURIComponent(requestId)}/unified?section=overview`, { signal: ticket.signal, cache: false });
+        if (!detailLoad.current(ticket) || version !== selectionVersion) return;
+        if (data.request_id !== requestId) throw new Error('Execution identity changed while loading.');
+        lineageLoader.select(requestId, knownSummary);
+        resetParentExecutionLookup();
+        selectedOverview = normalizeExecutionView(data);
+        selected = selectedOverview;
+        selectedSection = 'overview';
+        viewMode = restoreViewMode === 'steps' ? 'steps' : 'full';
+        activeTab = restoreTab || (invokingStepTarget?.requestID === requestId ? 'dag-steps' : 'dag-viz');
+        if (activeTab === 'dag-parent' && !selected.parent_request_id) activeTab = 'dag-viz';
+        updateExecutionDeepLink(selected.request_id);
+        annotateCallLabels(selected.llm_interactions);
+        refreshInvocationServices();
         renderExecutionList();
-        const activeTimeline = conversationCache.get(activeConversationID)?.data;
-        if (activeTimeline && listPanelMode === 'timeline') {
-            renderConversationTimeline(activeTimeline, selected.request_id);
-        }
-        updateDetailTabs(); // Update tab visibility based on available data
-        document.querySelectorAll('#dagDetailPanel .detail-tab').forEach(button => {
-            button.classList.toggle('active', button.dataset.tab === activeTab);
-        });
-        renderExecutionDetail(viewport);
+        updateDetailTabs();
+        document.querySelectorAll('#dagDetailPanel .detail-tab').forEach(button => button.classList.toggle('active', button.dataset.tab === activeTab));
+        if (activeDetailSection() === 'overview') renderExecutionDetail();
+        else await loadSelectedSection(activeDetailSection(), { force: true });
+        if (!detailLoad.current(ticket)) return;
         if (invokingStepTarget?.requestID === selected.request_id) {
             const stepID = invokingStepTarget.stepID;
             requestAnimationFrame(() => {
@@ -2005,17 +2333,16 @@ async function selectExecution(
         }
         if (restoreTimelineActionFocus && listPanelMode === 'timeline') {
             requestAnimationFrame(() => {
-                const action = Array.from(document.querySelectorAll(
-                    '[data-view-timeline-execution]',
-                )).find(button => button.dataset.viewTimelineExecution === requestId);
+                const action = Array.from(document.querySelectorAll('[data-view-timeline-execution]')).find(button => button.dataset.viewTimelineExecution === requestId);
                 action?.focus({ preventScroll: true });
             });
         }
     } catch (error) {
-        console.error('Failed to fetch execution:', error);
+        if (isDagAccessDenied(error)) { clearDagAccessState(error); return; }
+        if (!detailLoad.current(ticket) || error.name === 'AbortError') return;
+        document.getElementById('dagDetailContent').innerHTML = `<div class="empty-detail" role="alert">${escapeHtml(error.message || 'Execution overview could not be loaded.')}</div>`;
     } finally {
-        if (background) detailRefreshPending = false;
-        if (!background && version === selectionVersion) hideLoading(detailPanel);
+        if (detailLoad.current(ticket)) hideLoading(detailPanel);
     }
 }
 
@@ -2031,10 +2358,10 @@ function updateDetailTabs() {
     const skillsTab = document.querySelector('[data-tab="dag-skills"]');
 
     if (llmTab) {
-        llmTab.style.display = selected?.has_llm_data ? 'block' : 'none';
+        llmTab.style.display = selected?.has_llm_data || sectionAvailable('llm') ? 'block' : 'none';
     }
     if (hitlTab) {
-        hitlTab.style.display = selected?.has_hitl_data ? 'block' : 'none';
+        hitlTab.style.display = selected?.has_hitl_data || sectionAvailable('hitl') ? 'block' : 'none';
     }
 
     // LLM-debug interactions describe hook-internal operations. Stored
@@ -2049,29 +2376,45 @@ function updateDetailTabs() {
         typeof selected?.final_response === 'string';
 
     if (preTab) {
-        preTab.style.display = hasPreHooks ? 'block' : 'none';
+        preTab.style.display = hasPreHooks || sectionAvailable('pre') ? 'block' : 'none';
     }
     if (postTab) {
-        postTab.style.display = hasPostHooks ? 'block' : 'none';
+        postTab.style.display = hasPostHooks || sectionAvailable('post') ? 'block' : 'none';
     }
     if (skillsTab) {
-        skillsTab.style.display = selected?.skills ? 'block' : 'none';
+        skillsTab.style.display = selected?.skills || sectionAvailable('skills') ? 'block' : 'none';
     }
 }
 
 function setDagDetailTab(tab) {
     activeTab = tab === 'dag-parent' && !selected?.parent_request_id ? 'dag-viz' : tab;
     document.querySelectorAll('.node-popup').forEach(p => p.remove());
-    document.querySelectorAll('#dagDetailPanel .detail-tab').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.tab === activeTab);
-    });
-    renderExecutionDetail();
+    document.querySelectorAll('#dagDetailPanel .detail-tab').forEach(button => button.classList.toggle('active', button.dataset.tab === activeTab));
+    return loadSelectedSection(activeDetailSection());
+}
+
+function rawExecutionText(execution = selected) {
+    return typeof execution?.raw_execution_json === 'string'
+        ? execution.raw_execution_json
+        : null;
 }
 
 function renderExecutionDetail(viewport = null) {
     if (!selected) return;
 
+    llmCardBatch?.dispose();
+    llmCardBatch = null;
+
     const container = document.getElementById('dagDetailContent');
+
+    if (sectionPending) {
+        container.innerHTML = '<div class="empty-detail" role="status">Loading requested execution evidence…</div>';
+        return;
+    }
+    if (sectionError) {
+        container.innerHTML = `<div class="empty-detail" role="alert">${escapeHtml(sectionError)}<button type="button" class="dag-open-timeline-btn" data-retry-execution-section>Retry this section</button></div>`;
+        return;
+    }
 
     // Update detail title
     document.getElementById('dagDetailTitle').textContent = truncateText(executionRequestText(selected), 50);
@@ -2093,19 +2436,28 @@ function renderExecutionDetail(viewport = null) {
     } else if (activeTab === 'dag-skills') {
         renderSkillExecution(container);
     } else if (activeTab === 'dag-raw') {
+        const rawText = rawExecutionText();
+        if (rawText === null) {
+            container.innerHTML = '<div class="empty-detail" role="alert">Raw execution JSON is unavailable.<button type="button" class="dag-open-timeline-btn" data-retry-execution-section>Retry this section</button></div>';
+            return;
+        }
         container.innerHTML = `
             <div class="json-container">
                 <button class="copy-btn">Copy</button>
-                <div class="json-view">${syntaxHighlightJson(selected)}</div>
+                <pre class="json-view">${syntaxHighlightJson(prettyPrintJsonText(rawText))}</pre>
             </div>`;
         // Bind copy button via delegation
         const copyBtn = container.querySelector('.copy-btn');
         if (copyBtn) {
             copyBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                copyToClipboard(JSON.stringify(selected, null, 2), e);
+                copyToClipboard(rawText, e);
             });
         }
+    }
+    const warnings = Array.isArray(selected.section_warnings) ? selected.section_warnings.filter(value => typeof value === 'string') : [];
+    if (warnings.length) {
+        container.insertAdjacentHTML('afterbegin', `<div class="dag-list-diagnostic warning" role="status"><span>${warnings.map(escapeHtml).join(' ')}</span><button type="button" data-retry-execution-section>Retry this section</button></div>`);
     }
 }
 
@@ -2441,12 +2793,10 @@ function renderSkillExecution(container) {
 // ---------------------------------------------------------------------------
 
 function setDagViewMode(mode) {
+    if (mode !== 'steps' && mode !== 'full') return;
     if (viewMode === mode) return;
     viewMode = mode;
-    // Re-render the DAG visualization
-    if (selected) {
-        renderExecutionDetail();
-    }
+    if (selected) void loadSelectedSection(mode === 'full' ? 'flow' : 'overview');
 }
 
 // ---------------------------------------------------------------------------
@@ -2515,18 +2865,21 @@ function renderDAGVisualization(container, viewport = null) {
     const llmDurationMs = selected.llm_debug_summary?.total_duration_ms || 0;
 
     // Check if we can show Full Flow (has LLM or HITL data)
-    const canShowFullFlow = hasLLM || hasHITL || hasPipelineHooks;
+    const canShowFullFlow = hasLLM || hasHITL || hasPipelineHooks || sectionAvailable('flow');
     const agentName = selected.agent_name || 'orchestrator';
     // The trace ID is stored with the execution. This link is an optional
     // navigation affordance; no Viewer data is loaded from Jaeger.
     const traceID = selected.trace_id;
     const failureNotice = executionFailureNotice(selected);
+    const requestHelp = selected.payloads_deferred
+        ? 'Overview request preview. Open Raw JSON for the complete stored request. Expand or collapse this preview.'
+        : 'Expand or collapse the recorded request.';
 
     container.innerHTML = `
         <div class="dag-viz-container">
             ${failureNotice ? `<div class="dag-lifecycle-failure" role="status" style="padding: 12px; border-left: 3px solid var(--accent-red); color: var(--text-primary); background: rgba(255,107,107,0.08);">${escapeHtml(failureNotice)}</div>` : ''}
             <div class="dag-viz-header">
-                <div class="dag-viz-title" title="Click to expand/collapse">${formatConversationRequest(executionRequestText(selected))}</div>
+                <div class="dag-viz-title" role="button" tabindex="0" aria-expanded="false" title="${escapeHtmlAttribute(requestHelp)}" aria-label="${escapeHtmlAttribute(requestHelp)}">${formatConversationRequest(executionRequestText(selected))}</div>
                 <div class="dag-viz-meta">
                     ${agentName !== 'orchestrator' ? `<span class="dag-viz-meta-item" style="color: var(--accent-purple);">🤖 ${escapeHtml(agentName)}</span>` : ''}
                     <span class="dag-viz-meta-item">ID: ${(selected.request_id || '').substring(0, 20)}...</span>
@@ -2534,6 +2887,7 @@ function renderDAGVisualization(container, viewport = null) {
                     <span class="dag-viz-meta-item">${stepCount} step${stepCount !== 1 ? 's' : ''}</span>
                     <span class="dag-viz-meta-item" title="${escapeHtmlAttribute(selected.duration_source || 'legacy execution duration')}">⏱️ Elapsed: ${formatDuration(totalDurationMs)}</span>
                     <span class="dag-viz-meta-item ${executionStatus(selected).css}">${executionStatus(selected).label}</span>
+                    <button type="button" class="dag-open-timeline-btn" data-refresh-execution-overview>Refresh snapshot</button>
                     ${renderRecordedClarification(selected, true)}
                     ${hasLLM ? `<span class="dag-viz-meta-item" style="color: var(--accent-blue);">💭 ${llmCallCount} LLM calls · aggregate ${formatDuration(llmDurationMs)}</span>` : ''}
                     ${hasHITL && !selected.interrupted ? `<span class="dag-viz-meta-item" style="color: var(--accent-orange);">⏸️ HITL</span>` : ''}
@@ -2545,21 +2899,6 @@ function renderDAGVisualization(container, viewport = null) {
                         <button class="toggle-btn full-btn ${viewMode === 'full' ? 'active' : ''}" data-view-mode="full">Full Flow</button>
                     </div>` : ''}
                 </div>
-                ${(() => {
-                    const regenRaw = selected.metadata?.plan_regeneration_events;
-                    if (!regenRaw) return '';
-                    try {
-                        const evts = JSON.parse(regenRaw);
-                        if (!Array.isArray(evts) || evts.length === 0) return '';
-                        return evts.map(evt => {
-                            const termChange = (evt.original_terminal !== undefined && evt.original_terminal !== evt.regenerated_terminal)
-                                ? ` · terminal: ${evt.original_terminal} → ${evt.regenerated_terminal}` : '';
-                            const planChange = evt.original_plan_id
-                                ? ` · plan: ${escapeHtml(evt.original_plan_id)} → ${escapeHtml(evt.regenerated_plan_id)}` : '';
-                            return `<div style="margin-top: 6px; padding: 6px 12px; background: rgba(255,140,50,0.08); border: 1px solid rgba(255,140,50,0.25); border-radius: 6px; font-size: 11px; color: #ff8c32;">⚠️ <strong>Phase ${evt.phase_number} plan regenerated</strong> — ${escapeHtml(evt.validation_error)}${termChange}${planChange}</div>`;
-                        }).join('');
-                    } catch(e) { return ''; }
-                })()}
             </div>
             <div id="dagContainer" class="dag-viz-canvas"></div>
             <div id="dagLegend" class="dag-viz-legend">
@@ -2573,6 +2912,10 @@ function renderDAGVisualization(container, viewport = null) {
                     <span class="dag-legend-dot llm-call"></span>
                     <span>LLM Call</span>
                 </div>
+                ${(selected.llm_interactions || []).some(call => getLLMType(call.type).role === 'skills') ? `<div class="dag-legend-item">
+                    <span class="dag-legend-dot" style="background: ${getLLMType('skill_activation_selection').accent};"></span>
+                    <span>Skill Selection</span>
+                </div>` : ''}
                 ${hasPipelineHooks ? `<div class="dag-legend-item" title="Stored deterministic pipeline hook">
                     <span class="dag-legend-dot" style="background: #64d2ff;"></span>
                     <span>Hook</span>
@@ -2702,8 +3045,15 @@ function renderDAGVisualization(container, viewport = null) {
     // Bind view-mode toggle buttons via delegation
     const vizTitle = container.querySelector('.dag-viz-title');
     if (vizTitle) {
-        vizTitle.addEventListener('click', function() {
-            this.classList.toggle('expanded');
+        const toggleRequest = () => {
+            const expanded = vizTitle.classList.toggle('expanded');
+            vizTitle.setAttribute('aria-expanded', String(expanded));
+        };
+        vizTitle.addEventListener('click', toggleRequest);
+        vizTitle.addEventListener('keydown', event => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            toggleRequest();
         });
     }
     const toggleBtns = container.querySelectorAll('[data-view-mode]');
@@ -2983,6 +3333,47 @@ function initCytoscape() {
         const allPlanSteps = planSteps;
         const llmByPhase = groupLLMCallsByPhase(llmInteractions);
         const graphPhases = buildObservedPhases(selected, llmByPhase);
+        const synthesisCalls = llmInteractions.filter(call => call.type === 'synthesis' || call.type === 'synthesis_streaming');
+        const consumerPhases = new Map();
+        for (const [phase, calls] of Object.entries(llmByPhase)) {
+            for (const call of calls) consumerPhases.set(call, Number(phase));
+        }
+        const finalObservedPhase = graphPhases.at(-1)?.phase_number;
+        if (finalObservedPhase) {
+            for (const call of synthesisCalls) consumerPhases.set(call, finalObservedPhase);
+        }
+        const skillPlacement = assignSkillCallsToConsumers(
+            llmInteractions, [...Object.values(llmByPhase).flat(), ...synthesisCalls], consumerPhases,
+        );
+        let skillNodeIndex = 0;
+        const skillNode = (call, placementUnknown = false) => {
+            const id = `llm_skill_${skillNodeIndex++}`;
+            const config = getLLMType(call.type);
+            nodes.push({ data: buildLLMBackedNodeData(call, {
+                id, label: `${config.icon} ${config.label}`, nodeType: 'skill_llm',
+                phaseNumber: call.phase_number, success: call.success !== false,
+                error: call.error || '', placementUnknown,
+            }) });
+            return id;
+        };
+        // Only an observed selector/consumer interval creates an ordered edge.
+        // The same helper handles planning and synthesis without classifying
+        // every skill resource call as a planning call.
+        const skillEntryFor = (consumer, consumerID) => {
+            let first = '', previous = '';
+            for (const call of skillPlacement.beforeCall.get(consumer) || []) {
+                const id = skillNode(call);
+                if (!first) first = id;
+                if (previous) edges.push({ data: { source: previous, target: id, edgeType: 'skill_selection' } });
+                previous = id;
+            }
+            if (previous) edges.push({ data: { source: previous, target: consumerID, edgeType: 'skill_selection' } });
+            return first || consumerID;
+        };
+        for (const call of skillPlacement.unplacedCalls) {
+            const id = skillNode(call, true);
+            edges.push({ data: { source: 'orchestrator', target: id, edgeType: 'skill_evidence' } });
+        }
         const afterPlanningByPhase = assignAfterPlanningHooksToPhases(
             storedPipelineHooks.filter(hook => hook.phase === 'after_planning'),
             graphPhases
@@ -3118,6 +3509,7 @@ function initCytoscape() {
                 let lastLLMNodeInPhase = previousPhaseExitNode;
                 phaseLLMCalls.forEach(call => {
                     const nodeId = `llm_plan_${globalLLMIndex++}`;
+                    const entryNodeId = skillEntryFor(call, nodeId);
                     nodes.push({
                         data: buildLLMBackedNodeData(call, {
                             id: nodeId,
@@ -3126,7 +3518,7 @@ function initCytoscape() {
                             phaseNumber: phaseNum,
                         })
                     });
-                    edges.push({ data: { source: lastLLMNodeInPhase, target: nodeId } });
+                    edges.push({ data: { source: lastLLMNodeInPhase, target: entryNodeId } });
                     lastLLMNodeInPhase = nodeId;
                 });
 
@@ -3490,10 +3882,10 @@ function initCytoscape() {
         }
 
         // 6. LLM calls for synthesis (includes synthesis and synthesis_streaming)
-        const synthesisCalls = llmInteractions.filter(i => i.type === 'synthesis' || i.type === 'synthesis_streaming');
         if (synthesisCalls.length > 0) {
             synthesisCalls.forEach((call, idx) => {
                 const nodeId = `llm_synth_${idx}`;
+                const entryNodeId = skillEntryFor(call, nodeId);
                 const isStreaming = call.type === 'synthesis_streaming';
                 nodes.push({
                     data: buildLLMBackedNodeData(call, {
@@ -3505,9 +3897,9 @@ function initCytoscape() {
                 if (idx === 0) {
                     if (eventSumNodes.length > 0) {
                         // Chain from last event summarization node
-                        edges.push({ data: { source: eventSumNodes[eventSumNodes.length - 1], target: nodeId } });
+                        edges.push({ data: { source: eventSumNodes[eventSumNodes.length - 1], target: entryNodeId } });
                     } else if (afterExecutionHookExit) {
-                        edges.push({ data: { source: afterExecutionHookExit, target: nodeId, edgeType: 'pipeline_hook' } });
+                        edges.push({ data: { source: afterExecutionHookExit, target: entryNodeId, edgeType: 'pipeline_hook' } });
                     } else if (leafSteps.length > 0) {
                         // Connect leaf steps directly to synthesis
                         leafSteps.forEach(step => {
@@ -3516,7 +3908,7 @@ function initCytoscape() {
                             edges.push({
                                 data: {
                                     source: step.step_id,
-                                    target: nodeId,
+                                    target: entryNodeId,
                                     edgeType: isFailed ? 'failed' : undefined
                                 }
                             });
@@ -3527,10 +3919,10 @@ function initCytoscape() {
                         // Connect synthesis from the last planning node so the DAG
                         // remains a single connected graph instead of two orphaned
                         // components (planning chain | synthesis chain).
-                        edges.push({ data: { source: lastPlanningNodeId, target: nodeId } });
+                        edges.push({ data: { source: lastPlanningNodeId, target: entryNodeId } });
                     }
                 } else {
-                    edges.push({ data: { source: `llm_synth_${idx - 1}`, target: nodeId } });
+                    edges.push({ data: { source: `llm_synth_${idx - 1}`, target: entryNodeId } });
                 }
             });
         }
@@ -3972,6 +4364,18 @@ function initCytoscape() {
             },
             // === Full Flow Node Types ===
             {
+                selector: 'node[nodeType="skill_llm"]',
+                style: {
+                    'background-color': '#2c3316',
+                    'border-color': getLLMType('skill_activation_selection').accent,
+                    'border-width': 2,
+                    'color': '#f3f7df',
+                    'shape': 'round-rectangle',
+                    'width': 170,
+                    'height': 45,
+                }
+            },
+            {
                 // Orchestrator Agent - purple hexagon style
                 selector: 'node[nodeType="orchestrator"]',
                 style: {
@@ -4393,7 +4797,7 @@ function initCytoscape() {
                 }
             },
             {
-                selector: 'edge[edgeType="hook_evidence"]',
+                selector: 'edge[edgeType="hook_evidence"], edge[edgeType="skill_evidence"]',
                 style: {
                     'line-style': 'dotted',
                     'line-color': '#8b949e',
@@ -4456,7 +4860,7 @@ function initCytoscape() {
             return;
         }
         // Handle different node types in full flow mode
-        if (nodeType === 'orchestrator' || nodeType === 'llm_call' || nodeType === 'llm_step' || nodeType === 'agent_llm' || nodeType === 'memory_llm' || nodeType === 'pipeline_hook' || nodeType === 'checkpoint' || nodeType === 'response' || nodeType === 'phase_boundary') {
+        if (nodeType === 'orchestrator' || nodeType === 'llm_call' || nodeType === 'skill_llm' || nodeType === 'llm_step' || nodeType === 'agent_llm' || nodeType === 'memory_llm' || nodeType === 'pipeline_hook' || nodeType === 'checkpoint' || nodeType === 'response' || nodeType === 'phase_boundary') {
             showFullFlowNodePopup(node, nodeData);
         } else {
             // Step node - use existing logic
@@ -4498,6 +4902,8 @@ function showFullFlowNodePopup(node, nodeData) {
     document.querySelectorAll('.node-popup').forEach(p => p.remove());
 
     const nodeType = nodeData.nodeType;
+    const popupRequestID = selected?.request_id;
+    const popupSelectionVersion = selectionVersion;
     let title, content, color;
 
     switch (nodeType) {
@@ -4517,9 +4923,12 @@ function showFullFlowNodePopup(node, nodeData) {
                 <div data-agent-parent-info>${renderAgentParentInfo()}</div>
             `;
             break;
+        case 'skill_llm':
         case 'llm_call':
-            title = '💭 LLM Call';
-            color = 'var(--accent-blue)';
+            const skillCall = nodeType === 'skill_llm';
+            const callConfig = getLLMType(nodeData.llmType);
+            title = skillCall ? `${callConfig.icon} ${callConfig.label}` : '💭 LLM Call';
+            color = skillCall ? callConfig.accent : 'var(--accent-blue)';
             const llmType = nodeData.llmType || 'unknown';
             const model = nodeData.model || 'unknown';
             const duration = nodeData.duration || 0;
@@ -4580,6 +4989,8 @@ function showFullFlowNodePopup(node, nodeData) {
                     <div>${tokens.toLocaleString()}</div>
                 </div>` : ''}
                 ${isPlanningType(llmType) ? renderPlannerClarifications(selected, nodeData.phaseNumber || 1) : ''}
+                ${skillCall && nodeData.success === false ? `<div class="dag-data-warning"><strong>Failed</strong>${nodeData.error ? `<div>${escapeHtml(nodeData.error)}</div>` : ''}</div>` : ''}
+                ${skillCall && nodeData.placementUnknown ? '<p class="pipeline-hook-placement-note">Placement could not be established from retained phase and timing evidence. The dotted link associates this call with the execution.</p>' : ''}
             `;
             break;
         case 'memory_llm': {
@@ -4725,35 +5136,9 @@ function showFullFlowNodePopup(node, nodeData) {
         }
         case 'pipeline_hook': {
             const status = pipelineHookStatus(nodeData.hookStatus);
-            const sequence = Number(nodeData.sequence);
-            const order = Number.isInteger(sequence) && sequence > 0
-                ? `#${sequence} in this phase`
-                : 'Unavailable';
             title = `🪝 ${pipelineHookPhaseLabel(nodeData.hookPhase)}`;
             color = status.color;
-            content = `
-                <div style="margin-top: 10px;">
-                    <div style="font-size: 11px; color: var(--text-muted);">Hook</div>
-                    <div style="font-weight: 600; color: var(--text-primary);">${escapeHtml(nodeData.hookName || 'unknown')}</div>
-                </div>
-                <div style="margin-top: 10px;">
-                    <div style="font-size: 11px; color: var(--text-muted);">Invocation outcome</div>
-                    <div style="font-weight: 600; color: ${status.color};">${status.text}</div>
-                </div>
-                <div style="margin-top: 10px;">
-                    <div style="font-size: 11px; color: var(--text-muted);">Order</div>
-                    <div>${order}${nodeData.planPhase ? ` · Plan phase ${Number(nodeData.planPhase)}` : ''}</div>
-                </div>
-                <div style="margin-top: 10px;">
-                    <div style="font-size: 11px; color: var(--text-muted);">Duration</div>
-                    <div>${formatPipelineHookDuration(nodeData.durationNS)}</div>
-                </div>
-                ${nodeData.startedAt ? `<div style="margin-top: 10px;"><div style="font-size: 11px; color: var(--text-muted);">Started</div><div>${escapeHtml(formatDateTime(nodeData.startedAt))}</div></div>` : ''}
-                ${nodeData.error ? `<div style="margin-top: 10px;"><div style="font-size: 11px; color: var(--text-muted);">Failure</div><div style="color: var(--accent-red); overflow-wrap: anywhere;">${escapeHtml(nodeData.error)}</div></div>` : ''}`;
-            if (nodeData.effects?.length) {
-                content += renderPipelineHookEffects(nodeData.effects);
-            }
-            content += renderPipelineHookDecision({ decision: nodeData.hookDecision, status: nodeData.hookStatus });
+            content = renderHookPopupSummary(nodeData);
             if (nodeData.placementUnknown) {
                 content += '<p class="pipeline-hook-placement-note">Execution order was not recorded. The line links stored evidence to this request; it is not a dependency or execution-order arrow.</p>';
             }
@@ -5088,7 +5473,7 @@ function showFullFlowNodePopup(node, nodeData) {
     }
 
     const popup = document.createElement('div');
-    popup.className = 'node-popup';
+    popup.className = nodeType === 'pipeline_hook' ? 'node-popup dag-hook-popup' : 'node-popup';
     popup.style.cssText = `
         position: absolute;
         background: linear-gradient(135deg, rgba(25, 25, 35, 0.98) 0%, rgba(15, 15, 22, 0.98) 100%);
@@ -5097,8 +5482,7 @@ function showFullFlowNodePopup(node, nodeData) {
         border: 1px solid rgba(255, 255, 255, 0.15);
         border-radius: 16px;
         padding: 18px 20px;
-        max-width: 380px;
-        min-width: 280px;
+        ${nodeType === 'pipeline_hook' ? 'width: 340px; max-width: calc(100vw - 16px); min-width: 0;' : 'max-width: 380px; min-width: 280px;'}
         z-index: 1000;
         font-size: 13px;
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5),
@@ -5108,13 +5492,21 @@ function showFullFlowNodePopup(node, nodeData) {
     `;
 
     popup.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+        ${nodeType === 'pipeline_hook' ? '' : `<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
             <div style="font-weight: 600; color: ${color};">${title}</div>
-        </div>
+        </div>`}
         ${content}
+        ${nodeData.llmCallIdentity ? `<button type="button" class="dag-popup-detail-link" data-llm-call-details>View details in ${nodeData.llmDetailTab === 'dag-pre' ? 'Pre-Execution' : nodeData.llmDetailTab === 'dag-post' ? 'Post-Execution' : 'LLM Calls'} →</button>` : ''}
+        ${nodeData.hookIdentity ? `<button type="button" class="dag-popup-detail-link" data-hook-details>View details in ${nodeData.hookDetailTab === 'dag-pre' ? 'Pre-Execution' : nodeData.hookDetailTab === 'dag-post' ? 'Post-Execution' : 'Raw JSON'} →</button>` : ''}
     `;
 
     popup.addEventListener('click', handleLineageAction);
+    popup.querySelector('[data-llm-call-details]')?.addEventListener('click', () => {
+        void openLLMCallDetails({ identity: nodeData.llmCallIdentity, tab: nodeData.llmDetailTab }, popupRequestID, popupSelectionVersion);
+    });
+    popup.querySelector('[data-hook-details]')?.addEventListener('click', () => {
+        void openHookDetails({ identity: nodeData.hookIdentity, tab: nodeData.hookDetailTab }, popupRequestID, popupSelectionVersion);
+    });
 
     // Position popup near node — appended to document.body so it's not
     // clipped by the DAG container's overflow:hidden.
@@ -5135,8 +5527,7 @@ function showFullFlowNodePopup(node, nodeData) {
     popup.style.position = 'fixed';
     popup.style.left = popupLeft + 'px';
     popup.style.top = popupTop + 'px';
-    // Expanding hook decisions/effects must not move content below the
-    // viewport after the initial position has been clamped.
+    // Keep summary popups within the viewport on short screens.
     popup.style.boxSizing = 'border-box';
     popup.style.maxHeight = `${window.innerHeight - popupTop - 8}px`;
     popup.style.overflowY = 'auto';
@@ -5161,7 +5552,7 @@ function showNodePopup(node, step, result) {
     const stepIndex = (selected.plan?.steps || []).findIndex(candidate =>
         candidate.step_id === step.step_id
     );
-    const displayStepNumber = executionDisplayStepNumber(stepIndex, selected);
+    const displayStepLabel = executionDisplayStepLabel(stepIndex, selected);
     // Get capability from metadata (where orchestration stores it)
     const capability = step.metadata?.capability || result?.metadata?.capability || step.capability || step.agent_name || '';
 
@@ -5197,13 +5588,14 @@ function showNodePopup(node, step, result) {
                 <span style="color: var(--accent-purple);">⚡</span> ${capability}
             </div>
         ` : ''}
+        ${step.metadata?.viewer_payloads_deferred || result?.metadata?.viewer_payloads_deferred ? '<div class="dag-data-warning">Overview preview. Open Step Details for the exact instruction, request, response and error.</div>' : ''}
         <div style="color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">${truncateInstruction(step.instruction)}</div>
 
         <!-- Execution Flow Info -->
         <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;">
-            ${displayStepNumber !== null ? `
-            <span style="padding: 4px 10px; border-radius: 8px; font-size: 10px; font-weight: 700; background: rgba(50, 215, 75, 0.15); color: var(--accent-green);">
-                Step ${displayStepNumber}
+            ${displayStepLabel ? `
+            <span title="${escapeHtmlAttribute(executionStepNumberingNote(selected))}" style="padding: 4px 10px; border-radius: 8px; font-size: 10px; font-weight: 700; background: rgba(50, 215, 75, 0.15); color: var(--accent-green);">
+                ${displayStepLabel}
             </span>` : ''}
             <span style="padding: 4px 10px; border-radius: 8px; font-size: 10px; background: rgba(100, 210, 255, 0.15); color: var(--accent-teal);">
                 Level ${level}
@@ -5265,7 +5657,7 @@ function showNodePopup(node, step, result) {
             ` : ''}
         ` : '<div style="color: var(--text-muted); font-style: italic;">Not executed yet</div>'}
         <div data-lineage-request="${escapeHtmlAttribute(selected.request_id)}" data-lineage-step="${escapeHtmlAttribute(step.step_id)}">${renderDelegatedExecutionLinks(step.step_id)}</div>
-        <button type="button" data-step-details style="display: block; margin-top: 12px; background: none; border: 0; padding: 0; color: var(--accent-blue); font: inherit; cursor: pointer;">View details in Step Details →</button>
+        <button type="button" class="dag-popup-detail-link" data-step-details>View details in Step Details →</button>
     `;
     popup.addEventListener('click', event => {
         const target = event.target.closest('[data-lineage-execution]');
@@ -5274,8 +5666,8 @@ function showNodePopup(node, step, result) {
             navigateExecutionLineage(target);
         }
     });
-    popup.querySelector('[data-step-details]').addEventListener('click', () => {
-        setDagDetailTab('dag-steps');
+    popup.querySelector('[data-step-details]').addEventListener('click', async () => {
+        await setDagDetailTab('dag-steps');
         const card = document.getElementById(`dag-step-details-${step.step_id}`);
         if (card) {
             card.focus({ preventScroll: true });
@@ -5725,7 +6117,7 @@ function renderStepDetails(container) {
                         <div data-lineage-request="${escapeHtmlAttribute(selected.request_id)}" data-lineage-step="${escapeHtmlAttribute(step.step_id)}">${renderDelegatedExecutionLinks(step.step_id, lineageSummaries)}</div>
                         <div class="dag-step-header">
                             <div class="dag-step-title">
-                                <span class="dag-step-number" style="${stepNumColors[status]} padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12px;">Step ${executionDisplayStepNumber(idx, selected)}</span>
+                                <span class="dag-step-number" title="${escapeHtmlAttribute(executionStepNumberingNote(selected))}" style="${stepNumColors[status]} padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12px;">${executionDisplayStepLabel(idx, selected)}</span>
                                 <span class="dag-step-id">${step.step_id}</span>
                             </div>
                             <div style="display: flex; align-items: center; gap: 12px;">
@@ -6218,7 +6610,7 @@ function renderSingleLLMCard(interaction, idx, displayNum, displayLabel) {
         const statusColor = interaction.success !== false ? 'var(--accent-green)' : 'var(--accent-red)';
         const summary = interaction.response ? escapeHtml(interaction.response) : '';
         return `
-            <div style="display: flex; align-items: center; gap: 10px; padding: 8px 14px; margin-bottom: 4px;
+            <div id="dag-llm-call-${idx}" tabindex="-1" class="dag-llm-call-card" style="display: flex; align-items: center; gap: 10px; padding: 8px 14px; margin-bottom: 4px;
                         border-left: 3px solid rgba(${_r}, 0.5); background: rgba(${_r}, 0.04);
                         border-radius: 8px; font-size: 12px;">
                 <span style="opacity: 0.5; min-width: 24px; font-size: 11px;">#${shownNum}</span>
@@ -6264,7 +6656,7 @@ function renderSingleLLMCard(interaction, idx, displayNum, displayLabel) {
     `).join('');
 
     return `
-        <div class="dag-step-card csp-hover-card" style="--card-border: ${config.border}; --card-hover-border: rgba(${_r}, 0.4); --card-shadow: ${baseShadow}; --card-hover-shadow: ${hoverShadow}; background: linear-gradient(135deg, ${config.bg} 0%, rgba(255, 255, 255, 0.03) 100%); backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); border: 1px solid var(--active-card-border); box-shadow: var(--active-card-shadow);">
+        <div id="dag-llm-call-${idx}" tabindex="-1" class="dag-step-card csp-hover-card dag-llm-call-card" style="--card-border: ${config.border}; --card-hover-border: rgba(${_r}, 0.4); --card-shadow: ${baseShadow}; --card-hover-shadow: ${hoverShadow}; background: linear-gradient(135deg, ${config.bg} 0%, rgba(255, 255, 255, 0.03) 100%); backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); border: 1px solid var(--active-card-border); box-shadow: var(--active-card-shadow);">
             <div class="dag-step-header dag-llm-card-header">
                 <div class="dag-step-title">
                     <span style="padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12px; background: linear-gradient(135deg, ${config.bg}, rgba(255, 255, 255, 0.05)); border: 1px solid ${config.border}; color: ${config.color};">${config.icon} #${shownNum}</span>
@@ -6335,7 +6727,8 @@ function renderGovernedResponsePanel(interactions) {
     if (typeof governedResponse !== 'string') {
         return '';
     }
-    const governedDiffers = governedResponse !== latestOutput;
+    const comparisonKnown = !!latestSynthesis && typeof latestSynthesis.response === 'string';
+    const governedDiffers = comparisonKnown && governedResponse !== latestOutput;
     return `
         <div class="dag-step-card" style="margin-bottom: 20px; background: linear-gradient(135deg, rgba(50, 215, 75, 0.16), rgba(182, 133, 244, 0.08)); border: 2px solid rgba(50, 215, 75, 0.45);">
             <div class="dag-step-header">
@@ -6346,9 +6739,9 @@ function renderGovernedResponsePanel(interactions) {
             </div>
             <div class="dag-step-body">
                 <div style="font-size: 11px; color: var(--text-muted); line-height: 1.5; margin-bottom: 10px;">
-                    This terminal response was captured after application AfterSynthesis hooks.${isStreamingSynthesis ? ' The streaming synthesis card below also preserves the output already emitted to the client.' : ' The synthesis card below preserves the model output from before those hooks.'}
+                    This terminal response was captured after application AfterSynthesis hooks. ${comparisonKnown ? 'The LLM Calls tab preserves the recorded synthesis output from before those hooks.' : 'The pre-hook synthesis output was not recorded; comparison is unavailable.'}
                 </div>
-                ${governedDiffers ? `<div style="margin-bottom: 10px; color: var(--accent-orange); font-size: 11px; font-weight: 600;">${isStreamingSynthesis ? 'The stored post-hook response differs from the output streamed to the client.' : 'The application changed the pre-hook synthesis output.'}</div>` : ''}
+                ${governedDiffers ? `<div style="margin-bottom: 10px; color: var(--accent-orange); font-size: 11px; font-weight: 600;">${isStreamingSynthesis ? 'The stored post-hook response differs from the recorded streaming synthesis output.' : 'The application changed the pre-hook synthesis output.'}</div>` : ''}
                 <pre style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; padding: 12px; background: rgba(0,0,0,0.24); border-radius: 8px; color: var(--text-primary);">${escapeHtml(governedResponse)}</pre>
             </div>
         </div>`;
@@ -6361,7 +6754,7 @@ function renderLLMCalls(container) {
             <div style="overflow-y: auto; height: 100%; padding: 16px;">
                 <div class="empty-detail">
                     <div class="empty-detail-icon">🤖</div>
-                    <div>No LLM calls recorded for this execution</div>
+                    <div>${selected.section_warnings?.length ? 'LLM evidence could not be confirmed for this read.' : 'No LLM calls recorded for this execution'}</div>
                 </div>
             </div>`;
         return;
@@ -6466,9 +6859,13 @@ function renderLLMCalls(container) {
         const cardsContainer = sentinel?.parentElement;
 
         if (sentinel && cardsContainer) {
-            const observer = new IntersectionObserver((entries) => {
-                if (!entries[0].isIntersecting || loadedCount >= interactions.length) return;
-                const end = Math.min(loadedCount + BATCH, interactions.length);
+            const owner = selected;
+            const ownerVersion = selectionVersion;
+            let disposed = false;
+            let observer = null;
+            const renderThrough = end => {
+                if (disposed || selected !== owner || selectionVersion !== ownerVersion || activeTab !== 'dag-llm' || end <= loadedCount) return;
+                end = Math.min(end, interactions.length);
                 // Re-use the same card rendering by building HTML for the next batch
                 const batchHtml = interactions.slice(loadedCount, end).map((interaction, batchIdx) => {
                     const origIdx = selected.llm_interactions.indexOf(interaction);
@@ -6478,9 +6875,20 @@ function renderLLMCalls(container) {
                 sentinel.insertAdjacentHTML('beforebegin', batchHtml);
                 loadedCount = end;
                 if (loadedCount >= interactions.length) {
-                    observer.disconnect();
+                    observer?.disconnect();
                     sentinel.remove();
                 }
+            };
+            llmCardBatch = {
+                reveal(originalIndex) {
+                    const position = interactions.indexOf(owner.llm_interactions[originalIndex]);
+                    if (position >= loadedCount) renderThrough(Math.ceil((position + 1) / BATCH) * BATCH);
+                },
+                dispose() { disposed = true; observer?.disconnect(); },
+            };
+            observer = new IntersectionObserver((entries) => {
+                if (!entries.some(entry => entry.isIntersecting)) return;
+                renderThrough(loadedCount + BATCH);
             }, { root: cardsContainer.closest('[style*="overflow"]') || null, threshold: 0 });
             observer.observe(sentinel);
         }
@@ -6502,6 +6910,11 @@ function showUserMemoryGroupPopup(node, nodeData) {
     const stage = isBeforePlanning ? 'BeforePlanning' : 'AfterSynthesis';
     const detailTab = isBeforePlanning ? 'dag-pre' : 'dag-post';
     const detailLabel = isBeforePlanning ? 'Pre-Execution' : 'Post-Execution';
+    const popupRequestID = selected?.request_id;
+    const popupSelectionVersion = selectionVersion;
+    const hookTargets = (nodeData.pipelineHooks || []).map(hook => ({
+        identity: pipelineHookIdentity(hook), tab: pipelineHookDetailTab(hook),
+    }));
     const llmCount = steps.filter(s =>
         (s.category || 'llm') === 'llm'
     ).length;
@@ -6518,17 +6931,16 @@ function showUserMemoryGroupPopup(node, nodeData) {
 
     // Keep invocation outcome and pipeline consequence tied to stored hook
     // records. Full effects, decisions and operation payloads belong in the tab.
-    (nodeData.pipelineHooks || []).forEach(hook => {
-        const status = pipelineHookStatus(hook.status);
+    (nodeData.pipelineHooks || []).forEach((hook, index) => {
+        const targetLabel = hookTargets[index].tab === 'dag-pre' ? 'Pre-Execution'
+            : hookTargets[index].tab === 'dag-post' ? 'Post-Execution' : 'Raw JSON';
         html += `
-            <div style="margin-bottom: 12px; overflow-wrap: anywhere;">
-                <div style="font-weight: 500;">${escapeHtml(hook.hook_name || 'Unknown hook')}</div>
-                <div style="color: ${status.color}; margin-top: 4px;">${status.label} · ${formatPipelineHookDuration(hook.duration)}</div>
-                <div style="margin-top: 4px;">${escapeHtml(pipelineHookConsequence(hook).summary)}</div>
-                ${hook.error ? `<div style="color: var(--accent-red); margin-top: 4px;">${escapeHtml(truncateText(hook.error, 160))}</div>` : ''}
+            <div class="dag-hook-popup-group-item">
+                ${renderHookPopupSummary(pipelineHookNodeData(hook, ''))}
+                <button type="button" class="dag-popup-detail-link" data-group-hook-details="${index}">View details in ${targetLabel} →</button>
             </div>`;
     });
-    html += `<button type="button" data-memory-hook-details style="background: none; border: 0; padding: 0; color: var(--accent-blue); font: inherit; cursor: pointer;">View details in ${detailLabel} →</button>`;
+    if (!hookTargets.length) html += `<button type="button" class="dag-popup-detail-link" data-memory-hook-details>View details in ${detailLabel} →</button>`;
 
     const popup = document.createElement('div');
     popup.className = 'node-popup';
@@ -6547,9 +6959,17 @@ function showUserMemoryGroupPopup(node, nodeData) {
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 20px rgba(240, 160, 48, 0.15);
     `;
     popup.innerHTML = html;
-    popup.querySelector('[data-memory-hook-details]').addEventListener('click', () => {
-        setDagDetailTab(detailTab);
+    popup.querySelector('[data-memory-hook-details]')?.addEventListener('click', async () => {
+        if (selected?.request_id !== popupRequestID || selectionVersion !== popupSelectionVersion) return;
+        if (!await setDagDetailTab(detailTab) || selected?.request_id !== popupRequestID
+            || selectionVersion !== popupSelectionVersion || activeTab !== detailTab) return;
         document.querySelector(`#dagDetailPanel [data-tab="${detailTab}"]`)?.focus();
+    });
+    popup.addEventListener('click', event => {
+        const button = event.target.closest('[data-group-hook-details]');
+        if (!button) return;
+        const target = hookTargets[Number(button.dataset.groupHookDetails)];
+        if (target) void openHookDetails(target, popupRequestID, popupSelectionVersion);
     });
 
     const dagContainerEl = document.getElementById('dagContainer');
@@ -6585,7 +7005,7 @@ function renderHITLCheckpoints(container) {
         container.innerHTML = `
             <div class="empty-detail">
                 <div class="empty-detail-icon">🛑</div>
-                <div>No HITL checkpoints for this execution</div>
+                <div>${selected.section_warnings?.length ? 'Current HITL evidence could not be confirmed for this read.' : 'No HITL checkpoints for this execution'}</div>
             </div>`;
         return;
     }

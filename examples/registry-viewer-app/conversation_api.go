@@ -44,6 +44,11 @@ type ConversationTimelineResponse struct {
 	LLMEnrichmentReasons    []llmEnrichmentReason      `json:"llm_enrichment_reasons,omitempty"`
 	Partial                 bool                       `json:"partial"`
 	Timestamp               time.Time                  `json:"timestamp"`
+	HasMore                 bool                       `json:"has_more"`
+	NextCursor              string                     `json:"next_cursor,omitempty"`
+	Scanned                 int                        `json:"scanned"`
+	Coverage                string                     `json:"coverage,omitempty"`
+	Limitations             []string                   `json:"limitations,omitempty"`
 }
 
 // GroupedExecutionGroup is one atomic unit in the grouped execution list.
@@ -56,6 +61,8 @@ type GroupedExecutionGroup struct {
 	Turns             []ConversationTimelineTurn `json:"turns"`
 	Orphans           []ExecutionSummary         `json:"orphans"`
 	IndexIncomplete   bool                       `json:"index_incomplete"`
+	CountsScope       string                     `json:"counts_scope,omitempty"`
+	HasMoreTurns      bool                       `json:"has_more_turns,omitempty"`
 
 	sortValue groupedSortValue
 }
@@ -69,6 +76,10 @@ type GroupedExecutionListResponse struct {
 	LLMEnrichmentReasons    []llmEnrichmentReason   `json:"llm_enrichment_reasons,omitempty"`
 	Partial                 bool                    `json:"partial"`
 	Timestamp               time.Time               `json:"timestamp"`
+	HasMore                 bool                    `json:"has_more"`
+	Scanned                 int                     `json:"scanned"`
+	Coverage                string                  `json:"coverage,omitempty"`
+	Limitations             []string                `json:"limitations,omitempty"`
 }
 
 type groupedExecutionQuery struct {
@@ -536,31 +547,7 @@ func handleConversationTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if useMock {
-		summaries := make([]ExecutionSummary, 0)
-		for _, summary := range getMockExecutionSummaries() {
-			if summary.ConversationID == conversationID {
-				summaries = append(summaries, summary)
-			}
-		}
-		response := buildConversationTimelineResponse(
-			conversationID,
-			summaries,
-			nil,
-			false,
-			false,
-			false,
-		)
-		_ = json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	response, err := loadConversationTimeline(r.Context(), conversationID)
-	if err != nil {
-		http.Error(w, "conversation timeline unavailable", http.StatusInternalServerError)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(response)
+	handleBoundedConversationTimeline(w, r, conversationID)
 }
 
 func loadConversationTimeline(
@@ -786,54 +773,7 @@ func buildConversationTimelineResponse(
 }
 
 func handleGroupedExecutionList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	query, err := parseGroupedExecutionQuery(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if useMock {
-		summaries := getMockExecutionSummaries()
-		groups := buildGroupedExecutionUnits(
-			summaries,
-			nil,
-			nil,
-			query,
-		)
-		snapshotScore := "0"
-		snapshotMember := "mock"
-		for _, summary := range summaries {
-			score := float64(summary.CreatedAt.UnixNano())
-			current, _ := strconv.ParseFloat(snapshotScore, 64)
-			if score > current ||
-				(score == current && summary.RequestID > snapshotMember) {
-				snapshotScore = strconv.FormatFloat(score, 'g', -1, 64)
-				snapshotMember = summary.RequestID
-			}
-		}
-		response := paginateGroupedExecutionUnits(
-			groups,
-			query,
-			snapshotScore,
-			snapshotMember,
-			false,
-			false,
-		)
-		_ = json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	response, err := loadGroupedExecutions(r.Context(), query)
-	if err != nil {
-		http.Error(w, "grouped executions unavailable", http.StatusInternalServerError)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(response)
+	handleBoundedGroupedExecutionList(w, r)
 }
 
 func parseGroupedExecutionQuery(r *http.Request) (*groupedExecutionQuery, error) {

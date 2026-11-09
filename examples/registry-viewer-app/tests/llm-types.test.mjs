@@ -22,6 +22,9 @@
 // emitted as literals. Known dynamic sources today:
 //   * `agent_llm_call` — set from `record.CallType` at
 //     orchestration/llm_call_recorder_adapter.go:30
+//   * `skill_activation_selection` and `skill_resource_selection` — passed as
+//     AI invocation purposes in skills_boundaries.go and skills_resources.go,
+//     then recorded by the shared skills AI invocation path
 //   * `user_memory_reconciliation_skip` and
 //     `user_memory_reconciliation_batch_item` — set via the `recType`
 //     local at orchestration/user_memory_extraction.go:507-514
@@ -67,7 +70,7 @@
 // tooling is a follow-up; until then, treat EXPECTED_TYPES as
 // authoritative and update it deliberately.
 
-import { LLM_TYPES } from '../static/js/llm-types.js';
+import { LLM_TYPES, getLLMType, getListStyledColors, isPlanningType, isPhaseClosingType } from '../static/js/llm-types.js';
 
 const EXPECTED_TYPES = [
     // Planning / orchestration
@@ -75,6 +78,8 @@ const EXPECTED_TYPES = [
     'continuation_plan_generation', 'continuation_plan_regeneration',
     'tiered_selection', 'correction', 'hallucination_detection',
     'plan_refinement', 'semantic_retry',
+    // Skills (dynamic invocation purpose)
+    'skill_activation_selection', 'skill_resource_selection',
     // Resolution / execution
     'micro_resolution', 'schema_mapping', 'agent_llm_call',
     'error_analysis', 'result_distillation',
@@ -178,6 +183,28 @@ test('step-scoped types are not classified as planning', () => {
         return cfg && cfg.role === 'planning';
     });
     assertDeepEqual(broken, [], 'step-scoped types incorrectly marked planning');
+});
+
+test('skill selectors share a distinct palette and retain separate boundary-neutral labels', () => {
+    const activation = getLLMType('skill_activation_selection');
+    const resources = getLLMType('skill_resource_selection');
+    assertDeepEqual(activation.label, 'Skill Activation');
+    assertDeepEqual(resources.label, 'Skill Resources');
+    assertDeepEqual(activation.role, 'skills');
+    assertDeepEqual(resources.role, 'skills');
+    assertDeepEqual(activation.rgb, '195, 220, 82');
+    assertDeepEqual(activation.accent, '#c3dc52');
+    assertDeepEqual(resources.rgb, activation.rgb);
+    assertDeepEqual(resources.accent, activation.accent);
+    for (const type of ['skill_activation_selection', 'skill_resource_selection']) {
+        assertDeepEqual(isPlanningType(type), false, `${type} must not become a planning call`);
+        assertDeepEqual(isPhaseClosingType(type), false, `${type} must not close a plan phase`);
+        assertDeepEqual(getListStyledColors(type), { rgb: activation.rgb, accent: activation.accent });
+    }
+    const collisions = Object.entries(LLM_TYPES).filter(([type, cfg]) =>
+        !type.startsWith('skill_') && (cfg.rgb === activation.rgb || cfg.accent === activation.accent)
+    ).map(([type]) => type);
+    assertDeepEqual(collisions, [], 'skills palette must remain visually distinct from existing types');
 });
 
 if (failed > 0) {

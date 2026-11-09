@@ -11,7 +11,7 @@
  * ### Field reference
  *
  * Required:
- *   role        : 'planning' | 'resolution' | 'synthesis' | 'execution' | 'memory' | 'hook'
+ *   role        : 'planning' | 'skills' | 'resolution' | 'synthesis' | 'execution' | 'memory' | 'hook'
  *   label       : short display label (DAG/Cytoscape/Card view; also the LLM Debug
  *                 label unless `listLabel` overrides)
  *   icon        : single-glyph icon
@@ -114,6 +114,19 @@ export const LLM_TYPES = {
         // only trigger for plan-level recoveries (plan_regeneration_fallback
         // and continuation_plan_regeneration). semantic_retry is a different
         // concept (LLM output parse retry) and stays visually neutral.
+    },
+
+    // -----------------------------------------------------------------------
+    // Skills — selectors run at planning and synthesis boundaries. Keep them
+    // separate from planning so they do not close or duplicate plan phases.
+    // -----------------------------------------------------------------------
+    skill_activation_selection: {
+        role: 'skills', label: 'Skill Activation', icon: '🧩',
+        rgb: '195, 220, 82', accent: '#c3dc52',
+    },
+    skill_resource_selection: {
+        role: 'skills', label: 'Skill Resources', icon: '📚',
+        rgb: '195, 220, 82', accent: '#c3dc52',
     },
 
     // -----------------------------------------------------------------------

@@ -17,7 +17,7 @@ function element() {
         querySelector() { return null; }, querySelectorAll() { return []; },
         appendChild(child) { this.children.push(child); },
         prepend(child) { this.children.unshift(child); if (child.id) elements.set(child.id, child); },
-        addEventListener() {}, removeEventListener() {}, focus() {}, scrollIntoView() {}, remove() {},
+        addEventListener() {}, removeEventListener() {}, setAttribute() {}, focus() {}, scrollIntoView() {}, remove() {},
     };
 }
 globalThis.document = {
@@ -28,15 +28,17 @@ globalThis.document = {
 };
 globalThis.sessionStorage = { getItem() { return 'grouped'; } };
 globalThis.requestAnimationFrame = callback => callback();
+const originalSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, delay, ...args) => delay === 50 ? 0 : originalSetTimeout(callback, delay, ...args);
 
 // Expose private view entry points only in this in-memory test module. Imports
 // still point to their real utility implementations; production exports stay unchanged.
 const moduleURL = new URL('../static/js/views/dag.js', import.meta.url);
 let source = await readFile(moduleURL, 'utf8');
 source = source.replace(/from '(\.\.[^']+)'/g, (_, path) => `from '${new URL(path, moduleURL).href}'`);
-source += `\nexport { selectExecution, renderServerExecutionGroups, renderTimelineTurn, renderLegacyExecutionList, discoverExecutionLineage, renderExecutionLineageNavigation, renderAgentParentInfo, renderParentExecution, loadParentExecution, updateDetailTabs, renderExecutionDetail, renderSingleLLMCard };
+source += `\nexport { selectExecution, renderServerExecutionGroups, renderTimelineTurn, renderLegacyExecutionList, discoverExecutionLineage, renderExecutionLineageNavigation, renderAgentParentInfo, renderParentExecution, loadParentExecution, updateDetailTabs, renderExecutionDetail, renderSingleLLMCard, renderDelegatedExecutionLinks };
 export function testState() { return selected; }
-export function testInstall(records, groups = []) { executions = records; groupedExecutionGroups = groups; activeTab = 'dag-raw'; for (const group of groups) expandedGroupKeys.add(group.group_key); }
+export function testInstall(records, groups = []) { executions = records; groupedExecutionGroups = groups; activeTab = 'dag-raw'; for (const group of groups) { expandedGroupKeys.add(group.group_key); if (group.conversation_id) conversationCache.set(group.conversation_id, { data: group, history: [], cursor: '', pending: false }); } }
 export function testSetSelection(value, tab = 'dag-raw') { selected = value; activeTab = tab; }
 export function testActiveTab() { return activeTab; }
 export function testSetActiveTab(value) { activeTab = value; }
@@ -61,6 +63,19 @@ const record = (requestID, parent = '', step = '') => ({
 });
 const records = [record('root'), record('translation', 'root', 'step-1'), record('review', 'translation', 'step-17')];
 const group = { group_key: 'conversation:test', conversation_id: 'test', turns: [{ execution: records[0], related_executions: records.slice(1) }] };
+view.testSetSelection(records[0]);
+const delegationLink = view.renderDelegatedExecutionLinks('step-1', records);
+assert.match(delegationLink, /class="dag-popup-detail-link" data-lineage-execution="translation"/);
+assert.match(delegationLink, />View agent execution →<\/button>/);
+assert.doesNotMatch(delegationLink, /dag-row-meta|Each execution retains|Agent execution:|data-refresh-execution-lineage/);
+assert.equal(view.renderDelegatedExecutionLinks('ordinary-tool-step', records), '', 'tools without an observed child have no delegation controls');
+assert.equal(view.renderDelegatedExecutionLinks('step-17', records), '', 'a nested child belongs to its actual parent step');
+const several = view.renderDelegatedExecutionLinks('step-1', [...records, record('second-translation', 'root', 'step-1')]);
+assert.equal((several.match(/data-lineage-execution=/g) || []).length, 2);
+assert.match(several, /View agent execution 1 →/);
+assert.match(several, /View agent execution 2 →/);
+assert.match(view.renderDelegatedExecutionLinks('step-1', [{ ...records[1], metadata: { resume_checkpoint_id: 'checkpoint' } }]), /View resumed execution →/);
+view.testSetSelection(null);
 view.testInstall(records, [group]);
 view.renderServerExecutionGroups([group]);
 let html = elements.get('dagTableBody').innerHTML;
@@ -109,6 +124,7 @@ view.testInstall(records, [group]);
 // Grouping and filtering membership do not grow when an explicit parent is
 // elsewhere. The missing parent stays a navigation link in the current group.
 const isolated = { ...group, turns: [{ execution: records[2], related_executions: [] }] };
+view.testInstall(records, [isolated]);
 view.renderServerExecutionGroups([isolated]);
 html = elements.get('dagTableBody').innerHTML;
 assert.equal((html.match(/data-request-id=/g) || []).length, 1);
@@ -118,12 +134,12 @@ let lineageCalls = 0, unifiedCalls = 0, finishLineage;
 globalThis.fetch = async endpoint => {
     if (endpoint.endsWith('/lineage')) {
         lineageCalls++;
-        return new Promise(resolve => { finishLineage = () => resolve({ ok: true, json: async () => ({
+        return new Promise(resolve => { finishLineage = () => resolve({ ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({
             request_id: 'root', executions: records, partial: false, index_incomplete: false,
         }) }); });
     }
     let data;
-    if (endpoint.endsWith('/unified')) {
+    if (endpoint.includes('/unified?section=')) {
         unifiedCalls++;
         const requestID = decodeURIComponent(endpoint.split('/')[3]);
         data = { ...records.find(item => item.request_id === requestID), llm_interactions: [{ type: 'synthesis', response: `late-${unifiedCalls}` }] };
@@ -133,7 +149,10 @@ globalThis.fetch = async endpoint => {
 };
 await view.selectExecution('root');
 assert.equal(view.testState().request_id, 'root', 'slow lineage does not block selected details');
-assert.match(elements.get('dagDetailContent').innerHTML, /late-1/);
+assert.match(elements.get('dagDetailContent').innerHTML, /&lt;root&gt;/);
+assert.equal(lineageCalls, 0, 'selection does not initiate a family scan');
+view.discoverExecutionLineage({ force: true });
+await tick();
 assert.equal(lineageCalls, 1);
 finishLineage();
 await tick();
@@ -149,12 +168,14 @@ assert.match(relatedPanel, /aria-label="Refresh related executions"/);
 assert.doesNotMatch(relatedPanel, /Immediate parent:|Invoked through:|<pre>|Lookup coverage and parent-read diagnostics/, 'family list omits repeated parent details and raw lookup dumps');
 assert.equal(elements.get('dagDetailTitle').textContent, '<translation>', 'detail title remains the selected child request');
 assert.equal(elements.has('dagExecutionLineage'), false, 'lineage has no block above the detail tabs');
+const callsBeforeTimerRefresh = unifiedCalls;
 view.refresh();
 await tick();
 await tick();
 assert.equal(lineageCalls, 1, 'periodic refresh causes zero family scans');
-assert.equal(unifiedCalls, 3);
-assert.equal(view.testState().llm_interactions[0].response, 'late-3', 'late debug is refreshed at unchanged record revision');
+assert.equal(unifiedCalls, callsBeforeTimerRefresh, 'timer refresh does not refetch selected evidence');
+await view.refresh({ manual: true });
+assert.equal(unifiedCalls, callsBeforeTimerRefresh + 2, 'explicit refresh reloads the overview and selected Full Flow');
 view.discoverExecutionLineage({ force: true });
 await tick();
 assert.equal(lineageCalls, 2, 'explicit related-executions refresh initiates one lookup');
@@ -167,7 +188,7 @@ let finishOldUnified;
 globalThis.fetch = async endpoint => {
     const requestID = decodeURIComponent(endpoint.split('/')[3]);
     if (endpoint.endsWith('/lineage')) {
-        return { ok: true, json: async () => ({ request_id: requestID, plan: {}, result: {} }) }; // older backend
+        return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({ request_id: requestID, plan: {}, result: {} }) }; // older backend
     }
     if (requestID === 'old-selection') {
         return new Promise(resolve => { finishOldUnified = () => resolve({
@@ -184,6 +205,8 @@ finishOldUnified();
 await oldSelection;
 await tick();
 assert.equal(view.testState().request_id, 'new-selection', 'stale unified response cannot replace a new selection');
+view.discoverExecutionLineage({ force: true });
+await tick();
 assert.match(view.renderExecutionLineageNavigation(), /lookup unavailable/, 'old-backend raw fallback leaves selected details usable');
 view.destroy();
 
@@ -195,7 +218,7 @@ globalThis.history = { state: null, replaceState(_state, _title, url) { globalTh
 globalThis.fetch = async endpoint => {
     requestedPaths.push(endpoint);
     const requestID = decodeURIComponent(endpoint.split('/')[3]);
-    if (endpoint.endsWith('/lineage')) return { ok: true, json: async () => ({
+    if (endpoint.endsWith('/lineage')) return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({
         request_id: requestID, executions: [{ ...record(requestID), original_request_id: requestID }], partial: false, index_incomplete: false,
     }) };
     if (requestID === 'unrelated-B') return { ok: false, status: 404, text: async () => 'execution unavailable' };
@@ -220,7 +243,7 @@ assert.equal(view.testState().request_id, escapedID);
 assert.equal(location.searchParams.get('request_id'), escapedID);
 assert.equal(location.searchParams.get('keep'), '1');
 assert.equal(location.hash, '#evidence');
-assert.ok(requestedPaths.includes(`/api/executions/${encodeURIComponent(escapedID)}/unified`));
+assert.ok(requestedPaths.includes(`/api/executions/${encodeURIComponent(escapedID)}/unified?section=overview`));
 const beforeInvalidOpen = requestedPaths.length;
 await view.openExecution(undefined);
 await view.openExecution('contains space');
@@ -263,23 +286,25 @@ const exactParent = {
 };
 const parentChild = { ...record('parent-child', 'parent-record', 'invoking-step'), original_request: '<child task>' };
 globalThis.fetch = async endpoint => {
+    if (endpoint === '/api/services') return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({ services: [] }) };
     const id = decodeURIComponent(endpoint.split('/')[3]);
-    if (endpoint.endsWith('/lineage')) return { ok: true, json: async () => ({ request_id: id, executions: [parentChild], partial: false, index_incomplete: false }) };
-    if (endpoint.endsWith('/unified')) return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => parentChild };
+    if (endpoint.endsWith('/lineage')) return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({ request_id: id, executions: [parentChild], partial: false, index_incomplete: false }) };
+    if (endpoint.includes('/unified?section=') && id === parentChild.request_id) return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => parentChild };
     parentRecordCalls++;
-    assert.equal(endpoint, '/api/executions/parent-record', 'parent tab reads the exact record, without unified/debug expansion');
-    if (parentResponseMode === 'missing') return { ok: false, status: 404 };
-    if (parentResponseMode === 'error') return { ok: false, status: 503 };
+    assert.equal(endpoint, '/api/executions/parent-record/unified?section=overview', 'parent tab reads only exact parent overview, without debug expansion');
+    if (parentResponseMode === 'missing') return { ok: false, status: 404, text: async () => 'not found' };
+    if (parentResponseMode === 'error') return { ok: false, status: 503, text: async () => 'unavailable' };
     const data = parentResponseMode === 'missing-step' ? { ...exactParent, plan: { steps: [] }, phase_plans: [], result: { steps: [] } }
         : parentResponseMode === 'mismatched' ? { ...exactParent, request_id: 'other-parent', original_request: 'incorrect parent body' }
         : exactParent;
-    return { ok: true, status: 200, json: async () => data };
+    return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => data };
 };
 view.testInstall([parentChild]);
 await view.selectExecution(parentChild.request_id);
 await tick();
 assert.equal(parentRecordCalls, 0, 'selecting a child does not fetch the parent record');
 assert.equal(elements.get('dagDetailTitle').textContent, '<child task>');
+const childStateBeforeParentRead = view.testState();
 view.testSetActiveTab('dag-parent');
 view.renderParentExecution(elements.get('dagDetailContent'));
 assert.match(elements.get('dagDetailContent').innerHTML, /Loading exact parent record/);
@@ -293,7 +318,7 @@ assert.match(html, /translate&lt;content&gt;/, 'planned capability is also read 
 assert.match(html, /Invoking step · invoking-step/);
 assert.match(html, />Failed</);
 assert.doesNotMatch(html, /not the caller/);
-assert.equal(view.testState(), parentChild, 'parent details do not replace child unified state');
+assert.equal(view.testState(), childStateBeforeParentRead, 'parent details do not replace child unified state');
 assert.equal(elements.get('dagDetailTitle').textContent, '<child task>', 'parent tab retains the child title');
 view.renderParentExecution(elements.get('dagDetailContent'));
 await tick();
@@ -332,11 +357,12 @@ view.destroy();
 // view. Ignore abort in this transport to exercise the response guards too.
 let completeParent, parentSignal;
 globalThis.fetch = async (endpoint, options = {}) => {
+    if (endpoint === '/api/services') return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({ services: [] }) };
     const id = decodeURIComponent(endpoint.split('/')[3]);
-    if (endpoint.endsWith('/lineage')) return { ok: true, json: async () => ({ request_id: id, executions: [record(id)], partial: false, index_incomplete: false }) };
-    if (endpoint.endsWith('/unified')) return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => id === parentChild.request_id ? parentChild : record(id) };
+    if (endpoint.endsWith('/lineage')) return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => ({ request_id: id, executions: [record(id)], partial: false, index_incomplete: false }) };
+    if (endpoint.includes('/unified?section=') && id !== 'parent-record') return { ok: true, status: 200, headers: { get() { return null; } }, json: async () => id === parentChild.request_id ? parentChild : record(id) };
     parentSignal = options.signal;
-    return new Promise(resolve => { completeParent = () => resolve({ ok: true, status: 200, json: async () => exactParent }); });
+    return new Promise(resolve => { completeParent = () => resolve({ ok: true, status: 200, headers: { get() { return null; } }, json: async () => exactParent }); });
 };
 view.testInstall([parentChild]);
 await view.selectExecution(parentChild.request_id);
@@ -353,12 +379,14 @@ assert.equal(elements.get('dagDetailContent').innerHTML, anotherDetails);
 await view.selectExecution(parentChild.request_id);
 view.testSetActiveTab('dag-parent');
 view.renderParentExecution(elements.get('dagDetailContent'));
-const beforeDestroy = elements.get('dagDetailContent').innerHTML;
 view.destroy();
+const afterDestroy = elements.get('dagDetailContent').innerHTML;
+assert.match(afterDestroy, /Select an execution/);
 assert.equal(parentSignal.aborted, true);
 completeParent();
 await tick();
 assert.equal(view.testState(), null);
-assert.equal(elements.get('dagDetailContent').innerHTML, beforeDestroy);
+assert.equal(elements.get('dagDetailContent').innerHTML, afterDestroy);
 assert.equal(elements.has('dagExecutionLineage'), false, 'no test path renders the removed top block');
+globalThis.setTimeout = originalSetTimeout;
 console.log('All DAG lineage view integration tests passed.');

@@ -4,11 +4,14 @@
 
 import {
     assignAfterPlanningHooksToPhases,
+    assignSkillCallsToConsumers,
     buildObservedPhases,
     buildExecutionHierarchy,
     createExecutionLineageLoader,
     executionLineageSummary,
     executionDisplayStepNumber,
+    executionDisplayStepLabel,
+    executionStepNumberingNote,
     filterInteractionsWithRenderedParent,
     filterRenderableEdges,
     findDelegatedExecutions,
@@ -46,6 +49,104 @@ function assertDeepEqual(actual, expected, message) {
 }
 
 console.log('dag-graph.test.mjs');
+
+const skillCall = (type, phase_number, second, extra = {}) => ({
+    type, phase_number, timestamp: new Date(Date.UTC(2026, 10, 7, 12, 0, second)).toISOString(), duration_ms: 100,
+    ...extra,
+});
+
+test('skill selectors precede the next observed planning or synthesis consumer in their phase', () => {
+    const activation = skillCall('skill_activation_selection', 0, 1);
+    const initialResources = skillCall('skill_resource_selection', 0, 2);
+    const initialPlan = skillCall('plan_generation', undefined, 3);
+    const continuedResources = skillCall('skill_resource_selection', 7, 10);
+    const finalPlan = skillCall('continuation_plan_generation', 7, 11);
+    const synthesisResources = skillCall('skill_resource_selection', 7, 20);
+    const synthesis = skillCall('synthesis', undefined, 21);
+    const interactions = [synthesisResources, finalPlan, initialPlan, activation, synthesis, initialResources, continuedResources];
+    const original = JSON.stringify(interactions);
+    const placements = assignSkillCallsToConsumers(interactions, [initialPlan, finalPlan, synthesis], new Map([[synthesis, 7]]));
+    assertDeepEqual(placements.beforeCall.get(initialPlan).map(call => call === activation || call === initialResources), [true, true]);
+    assertDeepEqual(placements.beforeCall.get(initialPlan).map(call => call.type), ['skill_activation_selection', 'skill_resource_selection']);
+    assertDeepEqual(placements.beforeCall.get(finalPlan)[0] === continuedResources, true);
+    assertDeepEqual(placements.beforeCall.get(synthesis)[0] === synthesisResources, true);
+    assertDeepEqual(placements.unplacedCalls, []);
+    assertDeepEqual(JSON.stringify(interactions), original, 'placement preserves original records and array order');
+});
+
+test('recorded selector failures and retries remain separate original records', () => {
+    const failedSelection = skillCall('skill_resource_selection', 2, 1, { success: false, error: 'timeout' });
+    const retry = skillCall('skill_resource_selection', 2, 2, { success: true });
+    const plan = skillCall('continuation_plan_generation', 2, 3);
+    const placements = assignSkillCallsToConsumers([retry, failedSelection, plan], [plan]);
+    const calls = placements.beforeCall.get(plan);
+    assertDeepEqual(calls.length, 2);
+    assertDeepEqual(calls[0] === failedSelection && calls[1] === retry, true);
+    assertDeepEqual(placements.unplacedCalls, []);
+});
+
+test('selectors attach to their exact subsequent regeneration consumer', () => {
+    const firstSelector = skillCall('skill_resource_selection', 3, 1);
+    const firstPlan = skillCall('continuation_plan_generation', 3, 2);
+    const retrySelector = skillCall('skill_resource_selection', 3, 3);
+    const regeneratedPlan = skillCall('continuation_plan_regeneration', 3, 4);
+    const placements = assignSkillCallsToConsumers([firstPlan, retrySelector, regeneratedPlan, firstSelector], [regeneratedPlan, firstPlan]);
+    assertDeepEqual(placements.beforeCall.get(firstPlan)[0] === firstSelector, true);
+    assertDeepEqual(placements.beforeCall.get(regeneratedPlan)[0] === retrySelector, true);
+});
+
+test('selectors without usable timing, phase or a recorded downstream consumer stay unplaced', () => {
+    const plan = skillCall('plan_generation', 1, 5);
+    const calls = [
+        skillCall('skill_resource_selection', 1, 1, { timestamp: undefined }),
+        skillCall('skill_resource_selection', 1, 1, { timestamp: 'not a date' }),
+        skillCall('skill_resource_selection', 1, 1, { timestamp: '0001-01-01T00:00:00Z' }),
+        skillCall('skill_resource_selection', -1, 1),
+        skillCall('skill_resource_selection', 1, 1, { duration_ms: -1 }),
+        skillCall('skill_resource_selection', 1, 6),
+    ];
+    const placements = assignSkillCallsToConsumers(calls, [plan]);
+    assertDeepEqual(placements.beforeCall.size, 0);
+    assertDeepEqual(placements.unplacedCalls.length, calls.length);
+    assertDeepEqual(assignSkillCallsToConsumers(calls, []).unplacedCalls.length, calls.length, 'zero-plan failures do not invent a planning call');
+});
+
+test('ambiguous consumer timestamps and phase mismatches do not create skill edges', () => {
+    const selection = skillCall('skill_activation_selection', 2, 1);
+    const nextPhase = skillCall('continuation_plan_generation', 3, 2);
+    const laterMatchingPhase = skillCall('continuation_plan_regeneration', 2, 3);
+    const unknownTiming = skillCall('continuation_plan_generation', 2, 4, { timestamp: undefined });
+    const tiedConsumer = skillCall('continuation_plan_regeneration', 2, 3);
+    for (const consumers of [[nextPhase, laterMatchingPhase], [unknownTiming, laterMatchingPhase], [laterMatchingPhase, tiedConsumer]]) {
+        const placements = assignSkillCallsToConsumers([selection], consumers);
+        assertDeepEqual(placements.beforeCall.size, 0);
+        assertDeepEqual(placements.unplacedCalls[0] === selection, true);
+    }
+});
+
+test('overlapping selectors and consumer calls remain visible without invented serial order', () => {
+    const plan = skillCall('plan_generation', 1, 10);
+    const longSelection = skillCall('skill_activation_selection', 1, 1, { duration_ms: 5000 });
+    const second = skillCall('skill_resource_selection', 1, 2);
+    const third = skillCall('skill_resource_selection', 1, 3);
+    const placements = assignSkillCallsToConsumers([longSelection, second, third], [plan]);
+    assertDeepEqual(placements.beforeCall.size, 0);
+    assertDeepEqual(placements.unplacedCalls.length, 3, 'a long interval also overlaps nonadjacent selections');
+    const startsWithPlan = skillCall('skill_resource_selection', 1, 10);
+    const spansPlan = skillCall('skill_resource_selection', 1, 9, { duration_ms: 2000 });
+    for (const call of [startsWithPlan, spansPlan]) {
+        assertDeepEqual(assignSkillCallsToConsumers([call], [plan]).unplacedCalls[0] === call, true);
+    }
+});
+
+test('synthesis phase mapping fills omission without overriding explicit recorded phase', () => {
+    const selection = skillCall('skill_resource_selection', 7, 1);
+    const synthesis = skillCall('synthesis', undefined, 2);
+    assertDeepEqual(assignSkillCallsToConsumers([selection], [synthesis]).unplacedCalls[0] === selection, true);
+    assertDeepEqual(assignSkillCallsToConsumers([selection], [synthesis], new Map([[synthesis, 7]])).beforeCall.get(synthesis)[0] === selection, true);
+    const explicit = skillCall('synthesis', 7, 2);
+    assertDeepEqual(assignSkillCallsToConsumers([selection], [explicit], new Map([[explicit, 8]])).beforeCall.get(explicit)[0] === selection, true);
+});
 
 test('explicit parents preserve three levels and concurrent reviewers without requiring root results', () => {
     const records = [
@@ -318,6 +419,55 @@ test('continues HITL resume numbering after distinct completed steps', () => {
         [0, 1, 2].map(index => executionDisplayStepNumber(index, execution)),
         [4, 5, 6]
     );
+});
+
+test('resumed plan does not count its restored completed steps twice', () => {
+    const steps = ['step-a', 'step-b', 'step-c'].map(step_id => ({ step_id }));
+    for (const execution of [
+        { plan: { steps }, resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: 1, display_step_offset: 0 } },
+        { plan: { steps }, hitl_lifecycle: { is_resume: true, current_checkpoint: { completed_steps: [{ step_id: 'step-a' }, { step_id: 'step-a' }] } } },
+    ]) {
+        assertDeepEqual(hitlContinuationStepOffset(execution), 0);
+        assertDeepEqual(steps.map((_, index) => executionDisplayStepNumber(index, execution)), [1, 2, 3]);
+    }
+});
+
+test('completed steps absent from displayed phases still precede resume numbering', () => {
+    const execution = {
+        phase_plans: [{ steps: [{ step_id: 'step-a' }, { step_id: 'step-b' }] }, { steps: [{ step_id: 'step-c' }] }],
+        hitl_lifecycle: { is_resume: true, current_checkpoint: { completed_steps: [{ step_id: 'earlier-phase' }, { step_id: 'step-a' }, { step_id: 'step-a' }] } },
+    };
+    assertDeepEqual(hitlContinuationStepOffset(execution), 1);
+    assertDeepEqual([0, 1, 2].map(index => executionDisplayStepNumber(index, execution)), [2, 3, 4]);
+});
+
+test('lazy resume numbering distinguishes unknown offset from an observed zero', () => {
+    for (const execution of [
+        { resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: null } },
+        { resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: -1 } },
+        { resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: '3' } },
+        { resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: Number.MAX_SAFE_INTEGER + 1 } },
+        { resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: 3, display_step_offset: null } },
+        { resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: 3, display_step_offset: -1 } },
+        { resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: 3, display_step_offset: 4 } },
+        { plan: { steps: [{ step_id: 'step-a' }] }, resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: 1 } },
+        { hitl_lifecycle: { is_resume: true } },
+        { metadata: { resume_checkpoint_id: 'cp-origin' } },
+    ]) {
+        assertDeepEqual(hitlContinuationStepOffset(execution), null);
+        assertDeepEqual(executionDisplayStepNumber(0, execution), 1);
+        assertDeepEqual(executionDisplayStepLabel(0, execution), 'Resume step 1');
+        assertDeepEqual(executionStepNumberingNote(execution).includes('within this execution'), true);
+    }
+    for (const [count, expected] of [[0, 'Step 1'], [3, 'Step 4']]) {
+        const execution = { resume_step_numbering: { checkpoint_id: 'cp-origin', completed_step_count: count, source: 'agent_checkpoint_api' } };
+        assertDeepEqual(hitlContinuationStepOffset(execution), count);
+        assertDeepEqual(executionDisplayStepLabel(0, execution), expected);
+        assertDeepEqual(executionStepNumberingNote(execution), '');
+    }
+    assertDeepEqual(executionDisplayStepLabel(0, {}), 'Step 1');
+    assertDeepEqual(executionStepNumberingNote({}), '');
+    assertDeepEqual(executionDisplayStepLabel(-1, {}), '');
 });
 
 test('classifies stored hooks into pre- and post-execution stages', () => {

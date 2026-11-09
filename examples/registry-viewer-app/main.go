@@ -340,30 +340,31 @@ type ExecutionResult struct {
 
 // ExecutionSummary is a lightweight version for listing
 type ExecutionSummary struct {
-	Lifecycle           *orchestration.ExecutionLifecycleObservation `json:"lifecycle,omitempty"`
-	RecordRevision      uint64                                       `json:"record_revision,omitempty"`
-	RequestID           string                                       `json:"request_id"`
-	OriginalRequestID   string                                       `json:"original_request_id,omitempty"`
-	ParentRequestID     string                                       `json:"parent_request_id,omitempty"`
-	ParentStepID        string                                       `json:"parent_step_id,omitempty"`
-	ConversationID      string                                       `json:"conversation_id,omitempty"`
-	TraceID             string                                       `json:"trace_id"`
-	AgentName           string                                       `json:"agent_name,omitempty"`
-	OriginalRequest     string                                       `json:"original_request"`
-	Success             bool                                         `json:"success"`
-	Interrupted         bool                                         `json:"interrupted,omitempty"`
-	StepCount           int                                          `json:"step_count"`
-	FailedSteps         int                                          `json:"failed_steps"`
-	SkippedSteps        int                                          `json:"skipped_steps"`
-	TotalDurationMs     int64                                        `json:"total_duration_ms"`                // Phase-loop duration; retained for API compatibility.
-	WallClockDurationMs int64                                        `json:"wall_clock_duration_ms,omitempty"` // Non-additive elapsed-time envelope when available.
-	DurationSource      string                                       `json:"duration_source,omitempty"`
-	LLMTotalDurationMs  int64                                        `json:"llm_total_duration_ms,omitempty"` // Aggregate LLM call time; may overlap wall clock.
-	HITLCheckpointID    string                                       `json:"hitl_checkpoint_id,omitempty"`    // Exact checkpoint identity for lineage-safe HITL joins.
-	RelationStatus      string                                       `json:"relation_status,omitempty"`
-	MissingOwnerID      string                                       `json:"missing_owner_id,omitempty"`
-	CreatedAt           time.Time                                    `json:"created_at"`
-	Metadata            map[string]string                            `json:"metadata,omitempty"`
+	Lifecycle            *orchestration.ExecutionLifecycleObservation `json:"lifecycle,omitempty"`
+	RecordRevision       uint64                                       `json:"record_revision,omitempty"`
+	RequestID            string                                       `json:"request_id"`
+	OriginalRequestID    string                                       `json:"original_request_id,omitempty"`
+	ParentRequestID      string                                       `json:"parent_request_id,omitempty"`
+	ParentStepID         string                                       `json:"parent_step_id,omitempty"`
+	ConversationID       string                                       `json:"conversation_id,omitempty"`
+	TraceID              string                                       `json:"trace_id"`
+	AgentName            string                                       `json:"agent_name,omitempty"`
+	OriginalRequest      string                                       `json:"original_request"`
+	RequestTextTruncated bool                                         `json:"request_text_truncated,omitempty"`
+	Success              bool                                         `json:"success"`
+	Interrupted          bool                                         `json:"interrupted,omitempty"`
+	StepCount            int                                          `json:"step_count"`
+	FailedSteps          int                                          `json:"failed_steps"`
+	SkippedSteps         int                                          `json:"skipped_steps"`
+	TotalDurationMs      int64                                        `json:"total_duration_ms"`                // Phase-loop duration; retained for API compatibility.
+	WallClockDurationMs  int64                                        `json:"wall_clock_duration_ms,omitempty"` // Non-additive elapsed-time envelope when available.
+	DurationSource       string                                       `json:"duration_source,omitempty"`
+	LLMTotalDurationMs   int64                                        `json:"llm_total_duration_ms,omitempty"` // Aggregate LLM call time; may overlap wall clock.
+	HITLCheckpointID     string                                       `json:"hitl_checkpoint_id,omitempty"`    // Exact checkpoint identity for lineage-safe HITL joins.
+	RelationStatus       string                                       `json:"relation_status,omitempty"`
+	MissingOwnerID       string                                       `json:"missing_owner_id,omitempty"`
+	CreatedAt            time.Time                                    `json:"created_at"`
+	Metadata             map[string]string                            `json:"metadata,omitempty"`
 
 	// observedStart/observedEnd are internal inputs for deriving a wall-clock
 	// envelope. They are never serialized.
@@ -848,6 +849,7 @@ func main() {
 	mux.HandleFunc("/api/health", apiMiddleware(handleHealth))
 	mux.HandleFunc("/api/readiness", apiMiddleware(handleReadiness))
 	mux.HandleFunc("/api/llm-debug", apiMiddleware(handleLLMDebugList))
+	mux.HandleFunc("/api/llm-debug/summaries", apiMiddleware(handleLLMRowSummaries))
 	mux.HandleFunc("/api/llm-debug/", apiMiddleware(handleLLMDebugRecord))
 	mux.HandleFunc("/api/hitl/checkpoints", apiMiddleware(handleHITLCheckpointList))
 	mux.HandleFunc("/api/hitl/checkpoints/", apiMiddleware(handleHITLCheckpoint))
@@ -933,6 +935,8 @@ func main() {
 		Addr:              addr,
 		Handler:           viewerProtection.middleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      time.Minute,
+		IdleTimeout:       time.Minute,
 	}
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)
@@ -1072,12 +1076,13 @@ func withGzip(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// apiMiddleware composes CORS + ETag + gzip for API endpoints.
-// Ordering: CORS (outermost) → gzip → ETag → handler (innermost).
+// apiMiddleware composes CORS + read admission + ETag + gzip for API endpoints.
+// Ordering: CORS → read budget → gzip → ETag → handler (innermost).
 // ETag is innermost so it captures the uncompressed body for hashing.
 // Gzip wraps ETag so the ETag-computed body is compressed for transfer.
+// Read slots remain held until buffering, compression and writing finish.
 func apiMiddleware(handler http.HandlerFunc) http.HandlerFunc {
-	return withCORS(withGzip(withETag(handler)))
+	return withCORS(withViewerDataReadBudget(withGzip(withETag(handler))))
 }
 
 // writeJSON writes a JSON response and records transport failures that occur
@@ -1680,6 +1685,16 @@ func getExecutionDebugClient() (redis.UniversalClient, error) { return getViewer
 // handleLLMDebugList returns a list of recent LLM debug records
 func handleLLMDebugList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if values, present := r.URL.Query()["summary_only"]; present {
+		if len(values) != 1 || values[0] != "true" && values[0] != "false" {
+			http.Error(w, "summary_only must be true or false", http.StatusBadRequest)
+			return
+		}
+		if values[0] == "true" {
+			handleLLMMetadataList(w, r)
+			return
+		}
+	}
 
 	// Parse limit parameter (default 50)
 	limit := 50
@@ -2038,8 +2053,6 @@ func getAgentAddress(agentName string) (string, error) {
 
 // handleExecutionList returns a list of recent executions
 func handleExecutionList(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	if values, present := r.URL.Query()["group_conversations"]; present {
 		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
 			http.Error(w, "group_conversations must be true or false", http.StatusBadRequest)
@@ -2050,43 +2063,7 @@ func handleExecutionList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	// Parse query parameters
-	limitStr := r.URL.Query().Get("limit")
-	limit := 50
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
-			limit = l
-		}
-	}
-	cursor := r.URL.Query().Get("cursor")
-
-	var response ExecutionListResponse
-
-	if useMock {
-		summaries := getMockExecutionSummaries()
-		response = ExecutionListResponse{
-			Executions: nonNilSlice(summaries),
-			Total:      len(summaries),
-			HasMore:    false,
-			Timestamp:  time.Now(),
-		}
-	} else {
-		page, err := getRedisExecutionSummaries(limit, cursor)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Redis error: %v", err), http.StatusInternalServerError)
-			return
-		}
-		response = ExecutionListResponse{
-			Executions: nonNilSlice(page.Summaries),
-			Total:      len(page.Summaries),
-			HasMore:    page.HasMore,
-			NextCursor: page.NextCursor,
-			Timestamp:  time.Now(),
-		}
-	}
-
-	writeJSON(w, response)
+	handleBoundedExecutionList(w, r, false)
 }
 
 // ExecutionSearchResponse is the API response for search results
@@ -2099,44 +2076,7 @@ type ExecutionSearchResponse struct {
 
 // handleExecutionSearch searches executions by original request content
 func handleExecutionSearch(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	// Parse query parameters
-	query := r.URL.Query().Get("q")
-	if query == "" {
-		http.Error(w, "query parameter 'q' is required", http.StatusBadRequest)
-		return
-	}
-
-	limitStr := r.URL.Query().Get("limit")
-	limit := 50
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
-			limit = l
-		}
-	}
-
-	var summaries []ExecutionSummary
-	var err error
-
-	if useMock {
-		summaries = searchMockExecutions(query, limit)
-	} else {
-		summaries, err = searchRedisExecutions(query, limit)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Redis error: %v", err), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	response := ExecutionSearchResponse{
-		Executions: nonNilSlice(summaries),
-		Query:      query,
-		Total:      len(summaries),
-		Timestamp:  time.Now(),
-	}
-
-	writeJSON(w, response)
+	handleBoundedExecutionList(w, r, true)
 }
 
 // searchMockExecutions searches mock executions by original request content
@@ -2156,25 +2096,22 @@ func searchMockExecutions(query string, limit int) []ExecutionSummary {
 	return results
 }
 
-// searchRedisExecutions searches Redis executions by original request content.
-// Note: For production, consider using Redis Search or a dedicated search index.
+// searchRedisExecutions is the bounded compatibility helper. HTTP search uses
+// the cursor-bearing route so older matches remain reachable without a full scan.
 func searchRedisExecutions(query string, limit int) ([]ExecutionSummary, error) {
-	page, err := getRedisExecutionSummaries(1000, "") // Fetch more to search through
+	parsed, err := executionBrowseCompatibilityQuery(limit, "", query)
 	if err != nil {
 		return nil, err
 	}
-
-	queryLower := strings.ToLower(query)
-	var results []ExecutionSummary
-	for _, summary := range page.Summaries {
-		if strings.Contains(strings.ToLower(summary.OriginalRequest), queryLower) {
-			results = append(results, summary)
-			if len(results) >= limit {
-				break
-			}
-		}
+	client, err := getExecutionDebugClient()
+	if err != nil {
+		return nil, err
 	}
-	return results, nil
+	page, err := loadExecutionBrowsePage(context.Background(), client, viewerExecutionKeys.RecentIndex(), parsed)
+	if err != nil {
+		return nil, err
+	}
+	return page.Summaries, nil
 }
 
 // handleExecution handles GET /api/executions/{id}, /{id}/dag, and /{id}/unified
@@ -2197,9 +2134,15 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 	}
 	isDAGRequest := len(parts) > 1 && parts[1] == "dag"
 	isUnifiedRequest := len(parts) > 1 && parts[1] == "unified"
+	section := r.URL.Query().Get("section")
+	if section != "" && (!isUnifiedRequest || !validExecutionDetailSection(section)) {
+		http.Error(w, "section must be overview, steps, llm, pre, post, hitl, skills, raw or flow on the unified endpoint", http.StatusBadRequest)
+		return
+	}
 
 	var execution *StoredExecution
 	var err error
+	var rawExecution json.RawMessage
 
 	if useMock {
 		execution = getMockExecution(requestID)
@@ -2208,9 +2151,9 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		execution, err = getRedisExecution(requestID)
+		execution, rawExecution, err = loadExecutionDetailRecordWithRaw(r.Context(), requestID, section == "raw")
 		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, orchestration.ErrExecutionRecordNotFound) {
 				http.Error(w, fmt.Sprintf("execution not found: %s", requestID), http.StatusNotFound)
 			} else {
 				http.Error(w, fmt.Sprintf("Redis error: %v", err), http.StatusInternalServerError)
@@ -2220,6 +2163,11 @@ func handleExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isUnifiedRequest {
+		if section != "" {
+			response := buildExecutionDetailSection(r.Context(), execution, section, rawExecution)
+			writeJSON(w, response)
+			return
+		}
 		// Return unified view combining execution, LLM debug, and HITL data
 		unified := buildUnifiedViewWithContext(r.Context(), execution)
 		writeJSON(w, unified)
@@ -3221,91 +3169,24 @@ const resumeSiblingSearchDepth = 200
 // executionPage holds a page of summaries with cursor for pagination.
 type executionPage struct {
 	Summaries  []ExecutionSummary
-	NextCursor string // Score of last item; empty if no more pages
+	NextCursor string // Opaque member/score cursor; empty if no more pages
 	HasMore    bool
 }
 
 func getRedisExecutionSummaries(limit int, cursor string) (*executionPage, error) {
+	query, err := executionBrowseCompatibilityQuery(limit, cursor, "")
+	if err != nil {
+		return nil, err
+	}
 	client, err := getExecutionDebugClient()
 	if err != nil {
 		return nil, err
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Cursor-based pagination: fetch limit+1 to detect if there's a next page.
-	// Max score is the cursor (exclusive) or "+inf" for the first page.
-	maxScore := "+inf"
-	if cursor != "" {
-		// Use "(" prefix for exclusive range — don't re-include the cursor item
-		maxScore = "(" + cursor
-	}
-
-	// Fetch limit+1 to detect hasMore
-	fetchCount := int64(limit + 1)
-	zResults, err := client.ZRevRangeByScoreWithScores(ctx, viewerExecutionKeys.RecentIndex(), &redis.ZRangeBy{
-		Min:   "-inf",
-		Max:   maxScore,
-		Count: fetchCount,
-	}).Result()
+	page, err := loadExecutionBrowsePage(context.Background(), client, viewerExecutionKeys.RecentIndex(), query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list executions: %w", err)
+		return nil, err
 	}
-
-	// Determine pagination state
-	hasMore := len(zResults) > limit
-	if hasMore {
-		zResults = zResults[:limit] // Trim the extra item
-	}
-
-	if len(zResults) == 0 {
-		return &executionPage{}, nil
-	}
-
-	// Extract request IDs and the last score for cursor
-	requestIDs := make([]string, len(zResults))
-	var lastScore string
-	for i, z := range zResults {
-		requestIDs[i] = z.Member.(string)
-		if i == len(zResults)-1 {
-			lastScore = fmt.Sprintf("%f", z.Score)
-		}
-	}
-
-	// Batch-fetch all executions via cluster-aware Redis pipeline.
-	cmds, pipeErr := pipelineExecutionGets(ctx, client, requestIDs)
-	if pipeErr != nil {
-		return nil, fmt.Errorf("pipeline exec failed: %w", pipeErr)
-	}
-
-	summaries := make([]ExecutionSummary, 0, len(requestIDs))
-	for i, requestID := range requestIDs {
-		data, err := cmds[i].Bytes()
-		if errors.Is(err, redis.Nil) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read execution %q: %w", requestID, err)
-		}
-		execution, err := deserializeExecution(data)
-		if err != nil {
-			log.Printf("Warning: skipping execution %s: %v", requestID, err)
-			continue
-		}
-
-		summaries = append(summaries, summarizeExecution(execution))
-	}
-
-	// Batch-fetch optional LLM-debug data from the shared DB-0 keyspace.
-	// Missing enrichment data is intentionally fail-open.
-	_, _, _ = enrichExecutionSummariesFromLLMDebug(ctx, summaries)
-
-	page := &executionPage{Summaries: summaries, HasMore: hasMore}
-	if hasMore {
-		page.NextCursor = lastScore
-	}
-	return page, nil
+	return &executionPage{Summaries: page.Summaries, NextCursor: page.NextCursor, HasMore: page.HasMore}, nil
 }
 
 // getRedisExecution fetches a single execution from Redis
