@@ -66,6 +66,7 @@ let selectionVersion = 0;
 let activeTab = 'dag-viz';
 let filter = 'all';
 let cyInstance = null;
+let legendCleanup = null;
 let viewMode = 'full';
 let sortColumn = 'created_at';
 let sortDirection = 'desc';
@@ -73,11 +74,17 @@ let sortDirection = 'desc';
 const DAG_GROUP_PAGE_SIZE = 30;
 const CONVERSATION_PAGE_SIZE = 5;
 const CONVERSATION_CACHE_MAX = 10;
+const CONVERSATION_TITLE_CACHE_MAX = 100;
+const CONVERSATION_TITLE_CACHE_TTL_MS = 60_000;
 const CURSOR_HISTORY_MAX = 100;
+// Amber dotted provenance remains distinct from dashed memory/approval links.
+const DAG_PROVENANCE_COLOR = '#f3bb63';
 const listLoad = createLoadGuard();
 const detailLoad = createLoadGuard();
 const sectionLoad = createLoadGuard();
 const timelineLoad = createLoadGuard();
+const conversationTitleLoad = createLoadGuard();
+const conversationTitleCache = new Map();
 let listPageCursor = '';
 let listPageNumber = 1;
 const listPageCursors = new Map();
@@ -424,6 +431,7 @@ function updateInvocationNodes() {
             });
         });
     }
+    if (cyInstance && !cyInstance.destroyed()) updateDAGLegend(cyInstance);
 }
 
 function readGroupingPreference() {
@@ -930,6 +938,7 @@ function isDagAccessDenied(error) {
 }
 
 function clearDagAccessState(error) {
+    cleanupDAGLegend();
     llmCardBatch?.dispose();
     llmCardBatch = null;
     selectionVersion++;
@@ -937,6 +946,8 @@ function clearDagAccessState(error) {
     detailLoad.cancel();
     sectionLoad.cancel();
     timelineLoad.cancel();
+    conversationTitleLoad.cancel();
+    conversationTitleCache.clear();
     lineageLoader.destroy();
     resetParentExecutionLookup();
     selected = null;
@@ -992,6 +1003,7 @@ function clearDagAccessState(error) {
 }
 
 export function destroy() {
+    cleanupDAGLegend();
     llmCardBatch?.dispose();
     llmCardBatch = null;
     selectionVersion++;
@@ -999,6 +1011,8 @@ export function destroy() {
     detailLoad.cancel();
     sectionLoad.cancel();
     timelineLoad.cancel();
+    conversationTitleLoad.cancel();
+    conversationTitleCache.clear();
     selectedOverview = null;
     selectedSection = 'overview';
     sectionPending = false;
@@ -1329,6 +1343,7 @@ async function loadExecutionPage({ reset = false, preserveExpansion = false, cur
     }
     listQueryKey = queryKey;
     if (reset) {
+        conversationTitleLoad.cancel();
         cursor = '';
         listPageCursor = '';
         listPageNumber = 1;
@@ -1402,6 +1417,7 @@ async function loadExecutionPage({ reset = false, preserveExpansion = false, cur
         }
         renderExecutionList();
         updateDagStats(executions);
+        if (mode === 'grouped') void loadConversationTitles(nextGroups);
         updateDagLastUpdated(data.timestamp);
         const messages = [];
         if (!executions.length && groupedNextCursor) messages.push('No matches in this scanned page. Continue search to inspect the next page.');
@@ -1584,6 +1600,7 @@ function setGroupingMode(mode) {
 
     groupingMode = mode;
     listLoad.cancel();
+    conversationTitleLoad.cancel();
     listPageCursor = '';
     listPageNumber = 1;
     listPageCursors.clear();
@@ -1744,9 +1761,55 @@ function orphanRelationLabel(execution) {
     return 'Unattached related record';
 }
 
+// Titles are independent of the recent browse page, search matches and timeline
+// pagination. Reuse the bounded conversation reader for one oldest retained
+// top-level query, with two concurrent lookups and a small preview-only cache.
+async function loadConversationTitles(groups) {
+    const ticket = conversationTitleLoad.begin();
+    const now = Date.now();
+    const queue = [...new Set(groups.map(group => group.conversation_id).filter(Boolean))]
+        .filter(id => now - (conversationTitleCache.get(id)?.loadedAt || 0) >= CONVERSATION_TITLE_CACHE_TTL_MS);
+    let next = 0;
+    const current = () => conversationTitleLoad.current(ticket) && groups === groupedExecutionGroups && groupingMode === 'grouped';
+    await Promise.all(Array.from({ length: Math.min(2, queue.length) }, async () => {
+        while (current() && next < queue.length) {
+            const id = queue[next++];
+            let entry;
+            try {
+                const query = new URLSearchParams({ conversation_id: id, direction: 'asc', limit: '1' });
+                const { data } = await fetchAPI(`/api/conversations?${query}`, { signal: ticket.signal, cache: false });
+                if (!current()) return;
+                if (data.conversation_id !== id) throw new Error('Conversation identity changed while loading its title.');
+                const request = data.turns?.[0]?.execution?.original_request;
+                const text = typeof request === 'string' ? request : '';
+                entry = { text, loadedAt: Date.now(), hint: data.partial
+                    ? 'Earliest query available in this bounded lookup; earlier records may be unavailable.'
+                    : 'First retained query in this conversation.' };
+            } catch (error) {
+                if (!current() || error.name === 'AbortError') return;
+                if (isDagAccessDenied(error)) { clearDagAccessState(error); return; }
+                entry = { text: conversationTitleCache.get(id)?.text || '', loadedAt: 0, hint: 'First query unavailable. Refresh the list to try again.' };
+            }
+            conversationTitleCache.delete(id);
+            conversationTitleCache.set(id, entry);
+            while (conversationTitleCache.size > CONVERSATION_TITLE_CACHE_MAX) conversationTitleCache.delete(conversationTitleCache.keys().next().value);
+            // Update only the label, preserving expansion, keyboard focus and
+            // the selected execution while titles arrive in the background.
+            document.querySelectorAll('[data-conversation-title]').forEach(label => {
+                if (label.dataset.conversationTitle !== id) return;
+                label.textContent = truncateText(entry.text || 'Conversation', 62);
+                label.title = entry.text ? `${entry.hint}\n${entry.text}` : entry.hint;
+            });
+        }
+    }));
+}
+
 function renderConversationGroupHeader(group, expanded) {
     const turns = group.turns || [];
     const anchor = turns[0]?.execution || group.orphans?.[0] || {};
+    const titleEntry = conversationTitleCache.get(group.conversation_id);
+    const title = titleEntry ? titleEntry.text || 'Conversation' : 'Loading first query…';
+    const titleHint = titleEntry?.text ? `${titleEntry.hint}\n${titleEntry.text}` : titleEntry?.hint || 'Looking up the first retained query in this conversation.';
     const executionCount = turns.reduce(
         (count, turn) => count + 1 + (turn.related_executions || []).length,
         (group.orphans || []).length,
@@ -1781,7 +1844,7 @@ function renderConversationGroupHeader(group, expanded) {
                     aria-expanded="${expanded}"
                 >
                     <span class="dag-group-kicker">Conversation · ${turnCountLabel}</span>
-                    <span class="dag-group-title">${escapeHtml(truncateText(anchor.original_request || 'Untitled conversation', 62))}</span>
+                    <span class="dag-group-title" data-conversation-title="${escapeHtmlAttribute(group.conversation_id)}" title="${escapeHtmlAttribute(titleHint)}">${escapeHtml(truncateText(title, 62))}</span>
                     <span class="dag-group-id">${escapeHtml(shortConversationID)}</span>
                 </button>
                 <button
@@ -2400,6 +2463,7 @@ function rawExecutionText(execution = selected) {
 }
 
 function renderExecutionDetail(viewport = null) {
+    cleanupDAGLegend();
     if (!selected) return;
 
     llmCardBatch?.dispose();
@@ -2847,6 +2911,7 @@ function renderPlannerClarifications(execution, phaseNumber = null) {
 }
 
 function renderDAGVisualization(container, viewport = null) {
+    cleanupDAGLegend();
     const renderedSelection = selected;
     const renderedVersion = selectionVersion;
     const renderedMode = viewMode;
@@ -2855,9 +2920,6 @@ function renderDAGVisualization(container, viewport = null) {
     const hasHITL = selected.has_hitl_data;
     const hasPipelineHooks = (selected.pipeline_hooks || []).length > 0;
     const llmCallCount = selected.llm_interactions?.length || 0;
-    const hasImplicitDeps = (selected.plan?.steps || []).some(step =>
-        (step.implicit_deps || []).length > 0
-    );
 
     // Elapsed time and aggregate LLM call time are separate diagnostics. LLM
     // calls occur inside the elapsed interval, so they are not additive.
@@ -2887,160 +2949,48 @@ function renderDAGVisualization(container, viewport = null) {
                     <span class="dag-viz-meta-item">${stepCount} step${stepCount !== 1 ? 's' : ''}</span>
                     <span class="dag-viz-meta-item" title="${escapeHtmlAttribute(selected.duration_source || 'legacy execution duration')}">⏱️ Elapsed: ${formatDuration(totalDurationMs)}</span>
                     <span class="dag-viz-meta-item ${executionStatus(selected).css}">${executionStatus(selected).label}</span>
-                    <button type="button" class="dag-open-timeline-btn" data-refresh-execution-overview>Refresh snapshot</button>
                     ${renderRecordedClarification(selected, true)}
-                    ${hasLLM ? `<span class="dag-viz-meta-item" style="color: var(--accent-blue);">💭 ${llmCallCount} LLM calls · aggregate ${formatDuration(llmDurationMs)}</span>` : ''}
+                    ${hasLLM ? `<span class="dag-viz-meta-item" style="color: var(--accent-blue);">💭 ${llmCallCount} LLM calls · ${formatDuration(llmDurationMs)}</span>` : ''}
                     ${hasHITL && !selected.interrupted ? `<span class="dag-viz-meta-item" style="color: var(--accent-orange);">⏸️ HITL</span>` : ''}
                     ${selected.phase_count > 1 ? `<span class="dag-viz-meta-item" style="color: var(--accent-teal);">🔄 ${selected.phase_count} Phases</span>` : ''}
                     ${selected.forced_terminal ? `<span class="dag-viz-meta-item" style="color: var(--accent-orange);">⚠ Forced Terminal</span>` : ''}
-                    ${canShowFullFlow ? `
-                    <div class="dag-view-toggle">
-                        <button class="toggle-btn steps-btn ${viewMode === 'steps' ? 'active' : ''}" data-view-mode="steps">Steps Only</button>
-                        <button class="toggle-btn full-btn ${viewMode === 'full' ? 'active' : ''}" data-view-mode="full">Full Flow</button>
-                    </div>` : ''}
+                    <div class="dag-viz-actions">
+                        <button type="button" class="dag-viz-refresh" data-refresh-execution-overview aria-label="Refresh execution" title="Refresh execution snapshot">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16M3 21v-5h5"></path></svg>
+                        </button>
+                        ${canShowFullFlow ? `
+                        <div class="dag-view-toggle">
+                            <button class="toggle-btn steps-btn ${viewMode === 'steps' ? 'active' : ''}" data-view-mode="steps">Steps Only</button>
+                            <button class="toggle-btn full-btn ${viewMode === 'full' ? 'active' : ''}" data-view-mode="full">Full Flow</button>
+                        </div>` : ''}
+                    </div>
                 </div>
             </div>
-            <div id="dagContainer" class="dag-viz-canvas"></div>
-            <div id="dagLegend" class="dag-viz-legend">
-                ${viewMode === 'full' ? `
-                <!-- Full Flow Legend -->
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot orchestrator"></span>
-                    <span>Agent / delegated agent</span>
+            <div class="dag-canvas-stage">
+                <div id="dagContainer" class="dag-viz-canvas"></div>
+                <div class="dag-legend-controls">
+                    <div class="dag-canvas-toolbar">
+                        <button type="button" class="dag-fit-button" id="dagFitButton" title="Fit the whole diagram in the canvas" disabled>
+                            <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M6 2H2v4m10-4h4v4M2 12v4h4m10-4v4h-4"></path><rect x="5.5" y="5.5" width="7" height="7" rx="1"></rect></svg>
+                            Fit
+                        </button>
+                        <button type="button" class="dag-legend-toggle" id="dagLegendToggle" aria-expanded="false" aria-controls="dagLegendPanel">
+                            <svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2" width="5" height="5" rx="1.5"></rect><path d="M10 4.5h6M10 13.5h6M4 10l3.5 3.5L4 17 .5 13.5Z"></path></svg>
+                            Legend
+                        </button>
+                    </div>
+                    <section class="dag-legend-panel" id="dagLegendPanel" aria-labelledby="dagLegendHeading" hidden>
+                        <div class="dag-legend-heading">
+                            <div><h3 id="dagLegendHeading">Legend</h3><span>Symbols in this view</span></div>
+                            <button type="button" class="dag-legend-close" aria-label="Close legend">×</button>
+                        </div>
+                        <div class="dag-legend-body" id="dagLegendContent"><p class="dag-legend-empty">Preparing graph symbols…</p></div>
+                    </section>
                 </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot llm-call"></span>
-                    <span>LLM Call</span>
-                </div>
-                ${(selected.llm_interactions || []).some(call => getLLMType(call.type).role === 'skills') ? `<div class="dag-legend-item">
-                    <span class="dag-legend-dot" style="background: ${getLLMType('skill_activation_selection').accent};"></span>
-                    <span>Skill Selection</span>
-                </div>` : ''}
-                ${hasPipelineHooks ? `<div class="dag-legend-item" title="Stored deterministic pipeline hook">
-                    <span class="dag-legend-dot" style="background: #64d2ff;"></span>
-                    <span>Hook</span>
-                </div>` : ''}
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot" style="background: #a064f0;"></span>
-                    <span>Agent LLM</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot diamond checkpoint"></span>
-                    <span>Plan ✓</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot diamond checkpoint-before"></span>
-                    <span>⏸️ Before</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot diamond checkpoint-after"></span>
-                    <span>✓ After</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot diamond checkpoint-error"></span>
-                    <span>⚠️ Error</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot completed"></span>
-                    <span>Step (OK)</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot failed"></span>
-                    <span>Step (Fail)</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot response"></span>
-                    <span>Response</span>
-                </div>
-                <div class="dag-legend-item" title="All parameters resolved by auto-wiring (no LLM cost)">
-                    <span class="dag-legend-dot res-auto-wire"></span>
-                    <span>Auto-wire</span>
-                </div>
-                <div class="dag-legend-item" title="Some parameters required LLM micro-resolution">
-                    <span class="dag-legend-dot res-llm"></span>
-                    <span>LLM Resolved</span>
-                </div>
-                <div class="dag-legend-item" title="Semantic retry was used for error recovery">
-                    <span class="dag-legend-dot res-retry"></span>
-                    <span>Sem. Retry</span>
-                </div>
-                <div class="dag-legend-item" title="Template auto-include safety net fired (missing depends_on)">
-                    <span class="dag-legend-dot res-auto-include"></span>
-                    <span>Auto-Include</span>
-                </div>
-                <div class="dag-legend-item" title="Step result was trimmed before synthesis (dotted purple border)">
-                    <span class="dag-legend-dot res-trim"></span>
-                    <span>Result Trimmed</span>
-                </div>
-                ${selected.phase_count > 1 ? `
-                <div class="dag-legend-item" title="Phase boundary between iterative planning phases">
-                    <span class="dag-legend-dot phase-boundary"></span>
-                    <span>Phase →</span>
-                </div>` : ''}
-                ${hasImplicitDeps ? `
-                <div class="dag-legend-item" title="Shows that a step uses results from an earlier phase; this does not control execution order">
-                    <span class="dag-legend-dot implicit-dependency"></span>
-                    <span>Earlier-step results</span>
-                </div>` : ''}
-                ` : `
-                <!-- Steps Only Legend -->
-                <div class="dag-legend-item" title="Registered agent invoked as a capability; border retains execution status">
-                    <span class="dag-legend-dot orchestrator"></span>
-                    <span>Delegated agent</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot completed"></span>
-                    <span>Completed</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot failed"></span>
-                    <span>Failed</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot pending"></span>
-                    <span>Pending</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot blocked"></span>
-                    <span>Blocked</span>
-                </div>
-                <div class="dag-legend-item">
-                    <span class="dag-legend-dot skipped"></span>
-                    <span>Skipped</span>
-                </div>
-                <div class="dag-legend-item" title="All parameters resolved by auto-wiring (no LLM cost)">
-                    <span class="dag-legend-dot res-auto-wire"></span>
-                    <span>Auto-wire</span>
-                </div>
-                <div class="dag-legend-item" title="Some parameters required LLM micro-resolution">
-                    <span class="dag-legend-dot res-llm"></span>
-                    <span>LLM Resolved</span>
-                </div>
-                <div class="dag-legend-item" title="Semantic retry was used for error recovery">
-                    <span class="dag-legend-dot res-retry"></span>
-                    <span>Sem. Retry</span>
-                </div>
-                <div class="dag-legend-item" title="Template auto-include safety net fired (missing depends_on)">
-                    <span class="dag-legend-dot res-auto-include"></span>
-                    <span>Auto-Include</span>
-                </div>
-                <div class="dag-legend-item" title="Step result was trimmed before synthesis (dotted purple border)">
-                    <span class="dag-legend-dot res-trim"></span>
-                    <span>Result Trimmed</span>
-                </div>
-                ${selected.phase_count > 1 ? `
-                <div class="dag-legend-item" title="Phase boundary between iterative planning phases">
-                    <span class="dag-legend-dot phase-boundary"></span>
-                    <span>Phase →</span>
-                </div>` : ''}
-                ${hasImplicitDeps ? `
-                <div class="dag-legend-item" title="Shows that a step uses results from an earlier phase; this does not control execution order">
-                    <span class="dag-legend-dot implicit-dependency"></span>
-                    <span>Earlier-step results</span>
-                </div>` : ''}
-                `}
             </div>
         </div>`;
+
+    bindDAGCanvasControls(container);
 
     // Bind view-mode toggle buttons via delegation
     const vizTitle = container.querySelector('.dag-viz-title');
@@ -3080,6 +3030,7 @@ function renderDAGVisualization(container, viewport = null) {
             cyInstance = cached.cy;
             cyInstance.resize();
             cyInstance.fit(50);
+            updateDAGLegend(cyInstance);
         } else {
             // Cache miss or stale (execution switched, dagContainer was rebuilt).
             // Remove stale cache entry if any.
@@ -3089,6 +3040,8 @@ function renderDAGVisualization(container, viewport = null) {
             }
             initCytoscape();
         }
+        const fitButton = container.querySelector('#dagFitButton');
+        if (fitButton) fitButton.disabled = !cyInstance || cyInstance.destroyed();
         if (viewport && cyInstance) {
             cyInstance.zoom(viewport.zoom);
             cyInstance.pan(viewport.pan);
@@ -3200,30 +3153,176 @@ function computeExecutionStepLevels(execution) {
     return levels;
 }
 
-// Update the DAG legend with parallelism statistics
-function updateDAGLegend(depth, maxParallelism) {
-    const legendContainer = document.querySelector('.dag-viz-legend');
-    if (!legendContainer) return;
+// Legend overlays are request/view-owned. Only an open panel installs document
+// listeners, and every render, access denial and view teardown releases them.
+function cleanupDAGLegend() {
+    legendCleanup?.();
+    legendCleanup = null;
+}
 
-    // Check if stats already exist
-    let statsDiv = legendContainer.querySelector('.dag-stats');
-    if (!statsDiv) {
-        statsDiv = document.createElement('div');
-        statsDiv.className = 'dag-stats';
-        statsDiv.style.cssText = 'margin-left: auto; display: flex; gap: 16px; font-size: 11px; color: var(--text-muted);';
-        legendContainer.appendChild(statsDiv);
+function bindDAGCanvasControls(container) {
+    const controls = container.querySelector('.dag-legend-controls');
+    const toggle = controls?.querySelector('#dagLegendToggle');
+    const panel = controls?.querySelector('#dagLegendPanel');
+    const closeButton = controls?.querySelector('.dag-legend-close');
+    if (!toggle || !panel || !closeButton) return;
+    let dismissal = null;
+    const close = (restoreFocus = false) => {
+        panel.hidden = true;
+        toggle.setAttribute('aria-expanded', 'false');
+        dismissal?.abort();
+        dismissal = null;
+        if (restoreFocus && toggle.isConnected) toggle.focus({ preventScroll: true });
+    };
+    controls.querySelector('#dagFitButton')?.addEventListener('click', () => {
+        if (!cyInstance || cyInstance.destroyed() || !container.contains(cyInstance.container())) return;
+        close();
+        document.querySelectorAll('.node-popup').forEach(p => p.remove());
+        cyInstance.resize();
+        cyInstance.fit(50);
+    });
+    toggle.addEventListener('click', () => {
+        if (!panel.hidden) { close(true); return; }
+        if (cyInstance && !cyInstance.destroyed() && container.contains(cyInstance.container())) updateDAGLegend(cyInstance);
+        panel.hidden = false;
+        toggle.setAttribute('aria-expanded', 'true');
+        dismissal = new AbortController();
+        const options = { signal: dismissal.signal, capture: true };
+        document.addEventListener('pointerdown', event => {
+            if (!controls.contains(event.target)) close();
+        }, options);
+        document.addEventListener('focusin', event => {
+            if (!controls.contains(event.target)) close();
+        }, options);
+        document.addEventListener('keydown', event => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            close(true);
+        }, options);
+        closeButton.focus({ preventScroll: true });
+    });
+    closeButton.addEventListener('click', () => close(true));
+    legendCleanup = () => close();
+}
+
+// Read computed Cytoscape styles instead of maintaining another color/shape
+// table. Samples describe the graph actually rendered, including overrides.
+function dagLegendSample(element, edge = false) {
+    const style = name => element.style(name);
+    const attr = value => escapeHtmlAttribute(String(value || ''));
+    const dash = (value, pattern = '') => {
+        // Cytoscape fixes dotted strokes at [1, 1], ignoring dash-pattern.
+        if (value === 'dotted') return '1 1';
+        if (value !== 'dashed') return '';
+        const segments = String(pattern).match(/\d+(?:\.\d+)?/g)?.slice(0, 4);
+        return segments?.length ? segments.join(' ') : '6 3';
+    };
+    const opacity = value => Number.isFinite(parseFloat(value)) ? Math.min(1, Math.max(0, parseFloat(value))) : 1;
+    const svg = body => `<svg class="dag-legend-sample" width="44" height="28" viewBox="0 0 44 28" aria-hidden="true">${body}</svg>`;
+    if (edge) {
+        const color = attr(style('line-color'));
+        const pattern = dash(style('line-style'), style('line-dash-pattern'));
+        const arrow = style('target-arrow-shape') !== 'none';
+        return svg(`<path d="M3 14h${arrow ? 33 : 38}" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="${attr(style('line-cap') || 'butt')}"${pattern ? ` stroke-dasharray="${pattern}"` : ''}/>${arrow ? `<path d="m33 9 8 5-8 5Z" fill="${attr(style('target-arrow-color'))}"/>` : ''}`);
     }
+    const pattern = dash(style('border-style'), style('border-dash-pattern'));
+    const attributes = `fill="${attr(style('background-color'))}" fill-opacity="${opacity(style('background-opacity'))}" stroke="${attr(style('border-color'))}" stroke-width="2" stroke-linecap="${attr(style('border-cap') || 'butt')}"${pattern ? ` stroke-dasharray="${pattern}"` : ''}`;
+    const underlay = opacity(style('underlay-opacity') || 0);
+    const glow = underlay > 0 ? `<rect x="1" y="1" width="42" height="26" rx="7" fill="${attr(style('underlay-color'))}" fill-opacity="${underlay}"/>` : '';
+    const shape = style('shape') === 'diamond'
+        ? `<polygon points="22,2 41,14 22,26 3,14" ${attributes}/>`
+        : `<rect x="5" y="4" width="34" height="20" rx="5" ${attributes}/>`;
+    return svg(glow + shape);
+}
 
-    statsDiv.innerHTML = `
-        <span style="display: flex; align-items: center; gap: 6px;">
-            <span style="color: var(--accent-teal);">↕</span>
-            Depth: ${depth}
-        </span>
-        <span style="display: flex; align-items: center; gap: 6px;">
-            <span style="color: var(--accent-purple);">⇄</span>
-            Max Parallel: ${maxParallelism}
-        </span>
-    `;
+function collectDAGLegendEntries(graph) {
+    const groups = { nodes: new Map(), indicators: new Map(), connections: new Map() };
+    const add = (group, key, label, description, element, edge = false) => {
+        if (!groups[group].has(key)) groups[group].set(key, { label, description, sample: dagLegendSample(element, edge) });
+    };
+    const nodeLabels = {
+        orchestrator: ['Agent entry', 'Starts this execution'],
+        step: ['Step', 'Capability execution'],
+        pipeline_hook: ['Pipeline hook', 'Framework hook invocation'],
+        user_memory_group: ['Memory hook group', 'Grouped memory activity'],
+        phase_boundary: ['Phase boundary', 'Separates planning phases'],
+        response: ['Execution outcome', 'Recorded result or interruption'],
+    };
+    const statusLabels = { completed: 'Completed', failed: 'Failed', pending: 'Pending', blocked: 'Awaiting human input', skipped: 'Skipped' };
+    const resolutionLabels = { auto_wire_only: ['Auto-wired', 'Parameters resolved without an LLM'], llm_resolved: ['LLM-resolved', 'Parameter resolution used an LLM'], semantic_retry: ['Semantic retry', 'LLM-assisted error correction'] };
+    const checkpointLabels = { before_step: 'Before-step checkpoint', after_step: 'After-step checkpoint', on_error: 'Error checkpoint' };
+    graph?.nodes().forEach(node => {
+        const data = node.data();
+        const type = data.nodeType || 'step';
+        if (data.isAgentInvocation) add('nodes', 'delegated_agent', 'Delegated agent', 'Invokes another agent', node);
+        else if (['llm_call', 'llm_step', 'skill_llm', 'agent_llm', 'memory_llm'].includes(type)) {
+            add('nodes', `llm:${type}:${data.llmType}`, getLLMType(data.llmType).label, data.llmType === 'conversation_history_prepare' ? 'Context preparation' : 'LLM call', node);
+        } else if (type === 'checkpoint') {
+            add('nodes', `checkpoint:${data.checkpointType || 'plan'}`, checkpointLabels[data.checkpointType] || 'Plan approval', 'Human-in-the-loop checkpoint', node);
+        } else {
+            const [label, description] = nodeLabels[type] || ['Graph node', 'Recorded execution activity'];
+            add('nodes', type, label, description, node);
+        }
+        if (statusLabels[data.status]) add('indicators', `status:${data.status}`, statusLabels[data.status], 'Recorded step status', node);
+        if (data.hookStatus === 'failed' || data.hookStatus === 'skipped') {
+            const consequence = pipelineHookConsequence({ status: data.hookStatus, decision: data.hookDecision });
+            add('indicators', `hook:${data.hookStatus}:${consequence.action}`, data.hookStatus === 'failed' ? 'Hook failure' : 'Hook skipped', consequence.summary, node);
+        }
+        if (resolutionLabels[data.resolutionType]) {
+            const [label, description] = resolutionLabels[data.resolutionType];
+            add('indicators', data.resolutionType, label, description, node);
+        }
+        if (data.hasAutoIncludes && !data.trimmed) add('indicators', 'auto_include', 'Auto-included input', 'A referenced result was included automatically', node);
+        if (data.trimmed) add('indicators', 'trimmed', 'Result trimmed', 'Result shortened for model context', node);
+    });
+    const edgeLabels = {
+        checkpoint: ['Approval connection', 'Links a checkpoint to its step'],
+        llm_step: ['Step LLM call', 'Links a step to its model interaction'],
+        agent_llm: ['Agent LLM call', 'Links agent-side model activity'],
+        memory_llm: ['Memory activity', 'Links memory processing'],
+        failed: ['Failed-step connection', 'Links activity from a failed step'],
+        implicit_dependency: ['Earlier-step data', 'Data provenance; not execution ordering'],
+        pipeline_hook: ['Hook sequence', 'Places a hook in the execution flow'],
+        phase_transition: ['Phase transition', 'Connects planning phases'],
+        skill_selection: ['Skill selection', 'Links a selector to its consumer'],
+        hook_evidence: ['Unplaced evidence', 'Association only; placement not recorded'],
+        skill_evidence: ['Unplaced evidence', 'Association only; placement not recorded'],
+    };
+    graph?.edges().forEach(edge => {
+        const data = edge.data();
+        const type = data.edgeType || 'flow';
+        let [label, description] = edgeLabels[type] || ['Execution flow', 'Connects execution activity'];
+        if (type === 'llm_step' && data.llmType) {
+            label = `${getLLMType(data.llmType).label} link`;
+        } else if (type === 'flow') {
+            const source = edge.source?.()?.data?.();
+            const target = edge.target?.()?.data?.();
+            if (source && target && (!source.nodeType || source.nodeType === 'step') && (!target.nodeType || target.nodeType === 'step')) {
+                label = 'Step dependency';
+                description = 'The target waits for its prerequisite step';
+            }
+        }
+        const key = JSON.stringify([label, edge.style('line-color'), edge.style('line-style'), edge.style('line-dash-pattern'), edge.style('target-arrow-color'), edge.style('target-arrow-shape')]);
+        add('connections', key, label, description, edge, true);
+    });
+    return groups;
+}
+
+function updateDAGLegend(graph) {
+    const content = document.getElementById('dagLegendContent');
+    if (!content) return;
+    const groups = collectDAGLegendEntries(graph);
+    const labels = { nodes: 'Node types', indicators: 'Status & indicators', connections: 'Connections' };
+    const sections = Object.entries(groups).filter(([, entries]) => entries.size).map(([key, entries]) => `
+        <section class="dag-legend-section"><h4>${labels[key]}</h4>${[...entries.values()].map(entry => `
+            <div class="dag-legend-row">${entry.sample}<div><strong>${escapeHtml(entry.label)}</strong><span>${escapeHtml(entry.description)}</span></div></div>
+        `).join('')}</section>`).join('');
+    const levels = selected ? computeExecutionStepLevels(selected) : [];
+    const widest = Math.max(0, ...levels.map(level => level.length));
+    content.innerHTML = sections
+        ? `${sections}${levels.length ? `<div class="dag-legend-stats" title="Dependency layout, not observed runtime concurrency"><span>Step depth <strong>${levels.length}</strong></span><span>Widest level <strong>${widest}</strong></span></div>` : ''}`
+        : '<p class="dag-legend-empty">No graph symbols in this view.</p>';
 }
 
 // Get resolution info from step result for DAG node badges
@@ -3266,7 +3365,7 @@ function initCytoscape() {
     if (viewMode === 'steps' && planSteps.length === 0) {
         cyInstance = null;
         dagContainer.innerHTML = '<div class="empty-detail">No admitted steps to display. Full Flow shows the recorded execution activity.</div>';
-        updateDAGLegend(0, 0);
+        updateDAGLegend(null);
         return;
     }
 
@@ -3299,13 +3398,6 @@ function initCytoscape() {
     // Phase boundaries serialize iterative plans. Including those boundaries
     // prevents steps from different phases appearing at the same level.
     const levels = computeExecutionStepLevels(selected);
-    const maxParallelism = Math.max(...levels.map(l => l.length), 0);
-
-    // Update legend with parallelism info (only for steps view)
-    if (viewMode === 'steps') {
-        updateDAGLegend(levels.length, maxParallelism);
-    }
-
     let nodes = [];
     let edges = [];
 
@@ -4775,8 +4867,8 @@ function initCytoscape() {
                 // express scheduler ordering inside a phase.
                 selector: 'edge[edgeType="implicit_dependency"]',
                 style: {
-                    'line-color': '#b685f4',
-                    'target-arrow-color': '#b685f4',
+                    'line-color': DAG_PROVENANCE_COLOR,
+                    'target-arrow-color': DAG_PROVENANCE_COLOR,
                     'target-arrow-shape': 'triangle',
                     'line-style': 'dotted',
                     'width': 2,
@@ -4837,8 +4929,8 @@ function initCytoscape() {
                 }, 100);
             }
         },
-        // Enable better rendering
-        minZoom: 0.3,
+        // Retain Cytoscape's effectively unrestricted minimum zoom so fitting
+        // deep/wide executions is not clamped to an application-wide scale.
         maxZoom: 2
         // wheelSensitivity intentionally left at the Cytoscape default.
         // The library prints a console warning when this is customized
@@ -4847,6 +4939,7 @@ function initCytoscape() {
     });
 
     cyInstance = graph;
+    updateDAGLegend(graph);
 
     // Add click handler for nodes
     cyInstance.on('tap', 'node', function(evt) {
@@ -5428,7 +5521,7 @@ function showFullFlowNodePopup(node, nodeData) {
                 ${stepImplicitDeps.length > 0 ? `
                 <div style="margin-top: 10px;">
                     <div style="font-size: 11px; color: var(--text-muted);">Prior-phase Data</div>
-                    <div style="font-family: 'SF Mono', monospace; font-size: 10px; color: #b685f4;">${stepImplicitDeps.map(escapeHtml).join(', ')}</div>
+                    <div style="font-family: 'SF Mono', monospace; font-size: 10px; color: ${DAG_PROVENANCE_COLOR};">${stepImplicitDeps.map(escapeHtml).join(', ')}</div>
                     <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">Provenance only; this does not schedule the step.</div>
                 </div>` : ''}
                 ${nodeData.instruction ? `
@@ -5619,7 +5712,7 @@ function showNodePopup(node, step, result) {
                 </span>
             `}
             ${implicitDeps.length > 0 ? `
-                <span style="padding: 4px 10px; border-radius: 8px; font-size: 10px; background: rgba(182, 133, 244, 0.12); color: #b685f4;">
+                <span style="padding: 4px 10px; border-radius: 8px; font-size: 10px; background: ${DAG_PROVENANCE_COLOR}1f; color: ${DAG_PROVENANCE_COLOR};">
                     ⇠ ${implicitDeps.length} prior-phase data
                 </span>
             ` : ''}
@@ -5633,8 +5726,8 @@ function showNodePopup(node, step, result) {
         ` : ''}
 
         ${implicitDeps.length > 0 ? `
-            <div style="margin-bottom: 12px; padding: 8px 10px; background: rgba(182, 133, 244, 0.08); border-left: 2px dotted #b685f4; border-radius: 8px; font-size: 11px;">
-                <span style="color: #b685f4; font-weight: 600;">Uses results from earlier steps:</span>
+            <div style="margin-bottom: 12px; padding: 8px 10px; background: ${DAG_PROVENANCE_COLOR}14; border-left: 2px dotted ${DAG_PROVENANCE_COLOR}; border-radius: 8px; font-size: 11px;">
+                <span style="color: ${DAG_PROVENANCE_COLOR}; font-weight: 600;">Uses results from earlier steps:</span>
                 <span style="color: var(--text-secondary); margin-left: 6px;">${implicitDeps.join(', ')}</span>
                 <div style="color: var(--text-muted); margin-top: 4px;">Data lineage only; this does not control execution order.</div>
             </div>
@@ -6160,7 +6253,7 @@ function renderStepDetails(container) {
                                     ` : ''}
                                     ${implicitDeps.length > 0 ? `
                                         <div class="dag-step-depends-row">
-                                            <span class="dag-step-depends-label" style="color: #b685f4;">⇠ Uses earlier results:</span>
+                                            <span class="dag-step-depends-label" style="color: ${DAG_PROVENANCE_COLOR};">⇠ Uses earlier results:</span>
                                             <div class="dag-step-depends-list">
                                                 ${implicitDeps.map(dep => `<span class="dag-step-depends-item" title="Data lineage only; this does not control execution order">${dep}</span>`).join('')}
                                             </div>

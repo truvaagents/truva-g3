@@ -2604,97 +2604,6 @@ tr.expandable td:nth-child(2)::before {
     background-size: 40px 40px;
     pointer-events: none;
 }
-.dag-viz-legend {
-    padding: 8px 16px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.04) 100%);
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-    display: flex;
-    justify-content: center;
-    gap: 16px;
-    font-size: 10px;
-    color: var(--text-secondary);
-}
-.dag-legend-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 10px;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    transition: all 0.2s;
-}
-.dag-legend-item:hover {
-    background: rgba(255, 255, 255, 0.08);
-    transform: translateY(-1px);
-}
-.dag-legend-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    box-shadow: 0 0 8px currentColor, 0 0 16px currentColor;
-}
-.dag-legend-dot.completed { background: var(--accent-green); color: rgba(50, 215, 75, 0.6); }
-.dag-legend-dot.failed { background: var(--accent-red); color: rgba(255, 107, 107, 0.6); }
-.dag-legend-dot.pending { background: var(--accent-orange); color: rgba(255, 179, 64, 0.6); }
-.dag-legend-dot.skipped { background: #666; color: rgba(128, 128, 128, 0.4); }
-.dag-legend-dot.blocked { background: #0a84ff; color: rgba(10, 132, 255, 0.6); border: 1px dashed rgba(10, 132, 255, 0.8); }
-/* Full Flow legend dots - new node types */
-.dag-legend-dot.orchestrator { background: var(--accent-purple); color: rgba(218, 143, 255, 0.6); }
-.dag-legend-dot.llm-call { background: var(--accent-blue); color: rgba(10, 132, 255, 0.6); }
-.dag-legend-dot.checkpoint { background: var(--accent-orange); color: rgba(255, 179, 64, 0.6); }
-.dag-legend-dot.response { background: var(--accent-teal); color: rgba(100, 210, 255, 0.6); }
-/* Step-level HITL checkpoint types */
-.dag-legend-dot.checkpoint-before { background: #ffd60a; color: rgba(255, 214, 10, 0.6); }
-.dag-legend-dot.checkpoint-after { background: #30d158; color: rgba(48, 209, 88, 0.6); }
-.dag-legend-dot.checkpoint-error { background: #ff453a; color: rgba(255, 69, 58, 0.6); }
-.dag-legend-dot.diamond {
-    border-radius: 2px;
-    transform: rotate(45deg);
-}
-/* Resolution type legend dots - semi-transparent fill with glassmorphism double glow */
-.dag-legend-dot.res-auto-wire {
-    background: rgba(50, 215, 75, 0.15);
-    border: 1.5px solid rgba(50, 215, 75, 0.6);
-    box-shadow: 0 0 8px rgba(50, 215, 75, 0.4), 0 0 16px rgba(50, 215, 75, 0.15);
-    color: rgba(50, 215, 75, 0.6);
-}
-.dag-legend-dot.res-llm {
-    background: rgba(100, 160, 255, 0.15);
-    border: 1.5px solid rgba(100, 160, 255, 0.6);
-    box-shadow: 0 0 8px rgba(100, 160, 255, 0.4), 0 0 16px rgba(100, 160, 255, 0.15);
-    color: rgba(100, 160, 255, 0.6);
-}
-.dag-legend-dot.res-retry {
-    background: rgba(175, 130, 255, 0.15);
-    border: 1.5px solid rgba(175, 130, 255, 0.6);
-    box-shadow: 0 0 8px rgba(175, 130, 255, 0.4), 0 0 16px rgba(175, 130, 255, 0.15);
-    color: rgba(175, 130, 255, 0.6);
-}
-.dag-legend-dot.res-trim {
-    background: rgba(130, 90, 220, 0.15);
-    border: 2px dotted rgba(130, 90, 220, 0.7);
-    box-shadow: 0 0 8px rgba(130, 90, 220, 0.4), 0 0 16px rgba(130, 90, 220, 0.15);
-    color: rgba(130, 90, 220, 0.6);
-}
-.dag-legend-dot.res-auto-include {
-    background: rgba(255, 140, 50, 0.15);
-    border: 1.5px dashed rgba(255, 140, 50, 0.6);
-    box-shadow: 0 0 8px rgba(255, 140, 50, 0.4), 0 0 16px rgba(255, 140, 50, 0.15);
-    color: rgba(255, 140, 50, 0.6);
-}
-.dag-legend-dot.phase-boundary {
-    background: rgba(100, 210, 255, 0.15);
-    border: 2px dashed rgba(100, 210, 255, 0.6);
-    box-shadow: 0 0 8px rgba(100, 210, 255, 0.4), 0 0 16px rgba(100, 210, 255, 0.15);
-    color: rgba(100, 210, 255, 0.6);
-}
-.dag-legend-dot.implicit-dependency {
-    background: rgba(182, 133, 244, 0.15);
-    border: 2px dotted rgba(182, 133, 244, 0.75);
-    box-shadow: 0 0 8px rgba(182, 133, 244, 0.4), 0 0 16px rgba(182, 133, 244, 0.15);
-    color: rgba(182, 133, 244, 0.7);
-}
 .dag-phase-divider {
     background: linear-gradient(135deg, rgba(25, 25, 35, 0.6) 0%, rgba(15, 15, 22, 0.6) 100%);
     backdrop-filter: blur(10px) saturate(180%);
@@ -2719,13 +2628,45 @@ tr.expandable td:nth-child(2)::before {
 }
 
 /* View toggle for DAG (Steps Only / Full Flow) */
+.dag-viz-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.dag-viz-refresh {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid rgba(100, 210, 255, 0.45);
+    border-radius: 50%;
+    background: linear-gradient(145deg, rgba(100, 210, 255, 0.14), rgba(10, 132, 255, 0.06));
+    color: var(--accent-teal);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 2px 6px rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+}
+
+.dag-viz-refresh:hover {
+    border-color: var(--accent-teal);
+    background: linear-gradient(145deg, rgba(100, 210, 255, 0.23), rgba(10, 132, 255, 0.12));
+    color: var(--text-primary);
+}
+
+.dag-viz-refresh:active { box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.25); }
+.dag-viz-refresh:focus-visible { outline: 2px solid var(--accent-teal); outline-offset: 3px; }
+
 .dag-view-toggle {
     display: flex;
     gap: 2px;
     background: rgba(0, 0, 0, 0.3);
     padding: 2px;
     border-radius: 6px;
-    margin-left: auto;
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 .dag-view-toggle .toggle-btn {

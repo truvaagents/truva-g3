@@ -36,14 +36,84 @@ globalThis.setTimeout = (callback, delay, ...args) => delay === 50 ? 0 : origina
 const moduleURL = new URL('../static/js/views/dag.js', import.meta.url);
 let source = await readFile(moduleURL, 'utf8');
 source = source.replace(/from '(\.\.[^']+)'/g, (_, path) => `from '${new URL(path, moduleURL).href}'`);
-source += `\nexport { selectExecution, renderServerExecutionGroups, renderTimelineTurn, renderLegacyExecutionList, discoverExecutionLineage, renderExecutionLineageNavigation, renderAgentParentInfo, renderParentExecution, loadParentExecution, updateDetailTabs, renderExecutionDetail, renderSingleLLMCard, renderDelegatedExecutionLinks };
+source += `\nexport { collectDAGLegendEntries, dagLegendSample, loadConversationTitles, selectExecution, renderServerExecutionGroups, renderTimelineTurn, renderLegacyExecutionList, discoverExecutionLineage, renderExecutionLineageNavigation, renderAgentParentInfo, renderParentExecution, loadParentExecution, updateDetailTabs, renderExecutionDetail, renderSingleLLMCard, renderDelegatedExecutionLinks };
 export function testState() { return selected; }
 export function testInstall(records, groups = []) { executions = records; groupedExecutionGroups = groups; activeTab = 'dag-raw'; for (const group of groups) { expandedGroupKeys.add(group.group_key); if (group.conversation_id) conversationCache.set(group.conversation_id, { data: group, history: [], cursor: '', pending: false }); } }
 export function testSetSelection(value, tab = 'dag-raw') { selected = value; activeTab = tab; }
 export function testActiveTab() { return activeTab; }
 export function testSetActiveTab(value) { activeTab = value; }
+export function testTitleGroups(value) { groupedExecutionGroups = value; groupingMode = 'grouped'; }
+export function testTitleCache() { return new Map(conversationTitleCache); }
 `;
 const view = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+// Legend entries are derived from actual rendered element styles and data.
+const legendElement = (data, styles = {}) => ({ data: () => data, style: key => ({
+    'background-color': '#112233', 'background-opacity': '0.7', 'border-color': '#abcdef',
+    'border-style': 'solid', shape: 'round-rectangle', 'underlay-opacity': '0',
+    'line-color': '#778899', 'line-style': 'solid', 'target-arrow-shape': 'triangle',
+    'target-arrow-color': '#778899', ...styles,
+})[key] });
+const legendData = [
+    { nodeType: 'orchestrator' },
+    { nodeType: 'step', status: 'completed', isAgentInvocation: true },
+    { nodeType: 'step', status: 'failed', trimmed: true, hasAutoIncludes: true },
+    { nodeType: 'skill_llm', llmType: 'skill_activation_selection' },
+    { nodeType: 'skill_llm', llmType: 'skill_resource_selection' },
+    { nodeType: 'memory_llm', llmType: 'conversation_history_prepare' },
+    { nodeType: 'pipeline_hook', hookStatus: 'failed', hookDecision: { action: 'continue' } },
+];
+const legendOriginal = JSON.stringify(legendData);
+const entries = view.collectDAGLegendEntries({
+    nodes: () => legendData.map(data => legendElement(data)),
+    edges: () => [legendElement({ edgeType: 'skill_evidence' }, { 'line-style': 'dotted', 'target-arrow-shape': 'none' })],
+});
+assert.ok(entries.nodes.has('delegated_agent'));
+assert.ok(entries.nodes.has('llm:skill_llm:skill_activation_selection'));
+assert.ok(entries.nodes.has('llm:skill_llm:skill_resource_selection'));
+assert.equal(entries.nodes.get('llm:memory_llm:conversation_history_prepare').description, 'Context preparation');
+assert.ok(entries.indicators.has('status:failed'));
+assert.ok(entries.indicators.has('trimmed'));
+assert.ok(!entries.indicators.has('auto_include'), 'a border overridden by trimming is not advertised as visible');
+assert.match(entries.indicators.get('hook:failed:continue').description, /request continued/);
+assert.ok(![...entries.nodes.keys()].some(key => key.startsWith('checkpoint:')), 'absent checkpoint symbols are omitted');
+const association = [...entries.connections.values()][0];
+assert.match(association.description, /placement not recorded/);
+assert.doesNotMatch(association.sample, /m33 9/, 'unplaced evidence has no directional arrow');
+assert.match(association.sample, /stroke-dasharray="1 1"/);
+const diamond = view.dagLegendSample(legendElement({}, { shape: 'diamond', 'border-color': '#123456' }));
+assert.match(diamond, /<polygon/);
+assert.match(diamond, /stroke="#123456"/);
+assert.match(diamond, /width="44" height="28"/);
+const dashedEdge = view.dagLegendSample(legendElement({}, { 'line-style': 'dashed', 'line-dash-pattern': '8px 4px' }), true);
+assert.match(dashedEdge, /stroke-dasharray="8 4"/);
+const provenance = legendElement({ edgeType: 'implicit_dependency' }, {
+    'line-color': '#f3bb63', 'target-arrow-color': '#f3bb63',
+    'line-style': 'dotted', 'line-dash-pattern': '6px 3px',
+});
+const allConnections = view.collectDAGLegendEntries({ nodes: () => [], edges: () => [
+    provenance,
+    legendElement({ edgeType: 'llm_step', llmType: 'result_distillation' }, { 'line-color': '#8250dc', 'line-style': 'dotted' }),
+    legendElement({ edgeType: 'phase_transition' }, { 'line-style': 'dashed', 'line-dash-pattern': '8px 4px' }),
+    { ...legendElement({}), source: () => legendElement({ nodeType: 'step' }), target: () => legendElement({ nodeType: 'step' }) },
+    legendElement({ edgeType: 'failed' }),
+] }).connections;
+const connectionEntries = [...allConnections.values()];
+const provenanceEntry = connectionEntries.find(entry => entry.label === 'Earlier-step data');
+assert.match(provenanceEntry.sample, /stroke="#f3bb63"/);
+assert.match(provenanceEntry.sample, /fill="#f3bb63"/);
+assert.match(provenanceEntry.sample, /stroke-dasharray="1 1"/, 'dotted edges ignore inherited dash-pattern just like Cytoscape');
+assert.match(provenanceEntry.sample, /stroke-linecap="butt"/, 'round caps must not close the small dotted gaps');
+assert.match(provenanceEntry.description, /not execution ordering/);
+assert.ok(connectionEntries.some(entry => entry.label === 'Result Distillation link'));
+assert.ok(connectionEntries.some(entry => entry.label === 'Step dependency'));
+assert.ok(connectionEntries.some(entry => entry.label === 'Failed-step connection'));
+const dottedBorder = view.dagLegendSample(legendElement({}, { 'border-style': 'dotted', 'border-dash-pattern': '6px 3px' }));
+assert.match(dottedBorder, /stroke-dasharray="1 1"/);
+const dashedBorder = view.dagLegendSample(legendElement({}, { 'border-style': 'dashed', 'border-dash-pattern': '7px 2px' }));
+assert.match(dashedBorder, /stroke-dasharray="7 2"/);
+assert.equal(JSON.stringify(legendData), legendOriginal, 'legend collection does not rewrite graph evidence');
+assert.equal(view.collectDAGLegendEntries(null).nodes.size, 0);
+
 const traceCard = values => view.renderSingleLLMCard({ type: 'plan_generation', prompt: 'Exact prompt', response: 'Exact response', success: true, ...values }, 0);
 const firstTraceCard = traceCard({ trace_id: 'first-call-trace' });
 assert.match(firstTraceCard, /href="\/api\/traces\/first-call-trace"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/);
@@ -388,5 +458,64 @@ await tick();
 assert.equal(view.testState(), null);
 assert.equal(elements.get('dagDetailContent').innerHTML, afterDestroy);
 assert.equal(elements.has('dagExecutionLineage'), false, 'no test path renders the removed top block');
+
+// Group titles use an independent oldest-turn read, rather than a later query
+// from the browse page. Background work stays bounded and selection-owned.
+const titleGroups = Array.from({ length: 6 }, (_, index) => ({
+    group_key: `title-group-${index}`, conversation_id: `title-conversation-${index}`,
+    turns: [{ execution: { ...record(`title-latest-${index}`), original_request: 'Latest follow-up' } }], orphans: [],
+}));
+const titleLabels = titleGroups.map(group => ({ ...element(), dataset: { conversationTitle: group.conversation_id } }));
+const originalQuerySelectorAll = document.querySelectorAll;
+document.querySelectorAll = selector => selector === '[data-conversation-title]' ? titleLabels : originalQuerySelectorAll(selector);
+let activeTitleReads = 0, maxTitleReads = 0, titleReads = 0;
+const titleResponse = (conversationID, request = `First query <${conversationID}>`) => ({
+    ok: true, status: 200, headers: { get() { return null; } },
+    json: async () => ({ conversation_id: conversationID, turns: [{ execution: { original_request: request } }] }),
+});
+globalThis.fetch = async endpoint => {
+    const url = new URL(endpoint, 'http://viewer.local');
+    assert.equal(url.pathname, '/api/conversations');
+    assert.equal(url.searchParams.get('direction'), 'asc');
+    assert.equal(url.searchParams.get('limit'), '1');
+    assert.equal(url.searchParams.get('q'), null, 'browse search cannot hide the first query');
+    assert.equal(url.searchParams.get('from'), null, 'browse window cannot hide the first query');
+    titleReads++;
+    maxTitleReads = Math.max(maxTitleReads, ++activeTitleReads);
+    await new Promise(resolve => originalSetTimeout(resolve, 1));
+    activeTitleReads--;
+    return titleResponse(url.searchParams.get('conversation_id'));
+};
+view.testTitleGroups(titleGroups);
+await view.loadConversationTitles(titleGroups);
+assert.equal(maxTitleReads, 2);
+assert.equal(titleReads, titleGroups.length);
+assert.ok(titleLabels.every(label => label.textContent.startsWith('First query <')));
+view.renderServerExecutionGroups(titleGroups);
+assert.match(elements.get('dagTableBody').innerHTML, /First query &lt;title-conversation-0&gt;/);
+assert.doesNotMatch(elements.get('dagTableBody').innerHTML, /Latest follow-up/, 'collapsed header uses the first query');
+await view.loadConversationTitles(titleGroups);
+assert.equal(titleReads, titleGroups.length, 'rerenders reuse the preview cache');
+
+const wrongTitleGroups = [{ ...titleGroups[0], conversation_id: 'expected-conversation' }];
+view.testTitleGroups(wrongTitleGroups);
+globalThis.fetch = async () => titleResponse('another-conversation', 'Wrong conversation query');
+await view.loadConversationTitles(wrongTitleGroups);
+assert.equal(view.testTitleCache().get('expected-conversation').text, '', 'wrong conversation text is rejected');
+
+let finishTitle, titleSignal;
+const lateTitleGroups = [{ ...titleGroups[0], conversation_id: 'late-conversation' }];
+view.testTitleGroups(lateTitleGroups);
+globalThis.fetch = (endpoint, options) => {
+    titleSignal = options.signal;
+    return new Promise(resolve => { finishTitle = () => resolve(titleResponse('late-conversation')); });
+};
+const pendingTitle = view.loadConversationTitles(lateTitleGroups);
+view.destroy();
+assert.equal(titleSignal.aborted, true);
+finishTitle();
+await pendingTitle;
+assert.equal(view.testTitleCache().size, 0, 'late responses cannot restore title data after teardown');
+document.querySelectorAll = originalQuerySelectorAll;
 globalThis.setTimeout = originalSetTimeout;
 console.log('All DAG lineage view integration tests passed.');

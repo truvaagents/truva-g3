@@ -4,10 +4,10 @@ Request lifecycle badges use the framework's optional `lifecycle` evidence,
 independently of individual step success. Older records without it are labelled
 unknown. A completed request can have failed steps or a negative application
 disposition. The completed-request percentage uses all listed requests as its
-denominator; unknown records are not counted as completed. Selected details
-refresh without reselection and reject older record revisions.
-LLM/hook updates are refreshed even when the lifecycle revision is
-unchanged.
+denominator; unknown records are not counted as completed. Execution-list
+refreshes do not reload selected evidence. Select an execution, open a detail
+tab, or use the explicit Refresh action to read current evidence.
+LLM and hook records can advance independently of the execution lifecycle.
 
 An independently deployable, real-time web dashboard for inspecting the TruvaG3
 service registry, execution records, LLM debug data, HITL checkpoints, skills,
@@ -18,6 +18,7 @@ container-build changes described below.
 ## Table of Contents
 
 - [Features](#features)
+- [Bounded Execution Browsing](#bounded-execution-browsing)
 - [Quick Start](#-quick-start)
 - [Setup Script Commands](#setup-script-commands)
 - [Configuration](#configuration)
@@ -120,10 +121,11 @@ advance on a later write and does not describe invocation order.
 
 To open a retained execution directly, use
 `http://registry.localhost/?view=dag&request_id=orch-EXAMPLE` (replace
-`orch-EXAMPLE` with its URL-encoded request ID). This opens its details and
-discovers its family without first loading a conversation or finding the row in
-the current list. The URL follows successful selections while this execution
-link is active; switching to another screen removes the execution target. An
+`orch-EXAMPLE` with its URL-encoded request ID). This explicitly opens the
+execution overview without first finding its row. Related-execution discovery
+runs only when requested from its navigation controls. The URL follows successful
+selections while this execution link is active; switching to another screen
+removes the execution target. An
 absent or invalid target keeps the normal Registry start screen. A missing
 execution does not select a different record as a substitute.
 
@@ -137,21 +139,18 @@ single-record trace index. Candidate records are summarized/released in batches
 to limit heap use; full selected/ancestor records retain their existing read
 semantics. Missing/expired/unindexed work can leave coverage incomplete.
 
-A cold family selection performs one coalesced lookup. Known-family navigation
-reuses the summary cache; periodic refresh continues existing list/detail reads
-and adds no broad lineage scans. **Refresh related executions**, in the starting
-agent popup and the Parent Execution tab's family details, explicitly rechecks
-the family. The tab's family details show discovery time/coverage. The exact
-parent record has a separate refresh action; it does not fetch the parent's
-LLM store. A slow or
-unavailable lookup leaves selected execution details usable; older records
-without parent fields remain related/unknown. Jaeger preserves the distributed
-trace independently. Reproduce the synthetic 5,000-record capacity check with
-`GOMEMLIMIT=512MiB go test -run '^$' -bench BenchmarkExecutionLineageBusyHistory -benchmem`
-in this example's configured workspace. It compares full-record hydration,
-lineage loading and two simultaneous lookups, including allocation and peak
-heap measurements. The Redis fixture has its own reported heap; these results
-are workload-specific rather than a universal sizing promise.
+Family discovery is explicit. **Refresh related executions** in the agent-node
+popup, or **Refresh** in the Parent Execution tab's related-executions section,
+performs one coalesced bounded lookup; simply selecting a row does not scan the
+execution history. Step popups show a compact **View agent execution** link only
+for known child records, without a generic family-lookup control. Exact recorded
+parent links stay available without family discovery. The read inspects at most
+120 recent global candidates
+and 120 recent conversation candidates, in batches of eight, plus at most 20
+exact selected/ancestor records. Bound and backend-failure reasons remain visible;
+this is not an exhaustive family-history query. Search the request-family ID to
+continue looking through older pages. The separate parent read fetches only its
+overview and does not read the parent's LLM store.
 
 ### Skills Management
 
@@ -166,6 +165,105 @@ For the complete authoring, binding, runtime, and operational workflow, see the
 - Delete one version or a bounded inclusive range with protected-version checks
 - Inspect each execution's body-free candidate, activation, resource-load,
   projection, and diagnostic evidence in its **Skills** tab
+
+## Bounded Execution Browsing
+
+The Viewer is a read layer over the existing framework records. It does not add
+execution-storage keys, rewrite records, or change framework retention.
+
+- **Initial load:** the Execution DAG opens with a flat page of at most **30
+  execution summaries**. No execution detail, LLM payload, conversation history
+  or related-family scan is loaded automatically.
+- **Conversation:** open one explicitly to read at most **five top-level turns**.
+  Grouped entries use the **first retained query** as their title, independent
+  of the current search or browse page. Titles use one oldest-turn lookup per
+  visible conversation, at most two lookups at once, with a bounded short-lived
+  cache; the group order still reflects the latest matching activity.
+  Page controls request the next small window. Delegated children remain separate
+  execution links and are discovered on demand. Expanding a grouped search result
+  shows its matching summaries, five turns at a time, from the current bounded
+  browse page. **View timeline** separately opens the broader conversation history.
+- **Selected execution:** clicking a row reads a projected overview, then loads
+  Full Flow for that execution. Steps Only uses the lightweight overview;
+  the other evidence tabs load their own sections. The title and horizontally
+  scrolling tabs share one row to preserve canvas height.
+  The cyan refresh icon immediately before **Steps Only** reloads the selected
+  execution snapshot and its displayed evidence.
+  Resumed executions use **Resume step N** for invocation-local numbering until
+  their offset is observed. A matching stored checkpoint or an explicit HITL
+  read supplies the completed-step count and the offset, excluding completed
+  steps already present in the displayed plan. The small numbering fact remains
+  available across evidence tabs for that selected execution.
+- **Evidence:** Steps, LLM Calls, Pre-Execution, Post-Execution, HITL, Skills and
+  Raw JSON each load their own requested section. Full Flow loads on execution
+  selection. Raw JSON is indented without changing number or string literals;
+  its Copy button copies the original stored JSON text.
+  LLM node popups link to the matching call card in LLM Calls. Hook calls link
+  to their cards in Pre-Execution or Post-Execution. The target card is revealed
+  and focused, including calls beyond the initial ten-card batch.
+  Pipeline hook popups show compact invocation summaries; full errors, effects,
+  and decision details stay in the linked hook card. Hooks without a recorded
+  stage link to Raw JSON instead of guessing a destination.
+  Full Flow also shows recorded **Skill Activation** and **Skill Resources**
+  calls in a shared lime color, before their observed planning or synthesis
+  consumer. When phase or timing evidence is insufficient, a dotted association
+  keeps the call visible without asserting execution order.
+  The floating **Legend** button opens a glass panel over the canvas, with
+  larger symbols taken from the displayed graph's actual styles. It includes
+  only the node types, indicators and connections present in that view; opening
+  it does not resize the graph or fetch more data. Close it with Escape, the
+  close button, or an outside click. Step-layout statistics are inside the panel.
+  Warm-amber dotted arrows indicate **Earlier-step data** (data provenance),
+  distinct from blue flow and purple agent/model activity. Memory and approval
+  links use darker amber with dashed lines. The corresponding provenance popup
+  and step-detail labels use the same warm-amber color.
+  The canvas fits the complete diagram on load, including deep or wide flows;
+  zoom-out is no longer capped at 30%. Use the floating **Fit** button to return
+  to the whole diagram after zooming or panning. Fit centers the diagram within
+  the visible canvas, including after resizing the window or left pane.
+  Zoom in for readable node text.
+  Switching tabs releases the previous heavy section rather than retaining an
+  unbounded collection of execution payloads.
+- **Refresh:** the timer refreshes the current summary page only. An explicit
+  Refresh reads the selected view again, including late hook/debug updates.
+- **Search:** request text, execution/family/conversation IDs, trace IDs and agent
+  names are matched on the server. Exact execution IDs can be retrieved directly.
+  An exact hit appears first; remaining matching family records continue through
+  bounded pages without repeating that hit.
+  Use a time window to narrow a text search. A sparse search can return an empty
+  page with a continuation; **Continue search** examines the next bounded window.
+  A page count or rate describes the displayed page, not the entire backend.
+
+Pagination replaces the current page instead of appending every visited record.
+The footer highlights the current page and provides clickable visited-page
+numbers. Its **Page** picker jumps directly to any of up to 100 visited pages
+retained for that query; **Next** discovers another page.
+These jumps fetch only the selected page. Changing filters or the time window
+clears that navigation history; an exact total page count is not calculated.
+Cursors are bound to the query and preserve equal-score positions. They follow
+last-snapshot ordering; concurrent writes can move a record between pages, so a
+cursor is not an immutable historical snapshot. Changed filters start a new
+query. A moved or expired cursor anchor returns HTTP 409 and clears the expired
+navigation state; Refresh starts again from the latest page in that query.
+Old or expired records and bounded omissions are reported; they do not
+silently stop pagination.
+
+Browser response caching is limited to 40 entries, 4 MiB of serialized JSON in
+total, 512 KiB per entry and 60 seconds per entry. These bounds do not describe
+exact JavaScript heap usage. Heavy detail requests bypass that cache. Protected
+responses retain their `private, no-store` behavior. Conversation-page caches
+retain at most ten entries; graph instances retain their existing three-entry
+bound. Superseded requests are cancelled and stale responses cannot replace the
+current selection.
+
+The backend admits at most four simultaneous execution/conversation/LLM data
+reads per process. Additional inspection requests receive HTTP 429 with
+`Retry-After: 1`; health checks and mutations use their existing paths. This
+keeps a burst of browser tabs from creating an unbounded decode workload. The
+inspection routes reject unsupported methods before reading records. The
+slot covers response buffering, compression and writing; the HTTP server has
+one-minute write and idle timeouts so a stalled client cannot hold a slot
+indefinitely.
 
 ## 🚀 Quick Start
 
@@ -436,13 +534,18 @@ manual UI checklist, and cluster acceptance rules are in
 | `GET /api/services` | JSON list of all registered services |
 | `GET /api/health` | Health check endpoint |
 | `GET /api/readiness` | Credential-safe Redis reachability, topology, DB-0, and deployment-namespace status |
-| `GET /api/llm-debug` | List recent LLM debug records |
+| `GET /api/llm-debug?summary_only=true&limit=30` | Page LLM record headers without loading interaction bodies |
+| `GET /api/llm-debug/summaries?request_id={id}` | Read compact deduplicated totals for up to five distinct repeated `request_id` values |
+| `GET /api/llm-debug` | Legacy full-summary listing; may read complete debug records |
 | `GET /api/llm-debug/{request_id}` | Get full debug record by request ID |
-| `GET /api/executions` | List recent executions in the existing flat response shape |
-| `GET /api/executions?group_conversations=true` | List server-owned conversation groups; stable execution-debug indexes support filter-aware cursor pagination |
-| `GET /api/executions/{request_id}/unified` | Get unified execution, DAG, LLM, HITL, stored trace identity, and conversation detail |
+| `GET /api/executions?limit=30` | Page execution summaries; accepts cursor, q, status, agent and from/to time bounds |
+| `GET /api/executions?group_conversations=true` | Group only the current bounded page; counts describe that window |
+| `GET /api/executions/{request_id}/unified?section=overview` | Project the selected execution without optional-store or evidence-body reads |
+| `GET /api/executions/{request_id}/unified?section=steps` | Load requested step evidence; other sections are llm, pre, post, hitl, skills, raw and flow |
+| `GET /api/executions/{request_id}/unified` | Legacy complete unified view, retained for explicit API compatibility |
 | `GET /api/traces/{trace_id}` | Temporarily redirect the browser to the trace page under the configured `JAEGER_UI_URL` |
-| `GET /api/conversations?conversation_id={id}` | Get one verified chronological conversation timeline |
+| `GET /api/conversations?conversation_id={id}&limit=5` | Read one five-turn conversation page; next_cursor continues history |
+| `GET /api/conversations?conversation_id={id}&direction=asc&limit=1` | Read the earliest retained top-level query for a grouped conversation title |
 | `GET /api/v1/skills` | List body-free published skill metadata; optional `namespace`, `domain`, `tag`, and `limit` filters |
 | `GET /api/v1/skills/schema` | Get the complete authoring JSON Schema with its active constraints |
 | `POST /api/v1/skills/{namespace}/{name}/validate` | Deterministically normalize and validate a complete package without mutation |
@@ -465,59 +568,67 @@ Built-in stores preserve those payloads rather than inferring redaction. Do not
 expose the bundled local ingress to an untrusted network without an application-
 owned authentication, authorization, and data-protection layer.
 
-The conversation endpoints read framework-owned LLM and execution evidence
-from their versioned subspaces on one shared DB-0 client. LLM-debug records are
-read-only to the Viewer. The execution-debug projection is not:
-grouped and timeline reads remove only index members whose authoritative
-execution key has been confirmed missing. They never delete an execution record
-or invent a relationship. The Viewer therefore needs read access to the
-LLM-debug subspace and read/write access to execution-debug sorted-set indexes.
+### Browse safety bounds and coverage
 
-### Grouped execution safety bounds
+The browser's bounded list and conversation routes read the existing versioned
+DB-0 keys. They do not write an index, remove stale entries, extend TTLs or
+maintain their own durable database. Legacy API paths retain their existing
+framework-store behavior, including any confirmed-missing index cleanup.
 
-Grouped and timeline requests use named application-local limits so one
-diagnostic request cannot perform an unbounded Redis scan. These are Registry
-Viewer implementation limits, not `TRUVAG3_*` framework configuration:
+These are named Viewer implementation limits, not framework defaults:
 
 | Bound | Value |
 |------|------:|
-| Default groups per page | 50 |
-| Maximum groups per page | 200 |
-| Global execution-index members scanned | 5000 |
-| Distinct conversations expanded | 500 |
-| Execution records hydrated | 10000 |
-| Members read from one conversation index | 1000 |
-| Executions enriched from LLM Debug per response | 200 |
-| LLM Debug interactions accepted per execution | 100 |
-| LLM Debug interaction bytes accepted per execution | 4 MiB |
-| Maximum encoded grouped cursor length | 2048 bytes |
-| Background stale global-index scan | 200 members, at most once per 30 seconds per Viewer process |
+| Default executions per page | 30 |
+| Maximum execution page size | 100 |
+| Conversation turns per page | 5 |
+| Index candidates examined per browse request | 200 |
+| Index batch | 32 candidates plus one lookahead |
+| Stored or decompressed execution bytes per browse record | 16 MiB |
+| Stored / decompressed bytes per browse request | 32 MiB each |
+| Maximum encoded browse cursor | 2048 bytes |
+| List request-text preview | 1000 bytes, with a truncation flag |
+| Retained list metadata | Only `resume_checkpoint_id`, up to 512 bytes |
+| Browse request deadline | 10 seconds |
+| Simultaneous execution/conversation/LLM reads | 4 per Viewer process |
+| Simultaneous grouped-title lookups | 2 per browser tab |
+| Grouped-title cache | 100 request-text previews, 60-second maximum age |
+| LLM automatic-summary batch | 5 records |
+| Simultaneous cold LLM-summary calculations | 2 per Viewer process |
+| Compact LLM-summary cache | 256 records, 60-second maximum age |
+| Automatic LLM-summary record bounds | 512 stored interactions and 16 MiB of encoded interaction data |
+| LLM-summary batch/work deadline | 5 seconds each |
 
-When an execution-debug membership or grouping bound is reached, the response sets
-`partial=true` and omits a grouped continuation cursor. The existing flat
-execution list remains available for request-by-request troubleshooting.
+Execution browse records are read and decoded one at a time. Initial list/header
+generation does not read LLM interaction bodies or expand all members of each
+conversation. A byte, scan or
+record-format bound sets coverage diagnostics while allowing cursor progress;
+complete payloads remain available through explicit detail reads. A missing
+index entry cannot be reconstructed by browsing, so retained-index coverage is
+not proof of every historical execution ever recorded.
 
-Elapsed-duration sorting (`sort=total_duration_ms`, retained as the compatible
-query name) uses a non-additive wall-clock envelope. The baseline is the stored
-phase-loop duration. Step timestamps may extend that envelope, and bounded LLM-debug
-enrichment may extend it to include LLM calls that occurred outside the first
-and last recorded step. The Viewer takes the largest credible envelope; it does
-not add step and LLM durations that may overlap. Aggregate LLM call time is
-reported separately.
+The LLM Debug list fills interaction count, tokens and error status automatically
+for its current page after the headers appear. It sends one summary batch at a
+time and cancels obsolete page loads. The backend reuses the framework's existing
+deduplication function, shares concurrent requests for the same record, and
+caches only compact derived values. Cache reuse checks the existing creation and
+update metadata plus stored-list length, so same-second appends invalidate totals.
+A cold calculation reads bounded interaction chunks; prompts and responses are
+not sent to the browser until the operator opens a record. The read-only
+projection leaves records and TTLs unchanged.
 
-Because the elapsed envelope can depend on mutable LLM-debug evidence, duration
-sorting is a bounded point-in-time sort: when more groups exist than the
-requested limit, the response is partial and does not provide a continuation
-cursor. A supplied duration-sort cursor is rejected. Created and request-text
-sorts use immutable execution-debug values and retain grouped keyset pagination.
+An expired, malformed, changing or oversized record shows **Unavailable**, rather
+than a partial count or a successful zero. A later refresh can retry it; the
+explicit full-record endpoint remains available. **No Errors** describes recorded
+interaction outcomes, not overall execution success. Page token totals identify
+how many records contributed and are not backend-wide totals.
 
-If an LLM-debug enrichment read fails or reaches any enrichment bound, timeline and
-grouped responses set `llm_enrichment_incomplete=true`. Created and request-text
-sorts paginate from execution-debug indexes first and enrich only the returned page, so incomplete
-optional LLM-debug details do not suppress their valid `next_cursor`. Combined
-duration sorting sets `partial=true` when enrichment is incomplete because LLM-debug data
-contributes to its ordering. The Viewer does not publish a partial per-execution
-LLM duration or call count as though it were complete.
+Server ordering is `created_at` ascending or descending, after any exact-ID hit
+placed first in search results. Optional `from` and
+`to` bounds use RFC3339 timestamps. Unsupported global sorts are rejected rather
+than presented as globally accurate. Stored execution duration and observed step
+timestamps remain available in the summary; independent LLM duration and call
+counts are loaded with the requested evidence, not reconstructed for every row.
 
 For HITL resume records, elapsed observation ignores restored pre-checkpoint
 steps and uses resume-owned steps/phases plus later LLM evidence. This prevents
@@ -577,13 +688,22 @@ business outcome.
 
 ### Unified-detail enrichment cost
 
-Each `GET /api/executions/{request_id}/unified` load is assembled on demand and
-is not cached by the Viewer. It reads the execution record, reads bounded LLM-debug
-evidence, may fan out to agent checkpoint APIs for HITL state, and may inspect
-up to 200 recent execution summaries to find an HITL sibling. Pipeline-hook
-diagnostics are part of the provider-neutral execution record; the Viewer never
-queries Jaeger to construct execution detail. A stored trace ID provides only
-an optional browser link through `JAEGER_UI_URL`.
+The browser uses the section-specific unified route. Overview reads one selected
+execution and projects graph/status information; it does not fetch LLM debug,
+HITL families or other executions. Requested LLM/hook sections read only that
+execution's debug record. Requested HITL state queries only the recorded owning
+agent and reports unavailable live evidence separately from the stored snapshot.
+Selected-record reads and optional section reads each have a five-second
+timeout. Request cancellation is propagated to backend reads. Raw JSON is
+transported as exact decompressed JSON text, so browser display and Copy preserve
+unknown fields and large integer literals without parsing them into JavaScript
+numbers.
+
+The no-section `/unified` API is retained for older clients. It can assemble the
+full LLM/HITL view and perform additional bounded related reads; it should not be
+used for periodic summary polling. Pipeline-hook evidence continues to come from
+the stored execution, not from Jaeger. Trace IDs link to the tracing view without
+fetching it into the Viewer.
 
 Hook-card status is explicitly labeled as an **invocation outcome**. A
 successful invocation means the hook callback returned normally; it does not
@@ -677,13 +797,17 @@ each value is a JSON object:
 ```
 registry-viewer-app/
 ├── main.go                  # HTTP server, registry, execution, HITL, and memory APIs
+├── execution_browse.go      # Bounded summary/search pages over existing indexes
+├── execution_detail.go      # Explicit overview and evidence-section projections
+├── llm_summary_browse.go    # Metadata-only LLM record pages
+├── read_budget.go           # Per-process data-read admission
 ├── conversation_api.go      # Conversation grouping and timeline API
 ├── jaeger_trace.go          # Optional browser redirect for stored trace IDs
 ├── skills_api.go            # Skills management API host
 ├── redis_storage_provider.go # Redis adapter used by viewer APIs
 ├── LIVE_DATA_VERIFICATION.md # Standalone/cluster API and UI acceptance runbook
 ├── scripts/                  # Read-only live-data verification
-├── go.mod                   # Module plus local framework replacements
+├── go.mod                   # Module with released framework dependencies
 ├── go.sum                   # Dependency checksums
 ├── static/                  # HTML, CSS, JavaScript, and image assets
 ├── tests/                   # Frontend Node.js tests
@@ -792,11 +916,11 @@ See [ENVIRONMENT_VARIABLES_GUIDE.md](../../docs/reference/ENVIRONMENT_VARIABLES_
 
 ### Optional LLM enrichment diagnostics
 
-Grouped execution and conversation responses include `llm_enrichment_reasons`
-when optional enrichment is incomplete. Codes distinguish `execution_count_limit`,
-`interaction_count_limit`, `interaction_byte_limit`, `parse_failure` and
-`backend_failure`, with request identity and observed/limit counts where available.
-Observed counts may be lower bounds after a bounded read. The limits remain 200
-executions, 100 interactions per execution and 4 MiB cumulative serialized
-interaction bytes per execution. These explain incomplete derived counts/durations;
-they do not establish lost execution records or failed agent work.
+The interactive execution/conversation lists defer LLM enrichment, so missing
+list totals are not reported as zero. Open the requested evidence to inspect
+canonical deduplicated calls and token totals. Section reads carry visible
+warnings when optional debug or live HITL data cannot be loaded.
+
+Legacy enrichment helpers retain their existing `llm_enrichment_reasons` codes
+and bounds for compatibility. Those diagnostics describe incomplete derived
+views, not lost execution records or failed agent work.
