@@ -227,36 +227,71 @@ Apple introduced the "Liquid Glass" design language in WWDC 2025. Key techniques
 }
 ```
 
-### Legend Items with Glow Dots
+### On-Demand DAG Legend
+
+The DAG metadata header groups the execution refresh button with the view
+toggle. Use a **32 × 32 px circular glass button**, matching the toggle's outer
+height, with a **16 px** bright cyan refresh icon, a subtle cyan border and a
+visible keyboard focus outline immediately
+before **Steps Only**. Use a lightly tinted surface to match the glass header.
+Keep the refresh button and toggle together when metadata wraps; the action
+uses its existing header row and does not add explanatory text.
+
+The Execution DAG uses a small **Legend** button over the upper-right corner of
+the canvas. The legend opens as a non-modal glass panel, rather than reserving a
+bottom strip. Opening it preserves the canvas dimensions, graph position and
+zoom. Escape, the close button, moving focus outside, or an outside click closes
+it; Escape and the close button return focus to the toggle.
+
+A matching **Fit** button sits beside Legend in the same floating toolbar. It
+fits all graph elements to the current canvas without reserving another header
+row. Keep Cytoscape's effectively unrestricted minimum zoom so even deep or
+wide flows fit; retain the existing maximum zoom for close inspection. Fitting
+closes an open legend and stale node popup without fetching additional data.
+Allow the canvas flex child to shrink with its visible stage (`min-width: 0`)
+and clip its drawing surface there. Otherwise the renderer's previous pixel
+width can make Fit center the graph outside the visible canvas after resizing.
+
+- Use **44 × 28 px SVG samples** that match the displayed Cytoscape elements'
+  computed shapes, fills, borders and connection styles. Small colored dots do
+  not communicate node shapes or dashed/dotted connection semantics clearly.
+- Group entries into **Node types**, **Status & indicators**, and **Connections**.
+  Include only symbols present in the current graph view, keeping checkpoint
+  entries out of flows that contain no checkpoints.
+- Use warm amber **`#F3BB63`** for **Earlier-step data** arrows and their related
+  popup/detail labels. Keep their dotted pattern distinct from darker amber
+  dashed memory/approval links. Other arrow families use blue/cyan for flow,
+  hooks and phases, purple for model activity, red for failures and pink for
+  retries. Provenance describes data use, rather than an execution-order
+  constraint.
+- Match the renderer's line patterns: Cytoscape uses a fixed `[1, 1]` pattern
+  for dotted strokes and the configured dash pattern for dashed strokes. Use
+  the computed line/border caps as well, since round caps can close small gaps.
+  Label specialized model connections by purpose, such as **Result Distillation
+  link**, so similar shapes still have unambiguous explanations.
+- Bound the panel to the canvas and scroll its body internally. Keep the header
+  and close button visible, with at least 26 px interactive targets and a clear
+  keyboard focus outline.
+- Use the existing dark gradient, border and shadow tokens. The panel does not
+  add another backdrop-blur layer; transitions change color and border only and
+  are disabled for reduced-motion preferences.
+- Populate the legend from the rendered graph. Toggling it needs no backend
+  requests and does not modify the graph or stored execution evidence.
 
 ```css
-.dag-legend-item {
-  display: flex;
+.dag-legend-panel {
+  background: linear-gradient(145deg,
+    rgba(24, 27, 40, 0.96), rgba(12, 15, 25, 0.97));
+  border: 1px solid var(--glass-border-light);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-popup), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.dag-legend-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  padding: 6px 14px;
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  transition: all 0.2s;
-}
-
-.dag-legend-item:hover {
-  background: rgba(255, 255, 255, 0.08);
-  transform: translateY(-1px);
-}
-
-.dag-legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  /* Double glow effect for status dots */
-  box-shadow: 0 0 10px currentColor, 0 0 20px currentColor;
-}
-
-.dag-legend-dot.completed {
-  background: var(--accent-green);
-  color: rgba(50, 215, 75, 0.6);
 }
 ```
 

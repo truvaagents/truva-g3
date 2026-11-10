@@ -80,7 +80,7 @@
 .glass-card.status-failed  { border-left: 3px solid var(--accent-red);   box-shadow: var(--shadow-card), -6px 0 24px -10px rgba(255, 107, 107, 0.4); }
 .glass-card.status-pending { border-left: 3px solid var(--accent-orange); box-shadow: var(--shadow-card), -6px 0 24px -10px rgba(255, 179, 64, 0.4); }
 
-/* Glow dots for legends and status indicators (§Legend Items with Glow Dots) */
+/* Reusable glow dots for status indicators */
 .glow-dot {
     width: 10px; height: 10px;
     border-radius: 50%;
@@ -139,6 +139,199 @@
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
+
+/* ── On-demand DAG legend ── */
+.dag-canvas-stage {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.dag-canvas-stage > .dag-viz-canvas {
+    /* The renderer's pixel-sized canvases must not hold this flex child wider
+       than its visible stage after the window or list pane is resized. */
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.dag-legend-controls {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    bottom: 10px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    width: 350px;
+    max-width: calc(100% - 20px);
+    pointer-events: none;
+}
+
+.dag-canvas-toolbar {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 6px;
+}
+
+.dag-fit-button,
+.dag-legend-toggle,
+.dag-legend-close {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 11px;
+    border: 1px solid var(--glass-border-light);
+    border-radius: var(--radius-pill);
+    color: var(--text-secondary);
+    background: rgba(20, 20, 30, 0.92);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 550;
+    cursor: pointer;
+    pointer-events: auto;
+    transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.dag-fit-button:hover,
+.dag-legend-toggle:hover,
+.dag-legend-toggle[aria-expanded="true"],
+.dag-legend-close:hover {
+    color: var(--text-primary);
+    border-color: rgba(100, 210, 255, 0.5);
+}
+
+.dag-fit-button:focus-visible,
+.dag-legend-toggle:focus-visible,
+.dag-legend-close:focus-visible {
+    outline: 2px solid var(--accent-teal);
+    outline-offset: 2px;
+}
+
+.dag-fit-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.dag-legend-panel {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-height: 0;
+    max-height: min(540px, calc(100% - 38px));
+    margin-top: 8px;
+    border: 1px solid var(--glass-border-light);
+    border-radius: var(--radius-xl);
+    color: var(--text-primary);
+    background: linear-gradient(145deg, rgba(24, 27, 40, 0.96), rgba(12, 15, 25, 0.97));
+    box-shadow: var(--shadow-popup), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    pointer-events: auto;
+    overflow: hidden;
+}
+
+.dag-legend-panel[hidden] { display: none; }
+
+.dag-legend-heading {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 13px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.dag-legend-heading h3 {
+    margin: 0 0 3px;
+    font-size: 13px;
+    font-weight: 650;
+}
+
+.dag-legend-heading span,
+.dag-legend-empty {
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.dag-legend-close {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-color: transparent;
+    background: transparent;
+    font-size: 19px;
+}
+
+.dag-legend-body {
+    min-height: 0;
+    padding: 12px 14px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+}
+
+.dag-legend-section + .dag-legend-section {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.dag-legend-section h4 {
+    margin: 0 0 7px;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.65px;
+    text-transform: uppercase;
+}
+
+.dag-legend-row {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+}
+
+.dag-legend-sample {
+    display: block;
+    width: 44px;
+    height: 28px;
+    overflow: visible;
+}
+
+.dag-legend-row strong {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 12px;
+    font-weight: 550;
+}
+
+.dag-legend-row span {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.dag-legend-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.dag-legend-stats strong { color: var(--text-primary); }
 
 /* ── Execution DAG conversation browser ── */
 .dag-panel-mode {
@@ -1317,6 +1510,9 @@
     .dag-family-panel { background: rgba(20, 20, 30, 0.95); }
 }
 @media (prefers-reduced-motion: reduce) {
+    .dag-fit-button,
+    .dag-legend-toggle,
+    .dag-legend-close { transition: none; }
     .dag-family-panel {
         backdrop-filter: blur(4px) saturate(160%);
         -webkit-backdrop-filter: blur(4px) saturate(160%);
