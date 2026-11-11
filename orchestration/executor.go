@@ -2767,6 +2767,37 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 		endStepSpan()
 	}()
 
+	capability, capabilityErr := stepCapabilityName(step)
+	if capabilityErr != nil {
+		telemetry.RecordSpanError(ctx, capabilityErr)
+		if e.logger != nil {
+			// Preserve local execution identity; direct callers may provide only
+			// the core request context or W3C baggage.
+			requestID := GetRequestID(ctx)
+			if requestID == "" {
+				requestID = core.GetRequestID(ctx)
+			}
+			if requestID == "" {
+				requestID = telemetry.GetBaggage(ctx)["request_id"]
+			}
+			fields := map[string]interface{}{
+				"step_id":    step.StepID,
+				"agent_name": step.AgentName,
+				"operation":  "step_validation",
+				"error":      capabilityErr.Error(),
+			}
+			if requestID != "" {
+				fields["request_id"] = requestID
+			}
+			e.logger.WarnWithContext(ctx, "Step capability metadata rejected", fields)
+		}
+		result.Error = capabilityErr.Error()
+		result.EndTime = time.Now()
+		result.Duration = time.Since(startTime)
+		return result
+	}
+	result.Capability = capability
+
 	// =========================================================================
 	// PHASE 1: Agent Discovery (before HITL to ensure valid agent)
 	// =========================================================================
@@ -2802,14 +2833,9 @@ func (e *SmartExecutor) executeStep(ctx context.Context, step RoutingStep) StepR
 	// =========================================================================
 	// PHASE 2: Parameter Extraction (before HITL to have params for approval)
 	// =========================================================================
-	// Extract capability and parameters from metadata
-	capability := ""
+	// Extract parameters; capability identity was validated before discovery.
 	var parameters map[string]interface{}
 
-	if cap, ok := step.Metadata["capability"].(string); ok {
-		capability = cap
-		result.Capability = cap // Persist in StepResult for downstream consumers (e.g., /query response steps[])
-	}
 	if params, ok := step.Metadata["parameters"].(map[string]interface{}); ok {
 		parameters = cloneParameterMap(params)
 	}
@@ -4694,7 +4720,9 @@ func (e *SmartExecutor) callAgentService(ctx context.Context, url string, parame
 	return e.callComponentWithBody(ctx, url, body)
 }
 
-// ExecuteStep executes a single routing step (interface method)
+// ExecuteStep executes a single routing step (interface method).
+// SmartExecutor requires metadata.capability to be a nonblank string; parameters
+// may be omitted. Invalid capability identity fails before resolution or dispatch.
 func (e *SmartExecutor) ExecuteStep(ctx context.Context, step RoutingStep) (*StepResult, error) {
 	result := e.executeStep(ctx, step)
 	if !result.Success {

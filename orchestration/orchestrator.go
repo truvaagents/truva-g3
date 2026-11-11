@@ -6669,6 +6669,11 @@ func (o *AIOrchestrator) validatePlan(plan *RoutingPlan) error {
 	}
 
 	for _, step := range plan.Steps {
+		capName, err := stepCapabilityName(step)
+		if err != nil {
+			return err
+		}
+
 		// Check if agent exists
 		agents, err := o.discovery.FindService(context.Background(), step.AgentName)
 		if err != nil || len(agents) == 0 {
@@ -6684,35 +6689,33 @@ func (o *AIOrchestrator) validatePlan(plan *RoutingPlan) error {
 		}
 
 		// Check if capability exists
-		if capName, ok := step.Metadata["capability"].(string); ok {
-			agentInfo := o.catalog.GetAgent(agents[0].ID)
-			if agentInfo == nil {
-				return fmt.Errorf("agent %s not in catalog", step.AgentName)
-			}
+		agentInfo := o.catalog.GetAgent(agents[0].ID)
+		if agentInfo == nil {
+			return fmt.Errorf("agent %s not in catalog", step.AgentName)
+		}
 
-			found := false
-			availableCaps := make([]string, len(agentInfo.Capabilities))
-			for i, cap := range agentInfo.Capabilities {
-				availableCaps[i] = cap.Name
-				if cap.Name == capName {
-					found = true
-				}
+		found := false
+		availableCaps := make([]string, len(agentInfo.Capabilities))
+		for i, cap := range agentInfo.Capabilities {
+			availableCaps[i] = cap.Name
+			if cap.Name == capName {
+				found = true
 			}
+		}
 
-			if o.logger != nil {
-				o.logger.Debug("Capability validation", map[string]interface{}{
-					"operation":              "capability_validation",
-					"step_id":                step.StepID,
-					"agent_name":             step.AgentName,
-					"requested_capability":   capName,
-					"available_capabilities": availableCaps,
-					"found":                  found,
-				})
-			}
+		if o.logger != nil {
+			o.logger.Debug("Capability validation", map[string]interface{}{
+				"operation":              "capability_validation",
+				"step_id":                step.StepID,
+				"agent_name":             step.AgentName,
+				"requested_capability":   capName,
+				"available_capabilities": availableCaps,
+				"found":                  found,
+			})
+		}
 
-			if !found {
-				return fmt.Errorf("capability %s not found for agent %s", capName, step.AgentName)
-			}
+		if !found {
+			return fmt.Errorf("capability %s not found for agent %s", capName, step.AgentName)
 		}
 
 		// Check dependencies

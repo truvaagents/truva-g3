@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Reject missing, non-string or blank capability identity during built-in plan
+  validation and before `SmartExecutor` dispatch. Reuse existing bounded model
+  correction with step/field feedback; preserve hook failure policies, optional
+  parameters and named endpoint fallback. Handle absent contextual-retry schemas
+  without panic, retaining the original dispatch failure and debug evidence.
+
 ## v0.6.2
 
 Requires Go 1.27.3 or newer. See the [root changelog](../CHANGELOG.md)
