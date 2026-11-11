@@ -319,8 +319,8 @@ function renderSourceCell(record) {
     if (record.originating_agent) {
         return `<span class="source-badge orchestrator">${escapeHtml(record.originating_agent)}</span>`;
     }
-    if (record.summary_pending) return '<span class="source-badge">Unknown</span>';
-    return renderSourceBadges(record.source_components);
+    if (record.source_components?.length) return renderSourceBadges(record.source_components);
+    return '<span class="source-badge">Unknown</span>';
 }
 
 function renderLLMTable(list) {

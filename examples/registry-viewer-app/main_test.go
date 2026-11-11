@@ -395,6 +395,7 @@ func TestDiscoveryInjection(t *testing.T) {
 					},
 				},
 			},
+			{Name: "inspect-internal-state", Internal: true},
 		},
 	}); err != nil {
 		t.Fatalf("mock.Register: %v", err)
@@ -407,6 +408,9 @@ func TestDiscoveryInjection(t *testing.T) {
 		Port:     8090,
 		Health:   core.HealthHealthy,
 		LastSeen: time.Now(),
+		Capabilities: []core.Capability{
+			{Name: "find-flights"},
+		},
 	}); err != nil {
 		t.Fatalf("mock.Register: %v", err)
 	}
@@ -436,6 +440,12 @@ func TestDiscoveryInjection(t *testing.T) {
 	if resp.ToolCount != 1 || resp.AgentCount != 1 {
 		t.Errorf("tool/agent=%d/%d want 1/1", resp.ToolCount, resp.AgentCount)
 	}
+	if resp.TotalCapabilityCount != 3 {
+		t.Errorf("TotalCapabilityCount=%d want 3", resp.TotalCapabilityCount)
+	}
+	if resp.PublicCapabilityCount != 2 {
+		t.Errorf("PublicCapabilityCount=%d want 2 (one tool and one agent capability; internal excluded)", resp.PublicCapabilityCount)
+	}
 
 	// handleServices sorts agents first, then by name.
 	if len(resp.Services) != 2 {
@@ -455,8 +465,8 @@ func TestDiscoveryInjection(t *testing.T) {
 	if tool.Health != "healthy" {
 		t.Errorf("tool.Health=%q want 'healthy'", tool.Health)
 	}
-	if len(tool.Capabilities) != 1 {
-		t.Fatalf("Capabilities=%d want 1", len(tool.Capabilities))
+	if len(tool.Capabilities) != 2 {
+		t.Fatalf("Capabilities=%d want 2", len(tool.Capabilities))
 	}
 	capability := tool.Capabilities[0]
 	if capability.Name != "get-forecast" || capability.Endpoint != "/api/capabilities/get-forecast" {

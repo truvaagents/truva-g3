@@ -157,6 +157,7 @@ func summarizeExecution(execution *StoredExecution) ExecutionSummary {
 		OriginalRequest:   execution.OriginalRequest,
 		Interrupted:       execution.Interrupted,
 		CreatedAt:         execution.CreatedAt,
+		FirstObservedAt:   firstObservedExecutionTime(execution),
 		Metadata:          execution.Metadata,
 	}
 	if execution.Checkpoint != nil {
@@ -190,6 +191,27 @@ func summarizeExecution(execution *StoredExecution) ExecutionSummary {
 		)
 	}
 	return summary
+}
+
+func firstObservedExecutionTime(execution *StoredExecution) *time.Time {
+	first, _ := executionObservationWindow(execution)
+	include := func(candidate time.Time) {
+		if !candidate.IsZero() && (first.IsZero() || candidate.Before(first)) {
+			first = candidate
+		}
+	}
+	for _, plan := range append([]*RoutingPlan{execution.Plan}, execution.PhasePlans...) {
+		if plan != nil && plan.CreatedAt != nil {
+			include(*plan.CreatedAt)
+		}
+	}
+	for _, hook := range execution.PipelineHooks {
+		include(hook.StartedAt)
+	}
+	if first.IsZero() {
+		return nil
+	}
+	return &first
 }
 
 func viewerConversationIndexKey(conversationID string) string {

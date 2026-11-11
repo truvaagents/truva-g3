@@ -42,6 +42,14 @@
                     <div class="stat"><span>Total</span><span class="stat-value total" id="totalCount">-</span></div>
                     <div class="stat"><span>Agents</span><span class="stat-value agents" id="agentCount">-</span></div>
                     <div class="stat"><span>Tools</span><span class="stat-value tools" id="toolCount">-</span></div>
+                    <div class="stat capability-stat">
+                        <span>Capabilities</span>
+                        <span class="capability-counts"><span class="stat-value capabilities" id="totalCapabilityCount">-</span><span class="capability-count-divider">/</span><span class="stat-value public-capabilities" id="publicCapabilityCount">-</span></span>
+                        <details class="capability-info">
+                            <summary aria-label="What do the capability counts mean?">i</summary>
+                            <div class="capability-info-panel"><strong>Capabilities</strong><p><span class="capability-info-total">Blue</span> is the total registered across agents and tools, including internal capabilities. <span class="capability-info-public">Green</span> is the public subset available for discovery.</p></div>
+                        </details>
+                    </div>
                 </div>
                 <div class="stats hidden" id="llmDebugStats">
                     <div class="stat"><span>Records</span><span class="stat-value records" id="recordCount">-</span></div>

@@ -459,8 +459,7 @@ assert.equal(view.testState(), null);
 assert.equal(elements.get('dagDetailContent').innerHTML, afterDestroy);
 assert.equal(elements.has('dagExecutionLineage'), false, 'no test path renders the removed top block');
 
-// Group titles use an independent oldest-turn read, rather than a later query
-// from the browse page. Background work stays bounded and selection-owned.
+// Group titles compare recorded activity in a bounded independent lookup.
 const titleGroups = Array.from({ length: 6 }, (_, index) => ({
     group_key: `title-group-${index}`, conversation_id: `title-conversation-${index}`,
     turns: [{ execution: { ...record(`title-latest-${index}`), original_request: 'Latest follow-up' } }], orphans: [],
@@ -471,13 +470,16 @@ document.querySelectorAll = selector => selector === '[data-conversation-title]'
 let activeTitleReads = 0, maxTitleReads = 0, titleReads = 0;
 const titleResponse = (conversationID, request = `First query <${conversationID}>`) => ({
     ok: true, status: 200, headers: { get() { return null; } },
-    json: async () => ({ conversation_id: conversationID, turns: [{ execution: { original_request: request } }] }),
+    json: async () => ({ conversation_id: conversationID, turns: [
+        { execution: { request_id: 'later-query', original_request: 'Second query with an older snapshot', first_observed_at: '2026-11-06T12:01:00Z' } },
+        { execution: { request_id: 'first-query', original_request: request, first_observed_at: '2026-11-06T12:00:00Z' } },
+    ] }),
 });
 globalThis.fetch = async endpoint => {
     const url = new URL(endpoint, 'http://viewer.local');
     assert.equal(url.pathname, '/api/conversations');
     assert.equal(url.searchParams.get('direction'), 'asc');
-    assert.equal(url.searchParams.get('limit'), '1');
+    assert.equal(url.searchParams.get('limit'), '5');
     assert.equal(url.searchParams.get('q'), null, 'browse search cannot hide the first query');
     assert.equal(url.searchParams.get('from'), null, 'browse window cannot hide the first query');
     titleReads++;
@@ -494,8 +496,20 @@ assert.ok(titleLabels.every(label => label.textContent.startsWith('First query <
 view.renderServerExecutionGroups(titleGroups);
 assert.match(elements.get('dagTableBody').innerHTML, /First query &lt;title-conversation-0&gt;/);
 assert.doesNotMatch(elements.get('dagTableBody').innerHTML, /Latest follow-up/, 'collapsed header uses the first query');
+assert.ok(titleLabels.every(label => /earliest recorded activity/.test(label.title)));
 await view.loadConversationTitles(titleGroups);
 assert.equal(titleReads, titleGroups.length, 'rerenders reuse the preview cache');
+
+const uncertainTitleGroups = [{ ...titleGroups[0], conversation_id: 'uncertain-title' }];
+view.testTitleGroups(uncertainTitleGroups);
+globalThis.fetch = async () => ({ ok: true, status: 200, headers: new Headers(), json: async () => ({
+    conversation_id: 'uncertain-title', has_more: true,
+    turns: [{ execution: { request_id: 'legacy-query', original_request: 'Legacy snapshot without start evidence' } }],
+}) });
+await view.loadConversationTitles(uncertainTitleGroups);
+assert.match(view.testTitleCache().get('uncertain-title').hint, /Start evidence is unavailable/);
+assert.match(view.testTitleCache().get('uncertain-title').hint, /outside this bounded lookup/);
+assert.doesNotMatch(view.testTitleCache().get('uncertain-title').hint, /First retained query/);
 
 const wrongTitleGroups = [{ ...titleGroups[0], conversation_id: 'expected-conversation' }];
 view.testTitleGroups(wrongTitleGroups);
