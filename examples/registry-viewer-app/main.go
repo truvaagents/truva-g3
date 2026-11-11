@@ -84,12 +84,14 @@ type ViewerCapabilities struct {
 
 // RegistryResponse is the service catalogue response.
 type RegistryResponse struct {
-	ViewerCapabilities ViewerCapabilities `json:"viewer_capabilities"`
-	Services           []ServiceInfo      `json:"services"`
-	TotalCount         int                `json:"totalCount"`
-	ToolCount          int                `json:"toolCount"`
-	AgentCount         int                `json:"agentCount"`
-	Timestamp          time.Time          `json:"timestamp"`
+	ViewerCapabilities    ViewerCapabilities `json:"viewer_capabilities"`
+	Services              []ServiceInfo      `json:"services"`
+	TotalCount            int                `json:"totalCount"`
+	ToolCount             int                `json:"toolCount"`
+	AgentCount            int                `json:"agentCount"`
+	TotalCapabilityCount  int                `json:"totalCapabilityCount"`
+	PublicCapabilityCount int                `json:"publicCapabilityCount"`
+	Timestamp             time.Time          `json:"timestamp"`
 }
 
 // ViewerReadinessResponse reports whether the Viewer can reach its configured
@@ -364,6 +366,7 @@ type ExecutionSummary struct {
 	RelationStatus       string                                       `json:"relation_status,omitempty"`
 	MissingOwnerID       string                                       `json:"missing_owner_id,omitempty"`
 	CreatedAt            time.Time                                    `json:"created_at"`
+	FirstObservedAt      *time.Time                                   `json:"first_observed_at,omitempty"`
 	Metadata             map[string]string                            `json:"metadata,omitempty"`
 
 	// observedStart/observedEnd are internal inputs for deriving a wall-clock
@@ -1175,21 +1178,31 @@ func handleServices(w http.ResponseWriter, r *http.Request) {
 
 	toolCount := 0
 	agentCount := 0
+	totalCapabilityCount := 0
+	publicCapabilityCount := 0
 	for _, s := range services {
 		if s.Type == "tool" {
 			toolCount++
 		} else {
 			agentCount++
 		}
+		totalCapabilityCount += len(s.Capabilities)
+		for _, capability := range s.Capabilities {
+			if !capability.Internal {
+				publicCapabilityCount++
+			}
+		}
 	}
 
 	response := RegistryResponse{
-		ViewerCapabilities: ViewerCapabilities{ApplicationRecords: viewerProtection == nil},
-		Services:           nonNilSlice(services),
-		TotalCount:         len(services),
-		ToolCount:          toolCount,
-		AgentCount:         agentCount,
-		Timestamp:          time.Now(),
+		ViewerCapabilities:    ViewerCapabilities{ApplicationRecords: viewerProtection == nil},
+		Services:              nonNilSlice(services),
+		TotalCount:            len(services),
+		ToolCount:             toolCount,
+		AgentCount:            agentCount,
+		TotalCapabilityCount:  totalCapabilityCount,
+		PublicCapabilityCount: publicCapabilityCount,
+		Timestamp:             time.Now(),
 	}
 
 	writeJSON(w, response)

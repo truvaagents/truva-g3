@@ -1762,8 +1762,8 @@ function orphanRelationLabel(execution) {
 }
 
 // Titles are independent of the recent browse page, search matches and timeline
-// pagination. Reuse the bounded conversation reader for one oldest retained
-// top-level query, with two concurrent lookups and a small preview-only cache.
+// pagination. Compare recorded activity within a bounded window, with two
+// concurrent lookups and a small preview-only cache.
 async function loadConversationTitles(groups) {
     const ticket = conversationTitleLoad.begin();
     const now = Date.now();
@@ -1776,19 +1776,24 @@ async function loadConversationTitles(groups) {
             const id = queue[next++];
             let entry;
             try {
-                const query = new URLSearchParams({ conversation_id: id, direction: 'asc', limit: '1' });
+                const query = new URLSearchParams({ conversation_id: id, direction: 'asc', limit: String(CONVERSATION_PAGE_SIZE) });
                 const { data } = await fetchAPI(`/api/conversations?${query}`, { signal: ticket.signal, cache: false });
                 if (!current()) return;
                 if (data.conversation_id !== id) throw new Error('Conversation identity changed while loading its title.');
-                const request = data.turns?.[0]?.execution?.original_request;
+                const candidates = (data.turns || []).map(turn => turn.execution).filter(Boolean);
+                const observed = candidates.filter(execution => Number.isFinite(Date.parse(execution.first_observed_at)))
+                    .sort((left, right) => Date.parse(left.first_observed_at) - Date.parse(right.first_observed_at) || left.request_id.localeCompare(right.request_id));
+                const request = (observed[0] || candidates[0])?.original_request;
                 const text = typeof request === 'string' ? request : '';
-                entry = { text, loadedAt: Date.now(), hint: data.partial
-                    ? 'Earliest query available in this bounded lookup; earlier records may be unavailable.'
-                    : 'First retained query in this conversation.' };
+                let hint = observed.length ? 'Query with the earliest recorded activity among the examined turns; this is not a verified request start time.'
+                    : 'Start evidence is unavailable; showing the oldest retained snapshot in this lookup.';
+                if (data.has_more || data.partial) hint += ' Earlier queries may be outside this bounded lookup.';
+                if (observed.length && observed.length < candidates.length) hint += ' Some examined turns have no recorded start evidence.';
+                entry = { text, loadedAt: Date.now(), hint };
             } catch (error) {
                 if (!current() || error.name === 'AbortError') return;
                 if (isDagAccessDenied(error)) { clearDagAccessState(error); return; }
-                entry = { text: conversationTitleCache.get(id)?.text || '', loadedAt: 0, hint: 'First query unavailable. Refresh the list to try again.' };
+                entry = { text: conversationTitleCache.get(id)?.text || '', loadedAt: 0, hint: 'Conversation title unavailable. Refresh the list to try again.' };
             }
             conversationTitleCache.delete(id);
             conversationTitleCache.set(id, entry);
@@ -1808,8 +1813,8 @@ function renderConversationGroupHeader(group, expanded) {
     const turns = group.turns || [];
     const anchor = turns[0]?.execution || group.orphans?.[0] || {};
     const titleEntry = conversationTitleCache.get(group.conversation_id);
-    const title = titleEntry ? titleEntry.text || 'Conversation' : 'Loading first query…';
-    const titleHint = titleEntry?.text ? `${titleEntry.hint}\n${titleEntry.text}` : titleEntry?.hint || 'Looking up the first retained query in this conversation.';
+    const title = titleEntry ? titleEntry.text || 'Conversation' : 'Loading conversation title…';
+    const titleHint = titleEntry?.text ? `${titleEntry.hint}\n${titleEntry.text}` : titleEntry?.hint || 'Looking up recorded activity in this conversation.';
     const executionCount = turns.reduce(
         (count, turn) => count + 1 + (turn.related_executions || []).length,
         (group.orphans || []).length,
@@ -2380,6 +2385,8 @@ async function selectExecution(requestId, { restoreTimelineActionFocus = false, 
         annotateCallLabels(selected.llm_interactions);
         refreshInvocationServices();
         renderExecutionList();
+        const timeline = conversationCache.get(activeConversationID)?.data;
+        if (timeline && listPanelMode === 'timeline') renderConversationTimeline(timeline, selected.request_id);
         updateDetailTabs();
         document.querySelectorAll('#dagDetailPanel .detail-tab').forEach(button => button.classList.toggle('active', button.dataset.tab === activeTab));
         if (activeDetailSection() === 'overview') renderExecutionDetail();

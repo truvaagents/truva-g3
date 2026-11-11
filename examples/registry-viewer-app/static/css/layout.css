@@ -33,6 +33,8 @@ body {
 
 header {
     display: flex;
+    position: relative;
+    z-index: 20;
     justify-content: space-between;
     align-items: center;
     padding: 14px 24px;
@@ -131,8 +133,33 @@ header {
 .stat-value.total { color: var(--accent-teal); }
 .stat-value.agents { color: var(--accent-purple); }
 .stat-value.tools { color: var(--accent-green); }
+.stat-value.capabilities { color: var(--brand-truva); }
+.stat-value.public-capabilities { color: var(--accent-green); }
 .stat-value.records { color: var(--accent-pink); }
 .stat-value.tokens { color: var(--accent-orange); }
+.capability-stat { gap: 6px; white-space: nowrap; }
+.capability-counts { display: inline-flex; align-items: baseline; }
+.capability-count-divider { color: var(--text-secondary); }
+.capability-info { position: relative; }
+.capability-info summary {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 17px; height: 17px; border: 1px solid var(--glass-border-light);
+    border-radius: 50%; color: var(--text-secondary); cursor: pointer;
+    font-size: 11px; font-weight: 700; list-style: none;
+}
+.capability-info summary::-webkit-details-marker { display: none; }
+.capability-info summary:hover, .capability-info[open] summary { color: var(--text-primary); border-color: var(--accent-blue); }
+.capability-info summary:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.capability-info-panel {
+    position: absolute; top: calc(100% + 12px); right: 0; z-index: 20;
+    width: 265px; padding: 12px 14px; white-space: normal;
+    border: 1px solid var(--glass-border-light); border-radius: 12px;
+    background: rgba(19, 24, 39, 0.97); box-shadow: var(--shadow-popup);
+    color: var(--text-primary); line-height: 1.5;
+}
+.capability-info-panel p { margin-top: 5px; color: var(--text-secondary); }
+.capability-info-total { color: var(--brand-truva); }
+.capability-info-public { color: var(--accent-green); }
 
 .refresh-btn {
     display: flex; align-items: center; gap: 6px;

@@ -16,6 +16,7 @@ function element() {
 const get = id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); };
 globalThis.document = {
     activeElement: null, createElement: element, getElementById: get,
+    addEventListener() {}, removeEventListener() {},
     querySelector: () => get('refresh'), querySelectorAll: () => [],
 };
 const moduleURL = new URL('../static/js/views/registry.js', import.meta.url);
@@ -24,7 +25,7 @@ source = source.replace(/from '(\.\.[^']+)'/g, (_, path) => `from '${new URL(pat
 source += '\nexport { fetchServices, selectService, inspectApplicationRecords }; export function state() { return { selected, inspectedRecord, applicationRecordsAvailable }; }';
 const view = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const service = { id: 'service-1', name: 'Inspector', type: 'tool', capabilities: [{ name: 'inspect_application_records_v1', internal: true }] };
-const catalog = supported => ({ services: [service], totalCount: 1, agentCount: 0, toolCount: 1, timestamp: '2026-11-04T00:00:00Z', ...(supported === undefined ? {} : { viewer_capabilities: { application_records: supported } }) });
+const catalog = supported => ({ services: [service], totalCount: 1, agentCount: 0, toolCount: 1, totalCapabilityCount: 1, publicCapabilityCount: 0, timestamp: '2026-11-04T00:00:00Z', ...(supported === undefined ? {} : { viewer_capabilities: { application_records: supported } }) });
 const response = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const panel = { dataset: { serviceId: 'service-1' }, querySelector: selector => get(selector.slice(1)) };
@@ -36,6 +37,8 @@ async function load(supported) {
     get('applicationRecordInput').value = '{}';
 }
 await load(undefined);
+assert.equal(get('totalCapabilityCount').textContent, '1', 'total includes internal capabilities');
+assert.equal(get('publicCapabilityCount').textContent, '0', 'internal capabilities do not appear in the public total');
 assert.equal(view.state().applicationRecordsAvailable, true, 'older ordinary catalogue remains compatible');
 assert.match(get('detailContent').innerHTML, /Component read credential/);
 get('applicationRecordCredential').value = 'component-only';

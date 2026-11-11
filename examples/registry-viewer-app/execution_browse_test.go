@@ -65,6 +65,37 @@ func seedBrowseExecution(t *testing.T, client *redis.Client, id string, score fl
 	}
 }
 
+func TestConversationTitleActivityTimeIsIndependentOfSnapshotOrder(t *testing.T) {
+	_, client := newConversationAPIRedis(t)
+	start := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	laterStart := start.Add(time.Minute)
+	hookStart := start.Add(-time.Second)
+	first := StoredExecution{RequestID: "first-query", OriginalRequest: "First question", CreatedAt: start.Add(10 * time.Minute), Metadata: map[string]string{"conversation_id": "conversation-title"}, Plan: &RoutingPlan{CreatedAt: &start}, PipelineHooks: []orchestration.PipelineHookExecution{{StartedAt: hookStart}}}
+	second := StoredExecution{RequestID: "second-query", OriginalRequest: "Second question", CreatedAt: start.Add(2 * time.Minute), Metadata: map[string]string{"conversation_id": "conversation-title"}, Plan: &RoutingPlan{CreatedAt: &laterStart}}
+	for _, execution := range []StoredExecution{first, second} {
+		storeViewerExecution(t, client, execution)
+		if err := client.ZAdd(t.Context(), viewerConversationIndexKey("conversation-title"), redis.Z{Score: float64(execution.CreatedAt.UnixNano()), Member: execution.RequestID}).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := loadExecutionBrowsePage(t.Context(), client, viewerConversationIndexKey("conversation-title"), browseQueryForTest(t, "direction=asc&limit=5", "conversation-title"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Summaries) != 2 || page.Summaries[0].RequestID != second.RequestID {
+		t.Fatalf("snapshot ordering changed: %+v", page.Summaries)
+	}
+	if observed := page.Summaries[1].FirstObservedAt; observed == nil || !observed.Equal(hookStart) {
+		t.Fatalf("first query activity time = %v, want %v", observed, hookStart)
+	}
+	if observed := page.Summaries[0].FirstObservedAt; observed == nil || !observed.Equal(laterStart) {
+		t.Fatalf("second query activity time = %v, want %v", observed, laterStart)
+	}
+	if unknown := summarizeExecution(&StoredExecution{CreatedAt: start}); unknown.FirstObservedAt != nil {
+		t.Fatal("snapshot time must not become request-start evidence")
+	}
+}
+
 func TestGroupedBrowseKeepsEveryMatchInBoundedPage(t *testing.T) {
 	_, client := newConversationAPIRedis(t)
 	previousClient, previousMock := viewerRedisClient, useMock

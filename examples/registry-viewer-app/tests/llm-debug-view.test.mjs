@@ -19,8 +19,13 @@ globalThis.fetch = () => { throw new Error('Rendering must not fetch'); };
 const moduleURL = new URL('../static/js/views/llm-debug.js', import.meta.url);
 let source = await readFile(moduleURL, 'utf8');
 source = source.replace(/from '(\.\.[^']+)'/g, (_, path) => `from '${new URL(path, moduleURL).href}'`);
-source += '\nexport { renderLLMInteractionsView, copyLLMInteractionContent, toggleInteraction, expandAllInteractions, collapseAllInteractions };\nexport function testSetRecords(value) { records = value; }\nexport function testSetSelected(value) { selected = value; expandedInteractions.clear(); }';
+source += '\nexport { renderLLMInteractionsView, copyLLMInteractionContent, toggleInteraction, expandAllInteractions, collapseAllInteractions, renderSourceCell };\nexport function testSetRecords(value) { records = value; }\nexport function testSetSelected(value) { selected = value; expandedInteractions.clear(); }';
 const view = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+
+assert.match(view.renderSourceCell({ summary_pending: true }), />Unknown</);
+assert.match(view.renderSourceCell({ summary_pending: false, interaction_count: 3 }), />Unknown</, 'summary completion cannot invent source attribution');
+assert.match(view.renderSourceCell({ summary_pending: false, source_components: ['recorded-agent'] }), />recorded-agent</);
+assert.match(view.renderSourceCell({ originating_agent: 'origin-agent', source_components: ['participant'] }), />origin-agent</);
 
 const interaction = values => ({
     type: 'plan_generation', timestamp: '2026-11-01T00:00:00Z', duration_ms: 10,

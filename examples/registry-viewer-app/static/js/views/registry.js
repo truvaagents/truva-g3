@@ -217,6 +217,8 @@ async function fetchServices() {
         document.getElementById('totalCount').textContent = data.totalCount;
         document.getElementById('agentCount').textContent = data.agentCount;
         document.getElementById('toolCount').textContent = data.toolCount;
+        document.getElementById('totalCapabilityCount').textContent = data.totalCapabilityCount;
+        document.getElementById('publicCapabilityCount').textContent = data.publicCapabilityCount;
 
         // Backend canonicalizes to `[]` (see nonNilSlice in main.go); the
         // `|| []` here is belt-and-suspenders against a future backend
@@ -333,6 +335,11 @@ function handleSearchInput() {
     filterServices();
 }
 
+function handleCapabilityInfoPointerDown(event) {
+    const info = document.querySelector('#registryStats .capability-info');
+    if (info?.open && !info.contains(event.target)) info.open = false;
+}
+
 // ---------------------------------------------------------------------------
 // Exported lifecycle hooks
 // ---------------------------------------------------------------------------
@@ -353,6 +360,8 @@ export function init() {
 
     const searchInput = document.getElementById('searchInput');
     if (searchInput) searchInput.addEventListener('input', handleSearchInput);
+
+    document.addEventListener('pointerdown', handleCapabilityInfoPointerDown);
 
     // Initial data load
     fetchServices();
@@ -377,6 +386,10 @@ export function destroy() {
 
     const searchInput = document.getElementById('searchInput');
     if (searchInput) searchInput.removeEventListener('input', handleSearchInput);
+
+    document.removeEventListener('pointerdown', handleCapabilityInfoPointerDown);
+    const info = document.querySelector('#registryStats .capability-info');
+    if (info) info.open = false;
 
     // Reset state
     typeFilter = 'all';
