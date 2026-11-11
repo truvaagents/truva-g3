@@ -47,7 +47,7 @@ container-build changes described below.
   - Capabilities list with descriptions
   - Metadata (JSON format)
 - Auto-refresh every 5 seconds (configurable)
-- Statistics bar showing total/agents/tools/healthy counts
+- Statistics bar showing registered services, agents, tools, and total/public capabilities
 
 ### LLM Debug View
 - Browse LLM debug records captured during orchestration
@@ -175,10 +175,14 @@ execution-storage keys, rewrite records, or change framework retention.
   execution summaries**. No execution detail, LLM payload, conversation history
   or related-family scan is loaded automatically.
 - **Conversation:** open one explicitly to read at most **five top-level turns**.
-  Grouped entries use the **first retained query** as their title, independent
-  of the current search or browse page. Titles use one oldest-turn lookup per
-  visible conversation, at most two lookups at once, with a bounded short-lived
-  cache; the group order still reflects the latest matching activity.
+  Grouped titles use the query with the **earliest recorded activity** among up
+  to five turns from the oldest retained snapshots, independent of the current
+  search or browse page. Plan, step and hook timestamps supply the optional
+  `first_observed_at` summary field; snapshot-write time is not treated as a
+  request start. The title tooltip states when start evidence is absent or
+  earlier queries may be outside this bounded lookup. Titles use at most two
+  lookups at once and a bounded short-lived cache; group order still reflects
+  the latest matching activity.
   Page controls request the next small window. Delegated children remain separate
   execution links and are discovered on demand. Expanding a grouped search result
   shows its matching summaries, five turns at a time, from the current bounded
@@ -545,7 +549,7 @@ manual UI checklist, and cluster acceptance rules are in
 | `GET /api/executions/{request_id}/unified` | Legacy complete unified view, retained for explicit API compatibility |
 | `GET /api/traces/{trace_id}` | Temporarily redirect the browser to the trace page under the configured `JAEGER_UI_URL` |
 | `GET /api/conversations?conversation_id={id}&limit=5` | Read one five-turn conversation page; next_cursor continues history |
-| `GET /api/conversations?conversation_id={id}&direction=asc&limit=1` | Read the earliest retained top-level query for a grouped conversation title |
+| `GET /api/conversations?conversation_id={id}&direction=asc&limit=5` | Read a bounded title-candidate window; compare first_observed_at, not snapshot order |
 | `GET /api/v1/skills` | List body-free published skill metadata; optional `namespace`, `domain`, `tag`, and `limit` filters |
 | `GET /api/v1/skills/schema` | Get the complete authoring JSON Schema with its active constraints |
 | `POST /api/v1/skills/{namespace}/{name}/validate` | Deterministically normalize and validate a complete package without mutation |
